@@ -298,6 +298,25 @@ class ProbeTests(unittest.TestCase):
         self.assertIn("非公网地址", info["error"])
         self.assertFalse(sock.called, "校验没过就不该去连")
 
+    def test_accepts_fake_ip_from_local_dns_proxy(self):
+        """Clash / sing-box 的 fake-IP 是本地代理的占位地址，不是内网目标。
+
+        开着 fake-IP 时所有域名都解析到 198.18.0.0/15；TCP 握手会由本机 TUN 按
+        域名转发出去，探针必须照常放行，否则一键测试永远显示「本机网络不通」。
+        """
+        cfg = dict(A.get_realm_config("intl"))
+        cfg["chat_upstream"] = "https://upstream.example.com"
+        fake = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                 ("198.18.0.11", 443))]
+        with mock.patch.object(A, "get_realm_config", lambda realm: cfg), \
+                mock.patch.object(P.socket, "getaddrinfo", lambda *a, **k: fake), \
+                mock.patch.object(P.socket, "socket") as sock:
+            info = P.probe_local_network("intl")
+        self.assertTrue(info["ok"], info)
+        self.assertEqual(info["ip"], "198.18.0.11")
+        self.assertTrue(sock.return_value.__enter__.return_value.connect.called,
+                        "fake-IP 应当继续走 TCP 握手，而不是提前拒绝")
+
     def test_reports_dns_failure_as_offline(self):
         cfg = dict(A.get_realm_config("intl"))
         cfg["chat_upstream"] = "https://upstream.example.com"
