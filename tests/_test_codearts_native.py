@@ -225,12 +225,24 @@ try:
         "model": "GLM-5.2",
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": "hello "},
-            {"type": "image_url", "image_url": {"url": "data:..."}},
             {"type": "text", "text": "world"},
         ]}],
     }, "sess-parts")
     check("content parts flattened",
           parts_body["messages"][0]["content"] == "hello world", parts_body)
+    try:
+        C.build_chat_body({"messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:..."}}]}]})
+        check("image input rejected", False)
+    except C.CodeArtsBadRequest:
+        check("image input rejected", True)
+
+    import io
+    stream = C.CodeArtsStream(io.BytesIO(b'data: {"text":"hello"}\n\ndata: [DONE]\n\n'),
+                              "model", acct, acct.pool)
+    stream.preflight()
+    result = b''.join(stream)
+    check("first SSE text normalized", b'"content": "hello"' in result, result)
 
     print("== named tool choice ==")
     tool_body = C.build_chat_body({
@@ -270,7 +282,11 @@ try:
     raw = b"".join(stream)
     stream.close()
     text = raw.decode("utf-8", "replace")
-    check("text stream content", "你好" in text, text[:300])
+    chunks = [json.loads(line[6:]) for line in text.splitlines()
+              if line.startswith('data: {')]
+    joined = ''.join(((chunk.get('choices') or [{}])[0].get('delta') or {}).get('content') or ''
+                     for chunk in chunks if chunk.get('choices'))
+    check("text stream content", joined == "你好", joined)
     check("text stream no done content", '"content": "[DONE]"' not in text, text[:300])
     state.chat_mode = "delta"
 

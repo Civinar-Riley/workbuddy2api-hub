@@ -136,6 +136,12 @@ try:
     check("nonstream text", obj["choices"][0]["message"]["content"] == "你好",
           obj)
 
+    state.chat_mode = "text"
+    status, raw = post("/v1/chat/completions", dict(chat, stream=False), "hub-key-1234")
+    check("first snapshot survives aggregation", status == 200 and
+          json.loads(raw)["choices"][0]["message"]["content"] == "你好", (status, raw))
+    state.chat_mode = "delta"
+
     print("== benefit header ==")
     state.require_benefit_header = True
     status, raw = post("/v1/chat/completions",
@@ -201,6 +207,27 @@ try:
     check("codearts row unpriced", cost["known"] is False
           and cost["cny"] == 0.0
           and cost["source"] == "codearts:unpriced", cost)
+
+    print("== key restrictions ==")
+    image_chat = dict(chat, messages=[{"role": "user", "content": [
+        {"type": "text", "text": "describe"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]}])
+    before = len(state.requests)
+    status, raw = post("/v1/chat/completions", image_chat, "hub-key-1234")
+    check("image rejected before upstream", status == 400 and len(state.requests) == before, (status, raw))
+    wb_settings.set_api_keys(ACCOUNTS, [
+        {"key": "model-limit", "name": "model", "realm": "codearts", "models": ["other-model"]},
+        {"key": "account-limit", "name": "account", "realm": "codearts", "accounts": ["other-uid"]},
+        {"key": "allowed-account", "name": "allowed", "realm": "codearts", "accounts": ["u1"]},
+        {"key": "hub-key-1234", "name": "test", "realm": "codearts"},
+    ])
+    before = len(state.requests)
+    status, raw = post("/v1/chat/completions", chat, "model-limit")
+    check("model restriction enforced", status == 400 and len(state.requests) == before, (status, raw))
+    status, raw = post("/v1/chat/completions", chat, "account-limit")
+    check("account restriction enforced", status != 200 and len(state.requests) == before, (status, raw))
+    status, raw = post("/v1/chat/completions", chat, "allowed-account")
+    check("allowed account works", status == 200, (status, raw[:300]))
 
     print("== errors ==")
     state.chat_error = (400, {"error_msg": "bad request"})

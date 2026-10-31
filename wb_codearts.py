@@ -660,7 +660,7 @@ class CodeArtsPool(object):
         return True
 
     # ---- 调度 ----
-    def pick(self, model="", session_key=None, exclude=None):
+    def pick(self, model="", session_key=None, exclude=None, allowed_accounts=None):
         """按「能服务该模型 + 健康 + 并发未满」选一个账号。"""
         exclude = set(exclude or ())
         now = time.time()
@@ -669,13 +669,13 @@ class CodeArtsPool(object):
         # 会话粘性：同一段对话优先回到上次的账号。
         if session_key:
             uid = self._affinity.get(session_key)
-            if uid and uid not in exclude:
+            if uid and uid not in exclude and (allowed_accounts is None or uid in allowed_accounts):
                 acct = self.get(uid)
                 if acct and acct.healthy(now) and acct.has_model(model) \
                         and acct.active_concurrent < acct.max_concurrent:
                     return acct
         candidates = [a for a in accounts
-                      if a.uid not in exclude and a.healthy(now)
+                      if a.uid not in exclude and (allowed_accounts is None or a.uid in allowed_accounts) and a.healthy(now)
                       and a.active_concurrent < a.max_concurrent]
         capable = [a for a in candidates if a.has_model(model)]
         pool = capable or candidates
@@ -1274,6 +1274,9 @@ def _flatten_content(content):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
+        if any(isinstance(part, dict) and (part.get("type") in ("image", "image_url", "input_image")
+                                         or "image_url" in part) for part in content):
+            raise CodeArtsBadRequest("CodeArts 出口暂不支持图片输入，请移除图片或选择其他出口")
         return "".join(str(part.get("text") or "")
                        for part in content if isinstance(part, dict))
     return str(content)
@@ -1451,11 +1454,11 @@ class CodeArtsStream(object):
         return self._chunk({"content": delta}) if delta else b""
 
     def __iter__(self):
-        if self._pending:
-            line, self._pending = self._pending, b""
-            yield line
         while not self._done:
-            line = self.raw.readline()
+            if self._pending:
+                line, self._pending = self._pending, b""
+            else:
+                line = self.raw.readline()
             if not line:
                 break
             stripped = line.strip()
@@ -1641,7 +1644,7 @@ def _client_chat(acct, body, session_key):
     raise last_error or CodeArtsUpstreamError("CodeArts 并发会话已满")
 
 
-def open_chat(config, body, session_key=None):
+def open_chat(config, body, session_key=None, allowed_accounts=None):
     """选账号、续期、发现模型并打开 SSE；返回 (stream, account, model)。"""
     if not config.get("enabled"):
         raise CodeArtsBadRequest(
@@ -1652,7 +1655,8 @@ def open_chat(config, body, session_key=None):
     last_error = None
     attempts = max(2, len(pool.accounts) + 1)
     for _ in range(attempts):
-        acct = pool.pick(model, session_key=session_key, exclude=exclude)
+        acct = pool.pick(model, session_key=session_key, exclude=exclude,
+                         allowed_accounts=allowed_accounts)
         if acct is None:
             break
         if not pool.acquire(acct):

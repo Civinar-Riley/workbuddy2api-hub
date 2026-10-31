@@ -190,7 +190,8 @@ CodeArts 的 OAuth、token 续期、账号池、模型发现、聊天 SSE 和签
 - 账号、token 续期、冷却、签到、并发都由本进程直接执行；华为云凭据只存在本机 `accounts/codearts/`。
 - CodeArts 积分余额通过 `snap-manager/v1/statistics/plugin` 查询，看板显示剩余 / 总额 / 已用；单次请求的积分扣减上游不返回，最近请求表的积分列显示 `0.00`、估算价格显示 `—`。
 - CodeArts 出口不参与 WorkBuddy 的积分/额度护栏，也不参与 `国际版 → 国内版` 的跨出口回退。
-- API Key 的「允许账号」白名单只作用于 WorkBuddy 账号；CodeArts 账号由本进程的 CodeArts 池轮转，不能按 Key 指定。
+- API Key 的「允许账号」白名单同样限制 CodeArts 请求；没有列入任何 CodeArts 账号时不会使用其他账号。面板的账号选择当前主要面向 WorkBuddy 账号。
+- CodeArts 出口暂不支持图片输入；包含图片的请求会返回错误，不会静默丢弃图片。
 - CodeArts 出口没有 wb-hub 的 web_search / web_fetch 代跑；客户端自带工具照常透传。
 - `/codearts/*` 管理端点只接受面板会话，不接受普通 API Key；删除账号不可恢复。
 

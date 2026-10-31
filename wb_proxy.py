@@ -22898,6 +22898,9 @@ class Handler(BaseHTTPRequestHandler):
         explicit_realm = self._request_realm()
         req_realm = explicit_realm or CURRENT_REALM
         if req_realm == "codearts":
+            blocked = self._banned_model_error(payload.get("model")) or self._key_model_error(payload.get("model"))
+            if blocked:
+                return self._error(400, blocked, "invalid_request_error")
             # CodeArts 不走 WorkBuddy 的 build_upstream_body / 账号池：请求体、
             # 超时、错误映射都由 wb_codearts 负责，回程复用下面的处理器。
             return self._handle_codearts_chat(payload, session_key, req_realm)
@@ -22997,7 +23000,8 @@ class Handler(BaseHTTPRequestHandler):
             raise wb_codearts.CodeArtsBadRequest(
                 "CodeArts 出口未启用：请到设置页打开「启用 CodeArts 出口」。")
         body = wb_codearts.build_chat_body(payload, session_key)
-        stream, account, model = wb_codearts.open_chat(cfg, body, session_key)
+        stream, account, model = wb_codearts.open_chat(
+            cfg, body, session_key, allowed_accounts=self._key_allowed_accounts())
         return stream, account, model
 
     def _codearts_error(self, model, exc, t_start, realm):
