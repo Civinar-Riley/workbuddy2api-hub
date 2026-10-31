@@ -1633,6 +1633,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '人工映射表 OVERRIDES': 'Manual mapping table OVERRIDES',
     '今日': 'Today',
     '今日已签到': 'Checked in today',
+    '无本地记录': 'No local record',
     '今日数据 (Today)': 'Today',
     '今日未签到': 'Not checked in today',
     '今日次数已用尽': 'No attempts left today',
@@ -2922,6 +2923,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "为每个 Key 绑定专属出口。客户端使用该 Key 请求将固定走对应区域，实现双出口并发。": "為每個 Key 繫結專屬出口。客戶端使用該 Key 請求將固定走對應區域，實現雙出口併發。",
     "人工映射表 OVERRIDES": "人工對映表 OVERRIDES",
     "今日已签到": "今日已簽到",
+    "无本地记录": "無本地記錄",
     "今日数据 (Today)": "今日資料 (Today)",
     "今日未签到": "今日未簽到",
     "从 Web 控制台同步最新昵称（改名后免重登）": "從 Web 控制檯同步最新暱稱（改名後免重登）",
@@ -8160,7 +8162,7 @@ function activityStatusOf(a){
   // 国内版：加油站
   const event = ACTIVITY_TODAY.byUid[uid];
   const gasDone = a && a.lastCheckin;
-  let gas = {kind: 'none', label: '加油站', state: '未领', at: '', message: ''};
+  let gas = {kind: 'none', label: '加油站', state: '无本地记录', at: '', message: ''};
   if(event && event.task === 'checkin'){
     gas = {kind: event.ok ? 'ok' : 'failed', label: '加油站',
            state: event.ok ? '已领' : '失败',
@@ -8172,7 +8174,7 @@ function activityStatusOf(a){
 
   // 国内版：成长计划连登打卡
   const streakDone = a && a.lastActivityReport;
-  let streak = {kind: 'none', label: '成长连登', state: '未打卡', at: '', message: ''};
+  let streak = {kind: 'none', label: '成长连登', state: '无本地记录', at: '', message: ''};
   if(streakDone && String(streakDone).startsWith(todayStamp())){
     streak = {kind: 'done', label: '成长连登', state: '已打卡', at: String(streakDone), message: '连登活跃已上报'};
   }
@@ -8216,10 +8218,10 @@ function activityStatusChip(a){
   return '<div style="display:inline-flex;flex-direction:column;gap:4px;align-items:center">'
     + '<span class="' + mainStatus.cls + '" style="cursor:pointer;white-space:nowrap" title="' + esc(gasTip) + '"'
     + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
-    + esc('Buddy 加油站 · ' + (status.gas.kind === 'none' ? '未领' : status.gas.state)) + '</span>'
+    + esc('Buddy 加油站 · ' + status.gas.state) + '</span>'
     + '<span class="' + stkCls + '" style="cursor:pointer;white-space:nowrap" title="' + esc(stkTip) + '"'
     + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
-    + esc('成长计划 · ' + (status.streak.kind === 'done' ? '已签到' : '未签到')) + '</span>'
+    + esc('成长计划 · ' + (status.streak.kind === 'done' ? '已签到' : '无本地记录')) + '</span>'
     + '</div>'
     + '<span style="display:none">' + esc(mainStatus.text) + '</span>';
 }
