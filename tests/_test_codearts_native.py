@@ -136,6 +136,33 @@ try:
     C.signed_get(acct, "http://example.test")
     C._json_http = orig_json
     check("signed_get threads account proxy", seen == [acct.proxy], seen)
+    # A real HTTP proxy must receive the absolute-form request line.
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    proxied = []
+
+    class ProxyProbe(BaseHTTPRequestHandler):
+        def do_GET(self):
+            proxied.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args):
+            pass
+
+    proxy_srv = ThreadingHTTPServer(("127.0.0.1", 0), ProxyProbe)
+    threading.Thread(target=proxy_srv.serve_forever, daemon=True).start()
+    proxy_url = "http://127.0.0.1:%d" % proxy_srv.server_address[1]
+    status, raw = C._http("GET", "http://codearts.invalid/probe",
+                          proxy=proxy_url)
+    proxy_srv.shutdown()
+    proxy_srv.server_close()
+    check("http request goes through proxy", status == 200 and raw == b"{}",
+          (status, raw))
+    check("proxy saw absolute URI",
+          proxied == ["http://codearts.invalid/probe"], proxied)
     # Do not leave the fake proxy bound for the chat tests below.
     acct.proxy_slot = ""
     acct.auth.pop("proxySlot", None)
