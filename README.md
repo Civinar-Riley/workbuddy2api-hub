@@ -169,14 +169,40 @@ docker run -d --name wb-proxy-watchtower --restart unless-stopped \
 - **健康检查**：镜像自带 `HEALTHCHECK`（每 30s 探一次 `/health`），`docker ps` 的 STATUS 列会显示 healthy / unhealthy；
 - **源码构建**：`docker compose -f docker-compose.build.yml up -d --build`。
 
-### 6. 测试
+### 6. CodeArts 第三出口
+
+CodeArts 的 OAuth、token 续期、账号池、模型发现、聊天 SSE 和签到都由本进程直接完成，不需要再跑独立的 codearts2api 服务。
+
+- 顶部出口卡片从 `国际版 / 国内版` 变成 `国际版 / 国内版 / CodeArts`；
+- 选中 CodeArts 时，`/v1/models` 返回 CodeArts 的模型目录，`/v1/chat/completions`、`/v1/responses`、Anthropic Messages 都由本进程直连华为云；
+- API Key 可以绑定 `codearts` 出口，三个出口可以同时用；
+- 看板「账号」页的 CodeArts 视图可以添加（OAuth）、启用、停用、清冷却、签到、删除 CodeArts 账号。
+- CodeArts 账号支持绑定「账号代理槽」：在账号表的「出口」列选择槽位后，聊天、模型发现、token 续期、签到、积分查询都走该槽；槽位地址变化自动跟随，禁用或删除槽位回退直连。首次 OAuth 换取 token 时还没有账号可绑定，仍直连。
+
+**首次配置**
+
+1. 打开 wb-hub 看板 →「设置 → CodeArts 接入」，勾选「启用 CodeArts 出口」并保存。不需要 Base URL 或 API Key。
+2. 切到 CodeArts 视图，点「+ 添加账号 (OAuth)」完成华为云授权。
+3. 在「设置 → API Key 与出口绑定」里新建 Key，出口选 `CodeArts`，或留空跟随顶部默认出口。
+
+**口径与限制**
+
+- 账号、token 续期、冷却、签到、并发都由本进程直接执行；华为云凭据只存在本机 `accounts/codearts/`。
+- CodeArts 积分余额通过 `snap-manager/v1/statistics/plugin` 查询，看板显示剩余 / 总额 / 已用；单次请求的积分扣减上游不返回，最近请求表的积分列显示 `0.00`、估算价格显示 `—`。
+- CodeArts 出口不参与 WorkBuddy 的积分/额度护栏，也不参与 `国际版 → 国内版` 的跨出口回退。
+- API Key 的「允许账号」白名单同样限制 CodeArts 请求；没有列入任何 CodeArts 账号时不会使用其他账号。面板的账号选择当前主要面向 WorkBuddy 账号。
+- CodeArts 出口暂不支持图片输入；包含图片的请求会返回错误，不会静默丢弃图片。
+- CodeArts 出口没有 wb-hub 的 web_search / web_fetch 代跑；客户端自带工具照常透传。
+- `/codearts/*` 管理端点只接受面板会话，不接受普通 API Key；删除账号不可恢复。
+
+### 7. 测试
 
 ```bash
 python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 235 个套件：175 个 Python + 60 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 244 个套件：181 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -482,6 +508,9 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 ## 六、版本更新记录 (Changelog)
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
+
+- **CodeArts 第三出口（单进程）**：新增 `codearts` 出口，看板可在 `国际版 / 国内版 / CodeArts` 之间切换；`/v1/models`、`/v1/chat/completions`、`/v1/responses` 与 Anthropic Messages 都由本进程直连华为云。CodeArts 的 OAuth（PKCE + DPoP）、token 续期、账号池、模型发现（含限时福利）、聊天 SSE 与签到全部在 Python 进程内完成，不再依赖独立的 codearts2api 服务。看板「账号」页新增 CodeArts 视图，支持 OAuth 添加、启用/停用、清冷却、签到、删除；管理端点只接受面板会话，华为云凭据不出本机。默认关闭，未启用时行为与旧版一致。 / **CodeArts as a third exit, single process**: a new `codearts` realm that the panel can switch to alongside Global and China; `/v1/models`, `/v1/chat/completions`, `/v1/responses` and Anthropic Messages all talk to Huawei Cloud directly from this process. CodeArts OAuth (PKCE + DPoP), token renewal, the account pool, model discovery (including benefit models), the chat SSE stream and check-in all run inside the Python process, with no separate codearts2api service. The Accounts page gains a CodeArts view with OAuth add, enable/disable, cooldown clearing, check-in and delete; the management endpoints require a panel session and Huawei credentials never leave the machine. Off by default, so an unenabled install behaves exactly as before.
+- **CodeArts 账号代理槽**：CodeArts 账号可像 WorkBuddy 账号一样绑定「账号代理槽」，聊天、模型发现、token 续期、签到和积分查询都走绑定的出口；槽位地址变化自动跟随，禁用/删除槽位回退直连。首次 OAuth 换取 token 时还没有账号，仍直连。 / **CodeArts proxy slots**: CodeArts accounts can bind to the same account proxy slots as WorkBuddy accounts; chat, model discovery, token renewal, check-in and credit queries all use the bound exit. Slot URL changes follow automatically, while disabling/deleting a slot falls back to direct. The initial OAuth token exchange has no account yet and stays direct.
 
 - **Key 允许账号列表显示账号备注**（#708）：账号选择器显示并支持按备注搜索，便于区分昵称相近的账号；分组功能仍待 #707。
 - **今日活动不再将缺少本地记录显示为未签到**（#706）：当网关没有当天的加油站或成长计划记录时，徽章显示「无本地记录」，避免外部工具已签到却被误认为未签到。该状态仍来自网关本地记录，并未查询上游。
