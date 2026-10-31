@@ -177,6 +177,7 @@ CodeArts 的 OAuth、token 续期、账号池、模型发现、聊天 SSE 和签
 - 选中 CodeArts 时，`/v1/models` 返回 CodeArts 的模型目录，`/v1/chat/completions`、`/v1/responses`、Anthropic Messages 都由本进程直连华为云；
 - API Key 可以绑定 `codearts` 出口，三个出口可以同时用；
 - 看板「账号」页的 CodeArts 视图可以添加（OAuth）、启用、停用、清冷却、签到、删除 CodeArts 账号。
+- CodeArts 账号支持绑定「账号代理槽」：在账号表的「出口」列选择槽位后，聊天、模型发现、token 续期、签到、积分查询都走该槽；槽位地址变化自动跟随，禁用或删除槽位回退直连。首次 OAuth 换取 token 时还没有账号可绑定，仍直连。
 
 **首次配置**
 
@@ -508,6 +509,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 - **CodeArts 第三出口（单进程）**：新增 `codearts` 出口，看板可在 `国际版 / 国内版 / CodeArts` 之间切换；`/v1/models`、`/v1/chat/completions`、`/v1/responses` 与 Anthropic Messages 都由本进程直连华为云。CodeArts 的 OAuth（PKCE + DPoP）、token 续期、账号池、模型发现（含限时福利）、聊天 SSE 与签到全部在 Python 进程内完成，不再依赖独立的 codearts2api 服务。看板「账号」页新增 CodeArts 视图，支持 OAuth 添加、启用/停用、清冷却、签到、删除；管理端点只接受面板会话，华为云凭据不出本机。默认关闭，未启用时行为与旧版一致。 / **CodeArts as a third exit, single process**: a new `codearts` realm that the panel can switch to alongside Global and China; `/v1/models`, `/v1/chat/completions`, `/v1/responses` and Anthropic Messages all talk to Huawei Cloud directly from this process. CodeArts OAuth (PKCE + DPoP), token renewal, the account pool, model discovery (including benefit models), the chat SSE stream and check-in all run inside the Python process, with no separate codearts2api service. The Accounts page gains a CodeArts view with OAuth add, enable/disable, cooldown clearing, check-in and delete; the management endpoints require a panel session and Huawei credentials never leave the machine. Off by default, so an unenabled install behaves exactly as before.
+- **CodeArts 账号代理槽**：CodeArts 账号可像 WorkBuddy 账号一样绑定「账号代理槽」，聊天、模型发现、token 续期、签到和积分查询都走绑定的出口；槽位地址变化自动跟随，禁用/删除槽位回退直连。首次 OAuth 换取 token 时还没有账号，仍直连。 / **CodeArts proxy slots**: CodeArts accounts can bind to the same account proxy slots as WorkBuddy accounts; chat, model discovery, token renewal, check-in and credit queries all use the bound exit. Slot URL changes follow automatically, while disabling/deleting a slot falls back to direct. The initial OAuth token exchange has no account yet and stays direct.
 
 - **面板密码加密异常明确报错**（#658）：解释器缺少 `hashlib.pbkdf2_hmac` 支持时（如 Windows SAC 拦截便携运行时 DLL），不再将计算异常吞成「密码错误」返回 401，而是明确返回 500 与环境排查指引；启动自检与 `/health`、`/panel/status` 暴露 `crypto_ok` 状态并在面板提示。新增 `tests/_test_panel_crypto_unavailable.py`。
 - **v1.9.1 发布**：集成 #692 与 #693，详见 [更新记录](docs/CHANGELOG.md#v191)。

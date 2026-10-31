@@ -6489,6 +6489,15 @@ def proxy_slots_view():
             slot_id = account.proxy_slot
             if slot_id and account.enabled:
                 counts[slot_id] = counts.get(slot_id, 0) + 1
+    try:
+        for account in wb_codearts.pool_for(ACCOUNTS_DIR).accounts:
+            slot_id = account.proxy_slot
+            if slot_id and not account.disabled:
+                counts[slot_id] = counts.get(slot_id, 0) + 1
+    except Exception:
+        # CodeArts is optional; a broken account file must not take down the
+        # WorkBuddy proxy-slot panel.
+        pass
     out = []
     for entry in wb_settings.proxy_slots(ACCOUNTS_DIR):
         item = dict(entry)
@@ -20605,6 +20614,13 @@ class Handler(BaseHTTPRequestHandler):
                 if dropped:
                     log("proxy slots: unbound %d account(s) from removed slots"
                         % dropped)
+            try:
+                dropped_ca = wb_codearts.drop_missing_bindings(ACCOUNTS_DIR, saved)
+                if dropped_ca:
+                    log("proxy slots: unbound %d CodeArts account(s) from "
+                        "removed slots" % dropped_ca)
+            except Exception as exc:
+                log("proxy slots: CodeArts rebind failed: %s" % exc)
             log("proxy slots saved: %d slot(s)" % len(saved))
             return self._json(200, {"slots": proxy_slots_view()})
         if path == "/proxy/slots/test":
@@ -21149,7 +21165,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, result)
             if not uid:
                 return self._error(400, "uid required", "invalid_request_error")
-            if path == "/codearts/accounts/enable":
+            if path == "/codearts/accounts/proxy":
+                result = wb_codearts.set_proxy_slot(
+                    cfg, uid, payload.get("slot_id"))
+            elif path == "/codearts/accounts/enable":
                 result = wb_codearts.enable(cfg, uid)
             elif path == "/codearts/accounts/disable":
                 result = wb_codearts.disable(cfg, uid, payload.get("reason") or "")

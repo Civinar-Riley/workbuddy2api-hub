@@ -96,6 +96,53 @@ try:
     pool.clear_cooldown("u1")
     check("cooldown cleared", acct.cool_until == 0)
 
+    print("== proxy slots ==")
+    import urllib.request
+    import wb_settings
+    slots = wb_settings.set_proxy_slots(ACCOUNTS, [
+        {"id": "slot-1", "name": "one", "url": "http://127.0.0.1:7890",
+         "enabled": True},
+        {"id": "slot-2", "name": "two", "url": "http://127.0.0.1:7891",
+         "enabled": False},
+    ])
+    acct.proxy_slot = "slot-1"
+    acct.auth["proxySlot"] = "slot-1"
+    acct.auth = C.save_auth(ACCOUNTS, acct.auth)
+    pool.apply_proxy_slots(slots)
+    check("proxy slot resolved", acct.proxy == "http://127.0.0.1:7890",
+          acct.proxy)
+    acct.proxy_slot = "slot-2"
+    pool.apply_proxy_slots(slots)
+    check("disabled slot falls back direct", acct.proxy == "", acct.proxy)
+    acct.proxy_slot = ""
+    pool.apply_proxy_slots(slots)
+    check("unbound slot is direct", acct.proxy == "", acct.proxy)
+    acct.proxy_slot = "slot-1"
+    pool.apply_proxy_slots(slots)
+    opener = C._opener(acct.proxy)
+    handler = next(h for h in opener.handlers
+                   if isinstance(h, urllib.request.ProxyHandler))
+    check("opener pins http/https",
+          handler.proxies.get("http") == acct.proxy
+          and handler.proxies.get("https") == acct.proxy, handler.proxies)
+    direct_proxies = [h.proxies for h in C._opener("").handlers
+                      if isinstance(h, urllib.request.ProxyHandler)]
+    check("direct opener ignores env proxies",
+          all(not proxies for proxies in direct_proxies), direct_proxies)
+    seen = []
+    orig_json = C._json_http
+    C._json_http = lambda method, url, headers=None, body=None, \
+        timeout=30.0, proxy="": (seen.append(proxy) or {})
+    C.signed_get(acct, "http://example.test")
+    C._json_http = orig_json
+    check("signed_get threads account proxy", seen == [acct.proxy], seen)
+    # Do not leave the fake proxy bound for the chat tests below.
+    acct.proxy_slot = ""
+    acct.auth.pop("proxySlot", None)
+    acct.auth = C.save_auth(ACCOUNTS, acct.auth)
+    wb_settings.set_proxy_slots(ACCOUNTS, [])
+    pool.apply_proxy_slots([])
+
     print("== models ==")
     models = C.fetch_models(acct)
     ids = [m["id"] for m in models]

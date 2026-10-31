@@ -6654,6 +6654,7 @@ async function loadCodeartsOverview(force){
   try{
     const r = await getJSON("/codearts/overview");
     window.CODEARTS_OVERVIEW = r;
+    await loadProxySlots();
     renderCodeartsCards(r);
     renderCodeartsAccounts(r);
     window.updateUI();
@@ -6693,6 +6694,34 @@ function renderCodeartsCards(r){
     + card("停用", (st.disabled != null) ? st.disabled : 0, "手动/上游");
 }
 
+function codeartsSlotSelectHtml(a){
+  const current = a.proxy_slot || '';
+  const opts = ['<option value=""' + (current ? '' : ' selected') + '>直连</option>'];
+  const known = PROXY_SLOTS.some(s => s.id === current);
+  if(current && !known){
+    opts.push('<option value="" selected>已删除的槽位（直连）</option>');
+  }
+  opts.push.apply(opts, PROXY_SLOTS.map(s =>
+    '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
+    + esc(s.label || s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
+  const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
+  return '<select class="slot-select" onchange="codeartsSetProxy(&quot;' + uidAttr + '&quot;, this.value, this)">'
+    + opts.join('') + '</select>';
+}
+
+async function codeartsSetProxy(uid, slotId, el){
+  if(el) el.disabled = true;
+  try{
+    await postJSON('/codearts/accounts/proxy', {uid: uid, slot_id: slotId});
+    toast('出口已更新', 'ok');
+    await loadCodeartsOverview(true);
+  }catch(e){
+    toast('出口更新失败: ' + e.message, 'bad');
+  }finally{
+    if(el) el.disabled = false;
+  }
+}
+
 function renderCodeartsAccounts(r){
   const box = document.getElementById("codeartsAccounts");
   const count = document.getElementById("codeartsAcctCount");
@@ -6704,7 +6733,7 @@ function renderCodeartsAccounts(r){
     return;
   }
   let html = '<div class="table-wrap"><table><thead><tr>'
-    + '<th>账号</th><th>状态</th><th>Token</th><th>积分</th><th>并发</th><th>签到</th><th>操作</th>'
+    + '<th>账号</th><th>状态</th><th>Token</th><th>出口</th><th>积分</th><th>并发</th><th>签到</th><th>操作</th>'
     + '</tr></thead><tbody>';
   accounts.forEach(function(a){
     const uid = escapeHtml(a.uid || "");
@@ -6734,6 +6763,7 @@ function renderCodeartsAccounts(r){
     html += '<tr><td><b>' + name + '</b><div class="mono" style="color:var(--dim);font-size:11px">' + uid + '</div></td>'
       + '<td>' + status + (a.reason ? '<div style="font-size:11px;color:var(--dim)">' + escapeHtml(a.reason) + '</div>' : '') + '</td>'
       + '<td class="mono" style="font-size:11px">' + token + '</td>'
+      + '<td>' + codeartsSlotSelectHtml(a) + '</td>'
       + '<td>' + credits + '</td>'
       + '<td>' + conc + '</td><td>' + checkin + '</td>'
       + '<td style="white-space:nowrap">' + actions.join(" ") + '</td></tr>';

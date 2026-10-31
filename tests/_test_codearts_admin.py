@@ -106,6 +106,43 @@ try:
               (status, body))
     check("account still in pool", C.pool_for(ACCOUNTS).get("u1") is not None)
 
+    print("== proxy slots ==")
+    import wb_settings
+    wb_settings.set_proxy_slots(ACCOUNTS, [
+        {"id": "slot-1", "name": "one", "url": "http://127.0.0.1:7890",
+         "enabled": True},
+    ])
+    status, body = call("POST", "/codearts/accounts/proxy",
+                        {"uid": "u1", "slot_id": "slot-1"}, token=token)
+    check("proxy bind ok", status == 200 and body.get("proxy_slot") == "slot-1",
+          (status, body))
+    check("proxy resolved", body.get("proxy") == "http://127.0.0.1:7890", body)
+    check("proxy persisted",
+          C.load_auths(ACCOUNTS)[0].get("proxySlot") == "slot-1",
+          C.load_auths(ACCOUNTS)[0])
+    status, body = call("POST", "/codearts/accounts/proxy",
+                        {"uid": "u1", "slot_id": ""}, token=token)
+    check("proxy direct ok", status == 200 and body.get("proxy_slot") == "",
+          (status, body))
+    check("proxy direct resolved", body.get("proxy") == "", body)
+    status, body = call("POST", "/codearts/accounts/proxy",
+                        {"uid": "nope", "slot_id": "slot-1"}, token=token)
+    check("proxy unknown -> 404", status == 404, (status, body))
+    status, body = call("POST", "/codearts/accounts/proxy",
+                        {"slot_id": "slot-1"}, token=token)
+    check("proxy missing uid -> 400", status == 400, (status, body))
+    # Removing a slot must clear the CodeArts binding, like WorkBuddy.
+    status, body = call("POST", "/codearts/accounts/proxy",
+                        {"uid": "u1", "slot_id": "slot-1"}, token=token)
+    status, body = call("POST", "/proxy/slots/save", {"slots": []}, token=token)
+    check("proxy slots save", status == 200, (status, body))
+    check("codearts binding cleared",
+          not C.load_auths(ACCOUNTS)[0].get("proxySlot"),
+          C.load_auths(ACCOUNTS)[0])
+    check("codearts direct after removal",
+          C.pool_for(ACCOUNTS).get("u1").proxy == "",
+          C.pool_for(ACCOUNTS).get("u1").proxy)
+
     status, body = call("POST", "/codearts/accounts/enable", {}, token=token)
     check("missing uid -> 400", status == 400, (status, body))
 

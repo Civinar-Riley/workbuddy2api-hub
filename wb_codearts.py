@@ -331,6 +331,10 @@ class CodeArtsAccount(object):
         self.uid = str(auth.get("user_id") or "")
         self.name = self.uid
         self.nickname = str(auth.get("user_name") or self.uid)
+        # proxy_slot is the persisted binding; proxy is the runtime URL that
+        # CodeArtsPool.apply_proxy_slots() derives from the current settings.
+        self.proxy_slot = str(auth.get("proxySlot") or "").strip()
+        self.proxy = ""
         self.disabled = False
         self.disabled_reason = ""
         self.cool_until = 0.0
@@ -443,6 +447,8 @@ class CodeArtsAccount(object):
                                          time.localtime(self.expires_at()))
                            if self.expires_at() else ""),
             "models": len(self.models),
+            "proxy_slot": self.proxy_slot,
+            "proxy": self.proxy,
         }
 
     def healthy(self, now=None):
@@ -498,6 +504,7 @@ class CodeArtsPool(object):
             accounts.append(acct)
         with self._lock:
             self.accounts = accounts
+        self.apply_proxy_slots()
 
     def _load_state(self):
         try:
@@ -546,6 +553,22 @@ class CodeArtsPool(object):
             accounts = list(self.accounts)
         return [acct.view() for acct in sorted(accounts, key=lambda a: a.uid)]
 
+    def apply_proxy_slots(self, slots=None):
+        """Re-resolve every account's runtime `proxy` from its bound slot.
+
+        Mirrors wb_accounts.AccountPool.apply_proxy_slots(): `proxySlot` is the
+        persisted source of truth and `proxy` is derived here, so every outbound
+        CodeArts call site can just use `acct.proxy`. A disabled or missing slot
+        falls back to direct, while the binding stays on disk for re-enabling.
+        """
+        if slots is None:
+            slots = wb_settings.proxy_slots(self.accounts_dir)
+        by_id = {entry["id"]: entry for entry in slots if entry.get("enabled")}
+        with self._lock:
+            for acct in self.accounts:
+                slot = by_id.get(acct.proxy_slot)
+                acct.proxy = slot["url"] if slot else ""
+
     def stats(self):
         now = time.time()
         total = healthy = disabled = cooling = 0
@@ -568,7 +591,13 @@ class CodeArtsPool(object):
         with self._lock:
             for index, existing in enumerate(self.accounts):
                 if existing.uid == acct.uid:
+                    # Re-login returns a fresh auth document without the
+                    # panel-side binding. Keep the slot the operator chose.
+                    if not acct.proxy_slot and existing.proxy_slot:
+                        acct.proxy_slot = existing.proxy_slot
+                        acct.auth["proxySlot"] = existing.proxy_slot
                     existing.auth = acct.auth
+                    existing.proxy_slot = acct.proxy_slot
                     existing.nickname = acct.nickname
                     existing.disabled = False
                     existing.disabled_reason = ""
@@ -578,9 +607,11 @@ class CodeArtsPool(object):
                     existing.models_fetched_at = 0
                     self.accounts[index] = existing
                     self.save_state()
+                    self.apply_proxy_slots()
                     return existing
             self.accounts.append(acct)
         self.save_state()
+        self.apply_proxy_slots()
         return acct
 
     def remove(self, uid):
@@ -727,8 +758,30 @@ def invalidate_pool(accounts_dir=None):
 # HTTP
 # ---------------------------------------------------------------------------
 
-def _opener():
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_OPENER_CACHE = {}
+_OPENER_LOCK = threading.Lock()
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _opener(proxy=""):
+    """Build (and cache) an opener pinned to one proxy slot.
+
+    Empty/blank means direct, and direct deliberately ignores the process
+    environment proxies: a CodeArts account that is not bound to a slot must
+    keep the pre-slot behaviour (no accidental HTTP_PROXY). One opener per
+    proxy URL keeps each account's traffic on its own exit IP.
+    """
+    proxy = str(proxy or "").strip()
+    if not proxy:
+        return _DIRECT_OPENER
+    with _OPENER_LOCK:
+        opener = _OPENER_CACHE.get(proxy)
+        if opener is None:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+            )
+            _OPENER_CACHE[proxy] = opener
+        return opener
 
 
 def _error_text(raw):
@@ -747,12 +800,12 @@ def _error_text(raw):
     return raw.decode("utf-8", "replace")[:500]
 
 
-def _http(method, url, headers=None, body=None, timeout=30.0):
+def _http(method, url, headers=None, body=None, timeout=30.0, proxy=""):
     """发一个普通 HTTP 请求，返回 (status, raw_bytes)。"""
     req = urllib.request.Request(url, data=body, headers=headers or {},
                                  method=method)
     try:
-        with _opener().open(req, timeout=timeout) as resp:
+        with _opener(proxy).open(req, timeout=timeout) as resp:
             return resp.status, resp.read(ERROR_BODY_MAX * 4)
     except urllib.error.HTTPError as exc:
         try:
@@ -767,8 +820,8 @@ def _http(method, url, headers=None, body=None, timeout=30.0):
             "连不上华为云 CodeArts：%s - 请检查本机网络或代理。" % reason)
 
 
-def _json_http(method, url, headers=None, body=None, timeout=30.0):
-    status, raw = _http(method, url, headers, body, timeout)
+def _json_http(method, url, headers=None, body=None, timeout=30.0, proxy=""):
+    status, raw = _http(method, url, headers, body, timeout, proxy)
     try:
         parsed = json.loads(raw.decode("utf-8", "replace"))
     except Exception:
@@ -814,14 +867,14 @@ def _normalize_token(payload):
     }
 
 
-def request_token(form, dpop_jwk, timeout=30.0):
+def request_token(form, dpop_jwk, timeout=30.0, proxy=""):
     url = STS_HOST + EP_OAUTH_TOKENS
     body = urllib.parse.urlencode(form).encode("utf-8")
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "DPoP": crypto.dpop_proof(dpop_jwk, url),
     }
-    payload = _json_http("POST", url, headers, body, timeout)
+    payload = _json_http("POST", url, headers, body, timeout, proxy)
     token = _normalize_token(payload)
     if not token["credentials"]["security_token"]:
         raise CodeArtsError("登录响应缺少 security_token：%s"
@@ -840,7 +893,7 @@ def exchange_code(code, verifier, port, dpop_jwk):
     return request_token(form, dpop_jwk)
 
 
-def refresh_token_for(auth, timeout=30.0):
+def refresh_token_for(auth, timeout=30.0, proxy=""):
     jwk = auth.get("dpop_private_key")
     if not isinstance(jwk, dict) or not jwk.get("d"):
         jwk = crypto.jwk_from_keypair(*crypto.generate_keypair())
@@ -851,7 +904,7 @@ def refresh_token_for(auth, timeout=30.0):
         "refresh_token": str(auth.get("refresh_token") or ""),
     }
     try:
-        return request_token(form, jwk, timeout)
+        return request_token(form, jwk, timeout, proxy)
     except CodeArtsBadRequest as exc:
         message = str(exc)
         lowered = message.lower()
@@ -891,7 +944,8 @@ def signed_get(acct, url, headers=None, timeout=30.0, agent_type=""):
         base["Agent-Type"] = agent_type
     base.update(headers or {})
     signed = _signed_headers(acct, "GET", url, base, b"")
-    return _json_http("GET", url, signed, None, timeout)
+    return _json_http("GET", url, signed, None, timeout,
+                      getattr(acct, "proxy", ""))
 
 
 def signed_post(acct, url, payload, headers=None, timeout=30.0, agent_type=""):
@@ -901,7 +955,8 @@ def signed_post(acct, url, payload, headers=None, timeout=30.0, agent_type=""):
         base["Agent-Type"] = agent_type
     base.update(headers or {})
     signed = _signed_headers(acct, "POST", url, base, raw)
-    return _json_http("POST", url, signed, raw, timeout)
+    return _json_http("POST", url, signed, raw, timeout,
+                      getattr(acct, "proxy", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1494,7 +1549,7 @@ def _ensure_token(acct):
         if not acct.expiring_soon() and not acct.expired():
             return
         try:
-            token = refresh_token_for(acct.auth)
+            token = refresh_token_for(acct.auth, proxy=acct.proxy)
         except CodeArtsAuthError as exc:
             acct.pool.note_error(acct, str(exc), terminal=True)
             raise
@@ -1538,7 +1593,7 @@ def _client_chat(acct, body, session_key):
         req = urllib.request.Request(SNAP_HOST + EP_CHAT, data=raw,
                                      headers=headers, method="POST")
         try:
-            resp = _opener().open(req, timeout=timeout)
+            resp = _opener(acct.proxy).open(req, timeout=timeout)
         except urllib.error.HTTPError as exc:
             try:
                 err = exc.read(ERROR_BODY_MAX)
@@ -1968,7 +2023,7 @@ def fetch_account_info(acct, timeout=15.0):
                              {"Content-Type": "application/json"}, b"")
     signed["Agent-Type"] = "PromptCenter"
     signed["X-Language"] = "zh-cn"
-    data = _json_http("GET", url, signed, None, timeout)
+    data = _json_http("GET", url, signed, None, timeout, acct.proxy)
     package = data.get("package") or {}
     metrics = data.get("metrics") or []
     credits = {
@@ -2135,6 +2190,48 @@ def clear_cooldown(config, uid):
         raise CodeArtsNotFound("account not found")
     invalidate_overview()
     return {"ok": True, "message": "已清冷却 %s" % uid}
+
+
+def apply_proxy_slots(accounts_dir, slots=None):
+    """Re-resolve CodeArts account exits after the panel saves slots."""
+    pool_for(accounts_dir).apply_proxy_slots(slots)
+
+
+def set_proxy_slot(config, uid, slot_id):
+    """Bind one CodeArts account to a proxy slot (empty string = direct)."""
+    pool = pool_for(config["accounts_dir"])
+    acct = pool.get(uid)
+    if acct is None:
+        raise CodeArtsNotFound("account not found")
+    slot_id = str(slot_id or "").strip()
+    acct.proxy_slot = slot_id
+    acct.auth["proxySlot"] = slot_id
+    acct.auth = save_auth(pool.accounts_dir, acct.auth)
+    pool.apply_proxy_slots()
+    invalidate_overview()
+    return {
+        "ok": True,
+        "uid": acct.uid,
+        "proxy_slot": acct.proxy_slot,
+        "proxy": acct.proxy,
+        "message": "出口已更新",
+    }
+
+
+def drop_missing_bindings(accounts_dir, slots):
+    """Clear CodeArts bindings that point at a slot which no longer exists."""
+    valid = {entry["id"] for entry in slots}
+    pool = pool_for(accounts_dir)
+    changed = 0
+    for acct in list(pool.accounts):
+        if acct.proxy_slot and acct.proxy_slot not in valid:
+            acct.proxy_slot = ""
+            acct.auth.pop("proxySlot", None)
+            acct.auth = save_auth(accounts_dir, acct.auth)
+            changed += 1
+    # Always re-resolve: a surviving slot may have had its URL edited.
+    pool.apply_proxy_slots(slots)
+    return changed
 
 
 def keepalive(config):

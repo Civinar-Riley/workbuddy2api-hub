@@ -12,6 +12,8 @@ const script = dashboardScript();
 
 assert.ok(html.includes('id="codeartsAccounts"'), '缺少 CodeArts 账号表');
 assert.ok(/renderCodeartsAccounts/.test(script), '缺少账号表渲染函数');
+assert.ok(/codeartsSlotSelectHtml/.test(script), '缺少 CodeArts 出口选择器');
+assert.ok(script.includes('/codearts/accounts/proxy'), '缺少出口绑定端点');
 assert.ok(script.includes("codeartsAccountAction(\\'delete\\'"),
           '缺少删除操作入口');
 assert.ok(/confirm\("删除 CodeArts 账号/.test(script), '删除应有二次确认');
@@ -40,7 +42,9 @@ try {
     window.updateUI = function(){};
     return {renderCodeartsAccounts: renderCodeartsAccounts,
             codeartsAccountAction: codeartsAccountAction,
-            codeartsCheckinAll: codeartsCheckinAll};
+            codeartsCheckinAll: codeartsCheckinAll,
+            codeartsSetProxy: codeartsSetProxy,
+            setSlots: function(v){ PROXY_SLOTS = v; }};
   `)();
 } catch (e) {
   console.log = realLog;
@@ -50,10 +54,13 @@ try {
 console.log = realLog;
 
 const box = document.getElementById('codeartsAccounts');
+api.setSlots([{id: 'slot-1', name: '美国 住宅', url: 'http://p:1',
+               enabled: true}]);
 api.renderCodeartsAccounts({
   stats: {total: 2, healthy: 1},
   accounts: [
     {uid: 'u1', nickname: '账号一', disabled: false, cooling: false,
+     proxy_slot: 'slot-1',
      token_remaining: '1h0m0s', expires_at: '2026-10-31T12:00:00+08:00',
      active_concurrent: 0, max_concurrent: 5, checkin: {ok: true}},
     {uid: 'u2', nickname: '账号二', disabled: true, cooling: false,
@@ -71,12 +78,22 @@ assert.ok(box.innerHTML.includes("codeartsAccountAction('disable','u1')"),
   '正常账号应显示停用按钮');
 assert.ok(box.innerHTML.includes("codeartsAccountAction('delete','u1')"),
   '应显示删除按钮');
+assert.ok(box.innerHTML.includes('codeartsSetProxy'), '应显示出口选择器');
+assert.ok(box.innerHTML.includes('slot-1'), '出口选择器应包含已绑定槽位');
+assert.ok(box.innerHTML.includes('美国 住宅'), '出口选择器应显示槽位名称');
 
 (async () => {
   await api.codeartsAccountAction('delete', 'u1');
   const hit = POSTS.find(p => p.url.indexOf('/codearts/accounts/delete') >= 0);
   assert.ok(hit, '删除应 POST /codearts/accounts/delete');
   assert.equal(hit.body.uid, 'u1', '删除应带上 uid');
+
+  POSTS = [];
+  await api.codeartsSetProxy('u1', 'slot-1', null);
+  const bind = POSTS.find(p => p.url.indexOf('/codearts/accounts/proxy') >= 0);
+  assert.ok(bind, '出口绑定应 POST /codearts/accounts/proxy');
+  assert.equal(bind.body.uid, 'u1', '出口绑定应带上 uid');
+  assert.equal(bind.body.slot_id, 'slot-1', '出口绑定应带上 slot_id');
 
   POSTS = [];
   await api.codeartsCheckinAll();
