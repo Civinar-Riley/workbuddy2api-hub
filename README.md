@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.9.2-2496ED?style=flat-square" alt="Version 1.9.2"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.0-2496ED?style=flat-square" alt="Version 1.10.0"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -509,15 +509,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
-- **CodeArts 第三出口（单进程）**：新增 `codearts` 出口，看板可在 `国际版 / 国内版 / CodeArts` 之间切换；`/v1/models`、`/v1/chat/completions`、`/v1/responses` 与 Anthropic Messages 都由本进程直连华为云。CodeArts 的 OAuth（PKCE + DPoP）、token 续期、账号池、模型发现（含限时福利）、聊天 SSE 与签到全部在 Python 进程内完成，不再依赖独立的 codearts2api 服务。看板「账号」页新增 CodeArts 视图，支持 OAuth 添加、启用/停用、清冷却、签到、删除；管理端点只接受面板会话，华为云凭据不出本机。默认关闭，未启用时行为与旧版一致。 / **CodeArts as a third exit, single process**: a new `codearts` realm that the panel can switch to alongside Global and China; `/v1/models`, `/v1/chat/completions`, `/v1/responses` and Anthropic Messages all talk to Huawei Cloud directly from this process. CodeArts OAuth (PKCE + DPoP), token renewal, the account pool, model discovery (including benefit models), the chat SSE stream and check-in all run inside the Python process, with no separate codearts2api service. The Accounts page gains a CodeArts view with OAuth add, enable/disable, cooldown clearing, check-in and delete; the management endpoints require a panel session and Huawei credentials never leave the machine. Off by default, so an unenabled install behaves exactly as before.
-- **CodeArts 账号代理槽**：CodeArts 账号可像 WorkBuddy 账号一样绑定「账号代理槽」，聊天、模型发现、token 续期、签到和积分查询都走绑定的出口；槽位地址变化自动跟随，禁用/删除槽位回退直连。首次 OAuth 换取 token 时还没有账号，仍直连。 / **CodeArts proxy slots**: CodeArts accounts can bind to the same account proxy slots as WorkBuddy accounts; chat, model discovery, token renewal, check-in and credit queries all use the bound exit. Slot URL changes follow automatically, while disabling/deleting a slot falls back to direct. The initial OAuth token exchange has no account yet and stays direct.
-
-- **Key 允许账号列表显示账号备注**（#708）：账号选择器显示并支持按备注搜索，便于区分昵称相近的账号；分组功能仍待 #707。
-- **今日活动不再将缺少本地记录显示为未签到**（#706）：当网关没有当天的加油站或成长计划记录时，徽章显示「无本地记录」，避免外部工具已签到却被误认为未签到。该状态仍来自网关本地记录，并未查询上游。
-- **单请求体上限可在面板调整**（#709）：设置页可将上限设为 1–256 MB，保存后立即生效；超限返回实际限制并提示缩小请求或临时调高上限。分块请求超限时直接关闭连接，避免等待客户端继续上传。尚未配置面板值时沿用 `WB_MAX_PAYLOAD_BYTES` 或默认 16 MB；面板值优先。提高限制会增加内存占用。
-- **修复设置页出现两张「上游响应头超时」卡片**：v1.9.0 引入账号级并发上限与会话粘滞键时，插入两个新区块的补丁把紧随其后的「上游响应头超时」整块又带了一份，于是同一张卡片在设置页出现两次，`id="setHeaderTimeout"` 与 `id="setHeaderTimeoutState"` 各重复一次。`getElementById` 只取文档顺序上的第一个，所以下面那张的输入框永远空着、状态胶囊永远不写字，而点它的「保存」读的是上面那张输入框的值——改下面那张，存进去的是上面那张的数字。删掉重复的那一块；`tests/_test_settings_load.js` 新增 1 项断言，钉住「标记里没有重复的 id」。 / Fix the duplicated upstream response-header timeout card on the settings page: when v1.9.0 added the per-account concurrency cap and the stable affinity key, the patch that inserted the two new blocks re-emitted the whole response-header-timeout card, so the page showed it twice with both `id="setHeaderTimeout"` and `id="setHeaderTimeoutState"` duplicated. `getElementById` returns only the first in document order, so the lower copy never received the value, its state chip stayed empty, and its 保存 button read the upper input — editing the lower card saved the upper card's number. The duplicate block is removed and `tests/_test_settings_load.js` gains one assertion that no element id repeats in the markup.
-- **看板「最近请求」的时间补上日期**：数据看板的「实时活动流」此前只打印 `HH:MM:SS`，昨天 22:11 的请求和今天 22:11 的在同一列里一模一样，往下翻一段就分不清哪条是刚进来的；现在同一天仍只显示时分秒，跨天的行补上月日（`MM-DD HH:MM`），时间戳缺失显示 `—` 而不是空白。只改显示，统计口径与 `/usage/recent` 的返回一字未动。新增 `tests/_test_recent_timestamp.js`（11 项断言）。 / Recent-requests stamps now carry their day: the live activity stream printed only `HH:MM:SS`, so 22:11 yesterday and 22:11 today were the same string in the same column. Rows from another day now print `MM-DD HH:MM`; today's rows stay time-only, and a row without a timestamp prints a dash. Display only — the accounting and the `/usage/recent` payload are unchanged. Covered by `tests/_test_recent_timestamp.js` (11 checks).
-- **面板密码加密异常明确报错**（#658）：解释器缺少 `hashlib.pbkdf2_hmac` 支持时（如 Windows SAC 拦截便携运行时 DLL），不再将计算异常吞成「密码错误」返回 401，而是明确返回 500 与环境排查指引；启动自检与 `/health`、`/panel/status` 暴露 `crypto_ok` 状态并在面板提示。新增 `tests/_test_panel_crypto_unavailable.py`。
+- **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
+- **v1.9.2 发布**：数据看板轮询防慢堆叠（#656）、更新卡片操作提示优化（#696）、密码组件环境异常明确报错（#658），详见 [更新记录](docs/CHANGELOG.md#v192)。
 - **v1.9.1 发布**：集成 #692 与 #693，详见 [更新记录](docs/CHANGELOG.md#v191)。
 - **流式终止**：设置 `WB_STOP_AT_SSE_DONE=1` 后，收到上游 SSE `[DONE]` 立即结束读取；默认关闭，保持原有行为。 / **Stream termination**: set `WB_STOP_AT_SSE_DONE=1` to stop reading at the upstream SSE `[DONE]` marker; disabled by default to retain existing behavior.
 - **HTTP 错误正文**：设置 `WB_CACHE_HTTP_ERROR_BODY=1` 后缓存首次读取的错误正文，供后续读取使用；默认关闭。 / **HTTP error body**: set `WB_CACHE_HTTP_ERROR_BODY=1` to retain the first error-body read for later readers; disabled by default.
@@ -615,7 +608,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **DSH 一键配置放宽限流重试，修掉「对话到一半链接中断」**：WorkBuddy 的 429 冷却通常约一分钟，而 DSH 的默认 `retryPolicy` 是 `normal` / 最多 5 次 / 退避 500ms 起翻倍、封顶 10s——加起来不到 16 秒就放弃，冷却还没结束回合就以 `RATE_LIMIT` 失败。一键配置现在给 `wb-proxy` 单独写 `retryPolicy: {mode: normal, maxRetries: 8, backoff: {initialDelayMs: 2000, maxDelayMs: 30000, jitterRatio: 0.1}}`（合计约 2 分半），只影响 `wb-proxy`，其它 provider 仍用默认策略；字段与取值按 `@deepseek-ai/dsh-llm` 的 `RetryPolicySchema`。已经接入过的机器重新点一次「一键配置」即可补上这段（幂等），重启 DSH 生效。
   DSH's default per-provider retry policy (normal, at most 5 retries, 500ms→10s backoff, under 16 seconds in total) gives up before WorkBuddy's ~60s rate-limit cooldown ends, so the turn dies with `RATE_LIMIT` — which the user sees as the conversation breaking mid-flight. The one-click config now writes a wider `retryPolicy` for `wb-proxy` only (8 retries, 2s initial delay, 30s cap, ~2.5 minutes in total); other providers keep the default policy. Field names and bounds follow `@deepseek-ai/dsh-llm`'s `RetryPolicySchema`. Re-running the one-click config on an already-integrated machine adds it idempotently, and a DSH restart applies it.
 
-已发布版本的完整记录（v1.4.5 ~ v1.9.2，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+已发布版本的完整记录（v1.4.5 ~ v1.10.0，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
 ## 七、致谢与引用声明 (Credits & References)
 
