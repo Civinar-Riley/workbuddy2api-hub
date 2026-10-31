@@ -16568,6 +16568,18 @@ function nicknameOf(uid){
   const acc = ((state.analytics || {}).accounts || []).find(x => x.uid === uid);
   return acc ? (acc.nickname || acc.uid.slice(0, 8)) : (uid || '').slice(0, 8);
 }
+/* 「实时活动流」原先只截 HH:MM:SS：昨天 22:11 的请求和今天 22:11 的在同一列里
+   长得一模一样，往下翻一段就分不清哪条是刚才进来的。这里补上跨天判断：
+   同一天仍只显示时分秒（平时盯的就是这几行），不是今天的补上月日。 */
+function recentStamp(iso){
+  const s = (iso || '').replace('T', ' ');
+  const time = s.slice(11, 19);
+  if (!time) return '—';
+  const now = new Date();
+  const pad = v => String(v).padStart(2, '0');
+  const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+  return s.slice(0, 10) === today ? time : s.slice(5, 16);
+}
 async function loadRecent(){
   try{
     const r = await api('/usage/recent?limit=12');
@@ -16577,7 +16589,7 @@ async function loadRecent(){
       const ok = x.outcome === 'completed';
       const nm = nicknameOf(x.account);
       return `<div class="recent-item">
-        <span class="t">${(x.iso || '').slice(11, 19)}</span>
+        <span class="t">${recentStamp(x.iso)}</span>
         <span class="m"><b>${x.model || ''}</b> → ${nm.length > 16 ? nm.slice(0, 16) + '…' : nm}${ok ? '' : ' <span class="err">[' + (x.outcome || '失败') + ']</span>'}</span>
         <span class="r"><b>${fmtCompact(x.total_tokens || 0)}</b> tok · ${((x.elapsed_ms || 0) / 1000).toFixed(1)}s</span>
       </div>`;
