@@ -5493,6 +5493,12 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
       <section>
+        <h2>单请求体上限</h2>
+        <div style="font-size:12px;color:var(--dim);margin:8px 0">超限时可临时调高后重试压缩请求；调高会增加并发请求的内存占用。保存后立即生效。</div>
+        <input id="setMaxPayloadMB" type="number" min="1" max="256" step="1" style="width:90px"> MB
+        <button onclick="saveMaxPayload(this)">保存</button>
+      </section>
+      <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
@@ -11879,6 +11885,8 @@ async function loadSettings(showToast){
       renderQuotaScanState(data);
       // 上游响应头超时：没改过时后端给的就是默认 120，所以「等于 120」按默认态
       // 显示，只有被改过才标出实际秒数。
+      const maxPayload = document.getElementById('setMaxPayloadMB');
+      if(maxPayload) maxPayload.value = data.max_payload_mb || Math.ceil((data.max_payload_bytes_effective || 16777216) / 1048576);
       const headerTimeout = (data.upstream || {}).header_timeout_seconds;
       const headerTimeoutInput = document.getElementById('setHeaderTimeout');
       if(headerTimeoutInput){
@@ -13099,6 +13107,18 @@ async function saveUsageKeep(btn){
 }
 /* 上游响应头超时。后端只接受 >=1 的整数秒，所以先把输入收成整数再发：空值、
    小数、非数字就地拦下，而不是送上去换一个 400 回来。 */
+async function saveMaxPayload(btn){
+  const el = document.getElementById('setMaxPayloadMB');
+  const value = Number(el && el.value);
+  if(!Number.isInteger(value) || value < 1 || value > 256){ toast('请输入 1 到 256 的整数 MB', 'bad'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {max_payload_mb: value});
+    toast('单请求体上限已保存', 'ok');
+    loadSettings();
+  } catch(e) { toast('保存失败: ' + e.message, 'bad'); }
+  finally { if(btn) btn.disabled = false; }
+}
 async function saveHeaderTimeout(btn){
   const el = document.getElementById('setHeaderTimeout');
   const value = Math.floor(Number(el && el.value));
