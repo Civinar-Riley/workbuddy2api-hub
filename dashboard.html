@@ -5563,27 +5563,6 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
-            <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              单次尝试等上游返回响应头的上限（秒）。拿到响应头之前网关不会向客户端发出任何字节，所以这个值就是客户端要空等的时长：设得比客户端的首字节预算还大时，客户端会先断开（表现为 499 / 首字节迟迟不返回），而网关仍会按这个上限继续换账号重试。默认 120。
-            </div>
-            <div style="font-size:12px;color:var(--warn);margin-top:4px">
-              调小的代价：上游偶尔确实算得慢的正常请求会被提前判失败、换账号重试，多消耗一次额度。建议不高于客户端的首字节预算。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
-              <input id="setHeaderTimeout" type="number" min="1" step="1" style="width:90px">
-              秒
-            </label>
-            <button onclick="saveHeaderTimeout(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
             <h2 style="margin:0">日志落库 <em id="setLogDbState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
               默认关闭：日志只留在内存（最新 2000 条，重启即失），与上游一致。开启后每条日志追加写入
