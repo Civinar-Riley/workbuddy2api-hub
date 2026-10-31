@@ -175,6 +175,11 @@ try:
 
     print("== browser callback ==")
     started = call("POST", "/codearts/accounts/oauth/start", {}, token=token)[1]
+    try:
+        urllib.request.urlopen(HUB + "/oauth/callback?code=abc", timeout=20)
+        check("callback without session identifier rejected", False)
+    except urllib.error.HTTPError as exc:
+        check("callback without session identifier rejected", exc.code == 400, exc.code)
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(started["auth_url"]).query)
     ticket = (query.get("ticket_id") or [""])[0]
     req = urllib.request.Request(

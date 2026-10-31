@@ -1945,6 +1945,17 @@ def _loopback_host(host):
     return str(host or "").lower() in ("127.0.0.1", "localhost", "::1")
 
 
+def _safe_oauth_redirect(url):
+    try:
+        target = urllib.parse.urlsplit(str(url or ""))
+        portal = urllib.parse.urlsplit(PORTAL_HOST)
+        return (target.scheme in ("http", "https") and target.scheme == portal.scheme
+                and target.hostname == portal.hostname and target.port == portal.port
+                and not target.username and not target.password)
+    except ValueError:
+        return False
+
+
 def oauth_callback(config, session_id, callback_url):
     session = _find_session(session_id=session_id)
     if session is None:
@@ -1963,6 +1974,8 @@ def oauth_callback(config, session_id, callback_url):
         _exchange_session(config, session, code)
         return session.public()
     if secret and redirect:
+        if not _safe_oauth_redirect(redirect):
+            raise CodeArtsBadRequest("授权跳转地址不属于 CodeArts 门户")
         session.secret = secret
         session.ticket_fallback = True
         session.message = "回调已接收，继续等待授权结果…"
@@ -1980,7 +1993,10 @@ def oauth_callback_get(config, query):
         if isinstance(raw, list):
             return raw[0] if raw else ""
         return raw or ""
-    session = _find_session(ticket_id=value("ticket_id"), secret=value("secret"))
+    ticket_id, callback_secret = value("ticket_id"), value("secret")
+    if not ticket_id and not callback_secret:
+        return 400, "<h3>回调缺少会话标识，请回到看板粘贴完整回调地址。</h3>"
+    session = _find_session(ticket_id=ticket_id, secret=callback_secret)
     if session is None:
         return 400, "<h3>登录会话不存在或已过期，请回到看板重新发起。</h3>"
     code = value("code")
@@ -1991,16 +2007,20 @@ def oauth_callback_get(config, query):
             _exchange_session(config, session, code)
             return 200, "<h3>CodeArts 登录成功，可以关闭此页面。</h3>"
         if secret and redirect:
+            if not _safe_oauth_redirect(redirect):
+                raise CodeArtsBadRequest("授权跳转地址不属于 CodeArts 门户")
             session.secret = secret
             session.ticket_fallback = True
             session.message = "回调已接收，继续等待授权结果…"
+            import html as html_module
             html = ('<meta http-equiv="refresh" content="0;url=%s">'
-                    '<h3>正在继续华为云授权…</h3>' % redirect)
+                    '<h3>正在继续华为云授权…</h3>' % html_module.escape(redirect, quote=True))
             return 200, html
     except CodeArtsError as exc:
         session.status = "error"
         session.message = str(exc)
-        return 400, "<h3>登录失败：%s</h3>" % exc
+        import html as html_module
+        return 400, "<h3>登录失败：%s</h3>" % html_module.escape(str(exc))
     return 400, "<h3>回调地址缺少 code 或 secret。</h3>"
 
 

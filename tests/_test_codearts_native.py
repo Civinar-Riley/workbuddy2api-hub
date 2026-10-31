@@ -317,10 +317,12 @@ try:
     cont = C.oauth_callback(
         C.load_config(ACCOUNTS), started2["session_id"],
         "http://127.0.0.1:8788/oauth/callback?secret=s1&redirect="
-        + __import__("urllib.parse").parse.quote("https://codearts.huaweicloud.com/portal/x?ticket_id="
+        + __import__("urllib.parse").parse.quote(C.PORTAL_HOST + "/x?ticket_id="
                                                   + started2["session_id"], safe=""))
     check("oauth continue", cont["status"] == "continue", cont)
-    check("oauth next_url", cont["next_url"].startswith("https://"), cont)
+    check("oauth next_url", cont["next_url"].startswith(C.PORTAL_HOST), cont)
+    check("oauth rejects foreign redirect", not C._safe_oauth_redirect("https://evil.invalid/"))
+    check("oauth rejects embedded credentials", not C._safe_oauth_redirect("https://codearts.huaweicloud.com@evil.invalid/"))
 
     print("== oauth without identity ==")
     import base64
