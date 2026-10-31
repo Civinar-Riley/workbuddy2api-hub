@@ -5623,6 +5623,12 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
       <section>
+        <h2>单请求体上限</h2>
+        <div style="font-size:12px;color:var(--dim);margin:8px 0">超限时可临时调高后重试压缩请求；调高会增加并发请求的内存占用。保存后立即生效。</div>
+        <input id="setMaxPayloadMB" type="number" min="1" max="256" step="1" style="width:90px"> MB
+        <button onclick="saveMaxPayload(this)">保存</button>
+      </section>
+      <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
@@ -5686,27 +5692,6 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
               启用更稳的会话键
             </label>
             <button onclick="saveAffinityStableKey(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              单次尝试等上游返回响应头的上限（秒）。拿到响应头之前网关不会向客户端发出任何字节，所以这个值就是客户端要空等的时长：设得比客户端的首字节预算还大时，客户端会先断开（表现为 499 / 首字节迟迟不返回），而网关仍会按这个上限继续换账号重试。默认 120。
-            </div>
-            <div style="font-size:12px;color:var(--warn);margin-top:4px">
-              调小的代价：上游偶尔确实算得慢的正常请求会被提前判失败、换账号重试，多消耗一次额度。建议不高于客户端的首字节预算。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
-              <input id="setHeaderTimeout" type="number" min="1" step="1" style="width:90px">
-              秒
-            </label>
-            <button onclick="saveHeaderTimeout(this)">保存</button>
           </div>
         </div>
       </section>
@@ -12514,6 +12499,8 @@ async function loadSettings(showToast){
       renderQuotaScanState(data);
       // 上游响应头超时：没改过时后端给的就是默认 120，所以「等于 120」按默认态
       // 显示，只有被改过才标出实际秒数。
+      const maxPayload = document.getElementById('setMaxPayloadMB');
+      if(maxPayload) maxPayload.value = data.max_payload_mb || Math.ceil((data.max_payload_bytes_effective || 16777216) / 1048576);
       const headerTimeout = (data.upstream || {}).header_timeout_seconds;
       const headerTimeoutInput = document.getElementById('setHeaderTimeout');
       if(headerTimeoutInput){
@@ -13735,6 +13722,18 @@ async function saveUsageKeep(btn){
 }
 /* 上游响应头超时。后端只接受 >=1 的整数秒，所以先把输入收成整数再发：空值、
    小数、非数字就地拦下，而不是送上去换一个 400 回来。 */
+async function saveMaxPayload(btn){
+  const el = document.getElementById('setMaxPayloadMB');
+  const value = Number(el && el.value);
+  if(!Number.isInteger(value) || value < 1 || value > 256){ toast('请输入 1 到 256 的整数 MB', 'bad'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {max_payload_mb: value});
+    toast('单请求体上限已保存', 'ok');
+    loadSettings();
+  } catch(e) { toast('保存失败: ' + e.message, 'bad'); }
+  finally { if(btn) btn.disabled = false; }
+}
 async function saveHeaderTimeout(btn){
   const el = document.getElementById('setHeaderTimeout');
   const value = Math.floor(Number(el && el.value));
@@ -17188,6 +17187,18 @@ function nicknameOf(uid){
   const acc = ((state.analytics || {}).accounts || []).find(x => x.uid === uid);
   return acc ? (acc.nickname || acc.uid.slice(0, 8)) : (uid || '').slice(0, 8);
 }
+/* 「实时活动流」原先只截 HH:MM:SS：昨天 22:11 的请求和今天 22:11 的在同一列里
+   长得一模一样，往下翻一段就分不清哪条是刚才进来的。这里补上跨天判断：
+   同一天仍只显示时分秒（平时盯的就是这几行），不是今天的补上月日。 */
+function recentStamp(iso){
+  const s = (iso || '').replace('T', ' ');
+  const time = s.slice(11, 19);
+  if (!time) return '—';
+  const now = new Date();
+  const pad = v => String(v).padStart(2, '0');
+  const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+  return s.slice(0, 10) === today ? time : s.slice(5, 16);
+}
 async function loadRecent(){
   try{
     const r = await api('/usage/recent?limit=12');
@@ -17197,7 +17208,7 @@ async function loadRecent(){
       const ok = x.outcome === 'completed';
       const nm = nicknameOf(x.account);
       return `<div class="recent-item">
-        <span class="t">${(x.iso || '').slice(11, 19)}</span>
+        <span class="t">${recentStamp(x.iso)}</span>
         <span class="m"><b>${x.model || ''}</b> → ${nm.length > 16 ? nm.slice(0, 16) + '…' : nm}${ok ? '' : ' <span class="err">[' + (x.outcome || '失败') + ']</span>'}</span>
         <span class="r"><b>${fmtCompact(x.total_tokens || 0)}</b> tok · ${((x.elapsed_ms || 0) / 1000).toFixed(1)}s</span>
       </div>`;
