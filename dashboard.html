@@ -1635,6 +1635,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '人工映射表 OVERRIDES': 'Manual mapping table OVERRIDES',
     '今日': 'Today',
     '今日已签到': 'Checked in today',
+    '无本地记录': 'No local record',
     '今日数据 (Today)': 'Today',
     '今日未签到': 'Not checked in today',
     '今日次数已用尽': 'No attempts left today',
@@ -2211,6 +2212,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '权重': 'Weight',
     '权重 >1 的账号优先接单，多个高权重账号按权重比分流量；它们都接不了单时其他账号照常顶上。1 = 不干预，临期积分优先等自动规则照旧。': 'Accounts with weight >1 are dispatched first; several weighted accounts split traffic by weight, and when none of them can take requests the others serve as usual. 1 = no override, automatic rules such as expiring-credits-first apply as before.',
     '备注': 'Note',
+    '搜索昵称、备注或 UID': 'Search nickname, note or UID',
     '+ 备注': '+ note',
     '点击编辑备注': 'Click to edit the note',
     '点击添加备注，比如「批量」/「自用」': 'Click to add a note, e.g. "batch" / "personal"',
@@ -2976,6 +2978,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "为每个 Key 绑定专属出口。客户端使用该 Key 请求将固定走对应区域，实现双出口并发。": "為每個 Key 繫結專屬出口。客戶端使用該 Key 請求將固定走對應區域，實現雙出口併發。",
     "人工映射表 OVERRIDES": "人工對映表 OVERRIDES",
     "今日已签到": "今日已簽到",
+    "无本地记录": "無本地記錄",
     "今日数据 (Today)": "今日資料 (Today)",
     "今日未签到": "今日未簽到",
     "从 Web 控制台同步最新昵称（改名后免重登）": "從 Web 控制檯同步最新暱稱（改名後免重登）",
@@ -3392,6 +3395,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "总计（全部历史）": "總計（全部歷史）",
     "权重 >1 的账号优先接单，多个高权重账号按权重比分流量；它们都接不了单时其他账号照常顶上。1 = 不干预，临期积分优先等自动规则照旧。": "權重 >1 的帳號優先接單，多個高權重帳號按權重比分流量；它們都接不了單時其他帳號照常頂上。1 = 不干預，臨期積分優先等自動規則照舊。",
     "点击编辑备注": "點擊編輯備註",
+    "搜索昵称、备注或 UID": "搜尋暱稱、備註或 UID",
     "点击添加备注，比如「批量」/「自用」": "點擊新增備註，例如「批量」/「自用」",
     "按「剩余用量估算」优先调度：某 (账号 × 模型) 的估计剩余越接近耗尽，分到的请求越多——先把快用完的额度用掉，等它到点重置。剩余不到 30% 开始加权、5% 以内权重最高；没有预算样本、或剩余为 0 / 冷却中的组合不参与。默认关闭。": "按「剩餘用量估算」優先排程：某 (帳號 × 模型) 的估計剩餘越接近耗盡，分到的請求越多——先把快用完的額度用掉，等它到點重置。剩餘不到 30% 開始加權、5% 以內權重最高；沒有預算樣本、或剩餘為 0 / 冷卻中的組合不參與。預設關閉。",
     "撞线样本": "撞線樣本",
@@ -8774,7 +8778,7 @@ function activityStatusOf(a){
   // 国内版：加油站
   const event = ACTIVITY_TODAY.byUid[uid];
   const gasDone = a && a.lastCheckin;
-  let gas = {kind: 'none', label: '加油站', state: '未领', at: '', message: ''};
+  let gas = {kind: 'none', label: '加油站', state: '无本地记录', at: '', message: ''};
   if(event && event.task === 'checkin'){
     gas = {kind: event.ok ? 'ok' : 'failed', label: '加油站',
            state: event.ok ? '已领' : '失败',
@@ -8786,7 +8790,7 @@ function activityStatusOf(a){
 
   // 国内版：成长计划连登打卡
   const streakDone = a && a.lastActivityReport;
-  let streak = {kind: 'none', label: '成长连登', state: '未打卡', at: '', message: ''};
+  let streak = {kind: 'none', label: '成长连登', state: '无本地记录', at: '', message: ''};
   if(streakDone && String(streakDone).startsWith(todayStamp())){
     streak = {kind: 'done', label: '成长连登', state: '已打卡', at: String(streakDone), message: '连登活跃已上报'};
   }
@@ -8830,10 +8834,10 @@ function activityStatusChip(a){
   return '<div style="display:inline-flex;flex-direction:column;gap:4px;align-items:center">'
     + '<span class="' + mainStatus.cls + '" style="cursor:pointer;white-space:nowrap" title="' + esc(gasTip) + '"'
     + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
-    + esc('Buddy 加油站 · ' + (status.gas.kind === 'none' ? '未领' : status.gas.state)) + '</span>'
+    + esc('Buddy 加油站 · ' + status.gas.state) + '</span>'
     + '<span class="' + stkCls + '" style="cursor:pointer;white-space:nowrap" title="' + esc(stkTip) + '"'
     + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
-    + esc('成长计划 · ' + (status.streak.kind === 'done' ? '已签到' : '未签到')) + '</span>'
+    + esc('成长计划 · ' + (status.streak.kind === 'done' ? '已签到' : '无本地记录')) + '</span>'
     + '</div>'
     + '<span style="display:none">' + esc(mainStatus.text) + '</span>';
 }
@@ -14386,7 +14390,7 @@ function renderKeyRows(){
         +     '</div>'
         +     '<div id="editKeyAccountPicker_' + i + '" style="display:none;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:4px">'
         +       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'
-        +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
+        +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称、备注或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',true)">全选</button>'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',false)">全不选</button>'
         +       '</div>'
@@ -14551,7 +14555,8 @@ async function renderKeyPickers(i){
     accountList.innerHTML = accts.map(a => {
       const uid = String((a && a.uid) || '');
       if(!uid) return '';
-      const label = (a.nickname || uid.slice(0, 8)) + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '');
+      const note = String(a.note || '').trim();
+      const label = (a.nickname || uid.slice(0, 8)) + (note ? ' · ' + note : '') + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '');
       const checked = (row.accounts || []).indexOf(uid) >= 0 ? ' checked' : '';
       return '<label class="key-pick-row" data-search="' + esc((label + ' ' + uid).toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(uid) + '"' + checked + ' onchange="toggleKeyAccount(' + i + ',this)">' + esc(label) + '</label>';
     }).join('') || '<div style="font-size:12px;color:var(--warn);padding:4px">账号列表为空或加载失败，<a href="javascript:void(0)" onclick="renderKeyPickers(' + i + ')">重试</a></div>';
