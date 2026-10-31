@@ -595,7 +595,11 @@ class CodeArtsPool(object):
                     # panel-side binding. Keep the slot the operator chose.
                     if not acct.proxy_slot and existing.proxy_slot:
                         acct.proxy_slot = existing.proxy_slot
-                        acct.auth["proxySlot"] = existing.proxy_slot
+                    if acct.proxy_slot:
+                        acct.auth["proxySlot"] = acct.proxy_slot
+                    # _save_login() wrote the fresh token document before the
+                    # pool saw it; persist the preserved binding here too.
+                    acct.auth = save_auth(self.accounts_dir, acct.auth)
                     existing.auth = acct.auth
                     existing.proxy_slot = acct.proxy_slot
                     existing.nickname = acct.nickname

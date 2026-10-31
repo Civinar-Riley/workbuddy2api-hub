@@ -136,6 +136,21 @@ try:
     C.signed_get(acct, "http://example.test")
     C._json_http = orig_json
     check("signed_get threads account proxy", seen == [acct.proxy], seen)
+    # Re-login writes a fresh auth document without panel-side fields; the
+    # existing slot binding must survive and be written back.
+    relogin = dict(acct.auth)
+    relogin.pop("proxySlot", None)
+    relogin = C.save_auth(ACCOUNTS, relogin)
+    pool.add(relogin)
+    check("relogin keeps proxy binding",
+          pool.get("u1").proxy_slot == "slot-1",
+          pool.get("u1").proxy_slot)
+    check("relogin persists proxy binding",
+          C.load_auths(ACCOUNTS)[0].get("proxySlot") == "slot-1",
+          C.load_auths(ACCOUNTS)[0])
+    check("relogin re-resolves proxy",
+          pool.get("u1").proxy == "http://127.0.0.1:7890",
+          pool.get("u1").proxy)
     # A real HTTP proxy must receive the absolute-form request line.
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
