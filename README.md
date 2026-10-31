@@ -176,7 +176,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 234 个套件：175 个 Python + 59 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 235 个套件：175 个 Python + 60 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -484,6 +484,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 - **修复设置页出现两张「上游响应头超时」卡片**：v1.9.0 引入账号级并发上限与会话粘滞键时，插入两个新区块的补丁把紧随其后的「上游响应头超时」整块又带了一份，于是同一张卡片在设置页出现两次，`id="setHeaderTimeout"` 与 `id="setHeaderTimeoutState"` 各重复一次。`getElementById` 只取文档顺序上的第一个，所以下面那张的输入框永远空着、状态胶囊永远不写字，而点它的「保存」读的是上面那张输入框的值——改下面那张，存进去的是上面那张的数字。删掉重复的那一块；`tests/_test_settings_load.js` 新增 1 项断言，钉住「标记里没有重复的 id」。 / Fix the duplicated upstream response-header timeout card on the settings page: when v1.9.0 added the per-account concurrency cap and the stable affinity key, the patch that inserted the two new blocks re-emitted the whole response-header-timeout card, so the page showed it twice with both `id="setHeaderTimeout"` and `id="setHeaderTimeoutState"` duplicated. `getElementById` returns only the first in document order, so the lower copy never received the value, its state chip stayed empty, and its 保存 button read the upper input — editing the lower card saved the upper card's number. The duplicate block is removed and `tests/_test_settings_load.js` gains one assertion that no element id repeats in the markup.
+- **看板「最近请求」的时间补上日期**：数据看板的「实时活动流」此前只打印 `HH:MM:SS`，昨天 22:11 的请求和今天 22:11 的在同一列里一模一样，往下翻一段就分不清哪条是刚进来的；现在同一天仍只显示时分秒，跨天的行补上月日（`MM-DD HH:MM`），时间戳缺失显示 `—` 而不是空白。只改显示，统计口径与 `/usage/recent` 的返回一字未动。新增 `tests/_test_recent_timestamp.js`（11 项断言）。 / Recent-requests stamps now carry their day: the live activity stream printed only `HH:MM:SS`, so 22:11 yesterday and 22:11 today were the same string in the same column. Rows from another day now print `MM-DD HH:MM`; today's rows stay time-only, and a row without a timestamp prints a dash. Display only — the accounting and the `/usage/recent` payload are unchanged. Covered by `tests/_test_recent_timestamp.js` (11 checks).
 - **面板密码加密异常明确报错**（#658）：解释器缺少 `hashlib.pbkdf2_hmac` 支持时（如 Windows SAC 拦截便携运行时 DLL），不再将计算异常吞成「密码错误」返回 401，而是明确返回 500 与环境排查指引；启动自检与 `/health`、`/panel/status` 暴露 `crypto_ok` 状态并在面板提示。新增 `tests/_test_panel_crypto_unavailable.py`。
 - **v1.9.1 发布**：集成 #692 与 #693，详见 [更新记录](docs/CHANGELOG.md#v191)。
 - **流式终止**：设置 `WB_STOP_AT_SSE_DONE=1` 后，收到上游 SSE `[DONE]` 立即结束读取；默认关闭，保持原有行为。 / **Stream termination**: set `WB_STOP_AT_SSE_DONE=1` to stop reading at the upstream SSE `[DONE]` marker; disabled by default to retain existing behavior.
