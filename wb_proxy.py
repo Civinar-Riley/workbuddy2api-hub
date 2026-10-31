@@ -10271,6 +10271,10 @@ def runtime_settings_view():
         "keep_backups": wb_settings.keep_backups(ACCOUNTS_DIR),
         "keep_backups_max": wb_settings.MAX_KEEP_BACKUPS,
         "upstream": wb_settings.upstream_config(ACCOUNTS_DIR),
+        "max_payload_mb": wb_settings.max_payload_mb(ACCOUNTS_DIR),
+        "max_payload_bytes_effective": (wb_settings.max_payload_mb(ACCOUNTS_DIR) * 1024 * 1024
+                                        if wb_settings.max_payload_mb(ACCOUNTS_DIR) is not None
+                                        else MAX_PAYLOAD_BYTES),
         "usage": wb_settings.usage_config(ACCOUNTS_DIR),
         "prompt": wb_settings.prompt_config(ACCOUNTS_DIR),
         "window_probe": wb_settings.window_probe(ACCOUNTS_DIR),
@@ -13715,8 +13719,8 @@ def gateway_hint(status, message):
     text = str(message or "")
     lower = text.lower()
     if status == 413 and "payload too large" in lower:
-        return ("single request body exceeds the gateway cap "
-                "(WB_MAX_PAYLOAD_BYTES, default 16MB); raise it and restart wb-proxy")
+        return ("single request body exceeds the gateway cap; reduce the request or "
+                "increase the limit in panel settings (or WB_MAX_PAYLOAD_BYTES before startup)")
     if status == 503 and "concurrent chat limit" in lower:
         return "gateway is busy at its concurrency limit; retry shortly"
     if ("11133" in lower or "model_param_invalid" in lower
@@ -19670,8 +19674,10 @@ class Handler(BaseHTTPRequestHandler):
                 break
             total += size
             if total > max_bytes:
-                # Keep draining so the connection stays aligned, then refuse.
-                self._drain_chunked_body()
+                # The current chunk has not been read. Close rather than trying
+                # to parse its data as another chunk header or draining forever.
+                self.close_connection = True
+                self._body_consumed = True
                 raise BodyTooLarge(total)
             remaining = size
             while remaining > 0:
@@ -19724,11 +19730,15 @@ class Handler(BaseHTTPRequestHandler):
         return {}
     def _payload_or_error(self, allow_list=False):
         """Read the body, replying with the right error and returning None."""
+        configured_mb = wb_settings.max_payload_mb(ACCOUNTS_DIR)
+        limit = configured_mb * 1024 * 1024 if configured_mb is not None else MAX_PAYLOAD_BYTES
         try:
-            return self._read_payload(allow_list=allow_list)
+            return self._read_payload(max_bytes=limit, allow_list=allow_list)
         except BodyTooLarge as exc:
+            self.close_connection = True
+            self._body_consumed = True
             message = ("payload too large (%d bytes > %d limit)"
-                       % (exc.length, MAX_PAYLOAD_BYTES))
+                       % (exc.length, limit))
             if self._anthropic_route():
                 self._anthropic_error(413, message, "invalid_request_error")
             else:
@@ -20376,6 +20386,11 @@ class Handler(BaseHTTPRequestHandler):
             # The panel's hint promises this takes effect now: a lower value
             # has to drop the extra folders immediately, not at the next update.
             reply["pruned_backups"] = wb_update_request.apply_keep_backups(stored)
+        if "max_payload_mb" in payload:
+            try:
+                reply["max_payload_mb"] = wb_settings.set_max_payload_mb(ACCOUNTS_DIR, payload["max_payload_mb"])
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
         if "upstream" in payload:
             raw = payload.get("upstream")
             if not isinstance(raw, dict):

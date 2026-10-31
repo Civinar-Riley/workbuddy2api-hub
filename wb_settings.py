@@ -1611,6 +1611,21 @@ def set_upstream_config(accounts_dir, cfg):
     return clean
 
 
+def max_payload_mb(accounts_dir):
+    value = load(accounts_dir).get("max_payload_mb")
+    return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 256 else None
+
+
+def set_max_payload_mb(accounts_dir, value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 256:
+        raise ValueError("max_payload_mb must be an integer between 1 and 256")
+    with _lock:
+        data = load(accounts_dir)
+        data["max_payload_mb"] = value
+        save(accounts_dir, data)
+    return value
+
+
 USAGE_DEFAULTS = {
     "hour_keep_hours": 48,
     "day_keep_days": 32,
