@@ -12634,8 +12634,40 @@ def normalize_tools(obj):
                 _normalize_tool_parameters(fn)
                 item["function"] = fn
             norm.append(item)
+    # The upstream Go validator only accepts function names matching
+    # ^[A-Za-z0-9_-]{1,64}$. Entries that cannot satisfy that must be dropped
+    # rather than forwarded: a bare server-side declaration such as
+    # {"type": "web_search"} normalizes to {"type": "function"} with no
+    # "function" object at all, and the upstream then rejects the whole
+    # request by path tools[N].function.name (code 11133).
+    #
+    # Names are dropped, never rewritten: renaming would desynchronize the
+    # tool_calls names the model emits from the ones the client knows.
     if norm:
-        obj["tools"] = norm
+        valid = []
+        seen = set()
+        dropped = []
+        for item in norm:
+            fn = item.get("function")
+            if not isinstance(fn, dict):
+                dropped.append("<no function>")
+                continue
+            name = str(fn.get("name") or "").strip()
+            if not re.match(r"^[A-Za-z0-9_-]{1,64}$", name):
+                dropped.append(name or "<empty>")
+                continue
+            if name in seen:
+                dropped.append(name + " <dup>")
+                continue
+            seen.add(name)
+            valid.append(item)
+        if dropped:
+            log("normalize_tools: dropped %d unusable tool(s): %s"
+                % (len(dropped), ", ".join(dropped[:6])))
+        if valid:
+            obj["tools"] = valid
+        else:
+            obj.pop("tools", None)
     else:
         obj.pop("tools", None)
 # ---------------------------------------------------------------------------
