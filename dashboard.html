@@ -14996,7 +14996,7 @@ function renderProxySlots(){
     + PROXY_SLOTS.map((s, i) =>
         '<tr>'
         + '<td data-label="名称"><input value="' + esc(s.name || '') + '" placeholder="' + esc(s.label || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value; markSlotsDirty()" class="slot-input"></td>'
-        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value; markSlotsDirty()" class="slot-input mono"></td>'
+        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" placeholder="http://user:pass@127.0.0.1:8080" oninput="PROXY_SLOTS[' + i + '].url=this.value; markSlotsDirty()" class="slot-input mono"></td>'
         + '<td data-label="出口">' + slotExitHtml(s) + '</td>'
         + '<td style="text-align:center" data-label="启用"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
         +   ' onchange="PROXY_SLOTS[' + i + '].enabled=this.checked; markSlotsDirty()"></td>'

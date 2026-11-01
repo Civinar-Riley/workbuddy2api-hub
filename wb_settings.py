@@ -2946,6 +2946,29 @@ def set_quota_scan_models(accounts_dir, models):
 _SLOT_ID_RE = re.compile(r"^slot-(\d+)$")
 
 
+def normalize_proxy_url(url):
+    """Normalize user/vendor proxy input into standard http://[user:pass@]host:port.
+
+    Supports:
+      - host:port:user:pass or http://host:port:user:pass (vendor format)
+      - user:pass@host:port (adds missing http:// scheme)
+      - standard http://user:pass@host:port or http://host:port
+    """
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    scheme = "http"
+    if "://" in raw:
+        s, _, rest = raw.partition("://")
+        scheme = s.strip().lower() or "http"
+        raw = rest.strip()
+    parts = raw.split(":")
+    if len(parts) == 4 and parts[1].isdigit():
+        host, port, user, password = parts[0], parts[1], parts[2], parts[3]
+        return "%s://%s:%s@%s:%s" % (scheme, user, password, host, port)
+    return "%s://%s" % (scheme, raw)
+
+
 def _clean_slot_entry(entry, fallback_id=None):
     """Normalize one stored slot; returns None when unusable.
 
@@ -2956,7 +2979,7 @@ def _clean_slot_entry(entry, fallback_id=None):
     """
     if not isinstance(entry, dict):
         return None
-    url = str(entry.get("url") or "").strip()
+    url = normalize_proxy_url(entry.get("url"))
     if not url:
         return None
     slot_id = str(entry.get("id") or "").strip()

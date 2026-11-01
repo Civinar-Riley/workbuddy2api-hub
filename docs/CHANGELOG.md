@@ -1,3 +1,14 @@
+## v1.10.1
+
+- **429 响应附带绝对恢复时刻**（#720）：429 响应带上 `X-RateLimit-Reset`（epoch 秒）与 `X-RateLimit-Reset-At`（ISO-8601 UTC），正文附带 `reset_at` 字段；优先提取上游 6004 正文的真实墙钟，未携带时按网关统一冷却窗口换算，解决多进程/分布式客户端相对时间漂移。
+- **工具归一化过滤非法 function.name**（#726）：`normalize_tools` 自动过滤不符合 `^[A-Za-z0-9_-]{1,64}$` 命名规范的工具，丢弃无 function 载荷的服务端工具声明（如 `web_search`），修复上游 400 / 11133（`tools[N].function.name` 校验失败）。
+- **CodeArts 会话上限与排队修复**（#723）：CodeArts 请求补充发送 `x-ot-session-id`、`user-session-id`（账号级稳定散列）与每请求随机 `x-ot-trace-id`，解决华为云将连续请求误判为并发新建会话导致触碰 3 会话上限、出现 `TM.00001041` 报错与 90 秒排队阻塞的问题。
+- **账号代理槽支持账号密码认证与格式自动规整**（#648）：代理槽完整支持带认证的 `http://user:password@host:port` 代理（出站连接池与代理隧道自动注入 `Proxy-Authorization: Basic`），并对服务商常见的 `host:port:user:pass` 格式与缺失 scheme 的代理自动清洗归整。
+
+验证：
+- 本地完整测试矩阵：246 个套件全部通过（183 Python + 63 JS，`246 passed, 0 failed, 0 skipped`）。
+- 发布工程套件 `_test_release_engineering.py` 与发布资产套件 `_test_release_assets.py` 全部通过。
+
 ## v1.10.0
 
 - **CodeArts 原生第三出口（单进程）**（#712 / #715）：新增 `codearts` 原生出口，看板可在「国际版 / 国内版 / CodeArts」三区域间自由切换；`/v1/models`、`/v1/chat/completions`、`/v1/responses` 与 Anthropic Messages 均直连华为云 CodeArts。进程内完整实现 OAuth2 PKCE + DPoP、token 自动续期轮转、账号池并发与冷却管理、内置与限时福利模型发现、聊天 SSE 协议转换与每日签到/积分查询，不再需要单独运行 codearts2api 服务；华为凭据不出本机，默认关闭。
