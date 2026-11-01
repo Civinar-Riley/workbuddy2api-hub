@@ -273,6 +273,38 @@ try:
     state.chat_error = None
     state.chat_error_remaining = -1
 
+    print("== session header ==")
+
+    def _chat_headers_of(session_key):
+        body = C.build_chat_body({"model": "GLM-5.2",
+                                  "messages": [{"role": "user", "content": "hi"}],
+                                  "stream": False}, session_key)
+        stream, _acct, _model = C.open_chat(C.load_config(ACCOUNTS), body, session_key)
+        b"".join(stream)
+        stream.close()
+        for req in reversed(state.requests):
+            if req["path"].endswith("/chat/completions"):
+                return req["headers"]
+        return {}
+
+    ot_first = _chat_headers_of("sess-ot-1")
+    ot_second = _chat_headers_of("sess-ot-2")
+    ot_id = ot_first.get("x-ot-session-id") or ""
+    check("session header sent", bool(ot_id), ot_first)
+    check("session header is 32 hex",
+          len(ot_id) == 32 and all(c in "0123456789abcdef" for c in ot_id), ot_id)
+    check("session header stable per account",
+          ot_id == (ot_second.get("x-ot-session-id") or ""),
+          (ot_id, ot_second.get("x-ot-session-id")))
+    check("user-session-id mirrors it",
+          ot_first.get("user-session-id") == ot_id, ot_first.get("user-session-id"))
+    check("trace id differs per request",
+          ot_first.get("x-ot-trace-id") != ot_second.get("x-ot-trace-id"),
+          (ot_first.get("x-ot-trace-id"), ot_second.get("x-ot-trace-id")))
+    check("chat id still per conversation",
+          ot_first.get("chat-id") != ot_second.get("chat-id"),
+          (ot_first.get("chat-id"), ot_second.get("chat-id")))
+
     print("== text snapshot stream ==")
     state.chat_mode = "text"
     body = C.build_chat_body({"model": "GLM-5.2",
