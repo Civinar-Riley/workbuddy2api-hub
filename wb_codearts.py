@@ -1267,6 +1267,19 @@ def _derive_chat_id(session_key, messages):
     return secrets.token_hex(16)
 
 
+def _ot_session_id(acct):
+    """账号级稳定的会话 id：同一账号永远同一个，重启 / 续期都不变。"""
+    import hashlib
+    raw = "codearts-ot-session:" + str(getattr(acct, "uid", "") or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _ot_session_enabled():
+    """默认发送会话头；WB_CODEARTS_OT_SESSION=0 时退回旧行为（便于对照）。"""
+    value = os.environ.get("WB_CODEARTS_OT_SESSION", "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
 def _flatten_content(content):
     """把 OpenAI 内容分片压成纯文本；CodeArts 只消费 text 分片。"""
     if content is None:
@@ -1593,6 +1606,14 @@ def _client_chat(acct, body, session_key):
     # 与 Go 版一致：Chat-Id / Session-Id 在签名之后才加，不进入 SignedHeaders。
     headers["Chat-Id"] = chat_id
     headers["Session-Id"] = session_id
+    if _ot_session_enabled():
+        # 网关按 x-ot-session-id 统计每账号的并发会话：不发这个头时每个请求都是
+        # 一个新会话，会话结束后还占位约 60 秒，3 个名额很快被自己的历史请求占满。
+        # Chat-Id / Session-Id 不参与这个计数。三个头都在签名之后追加，不进 SignedHeaders。
+        ot_session = _ot_session_id(acct)
+        headers["x-ot-session-id"] = ot_session
+        headers["user-session-id"] = ot_session
+        headers["x-ot-trace-id"] = secrets.token_hex(16)
     timeout = float(acct.pool.config.get("stream_timeout_seconds")
                     or DEFAULTS["stream_timeout_seconds"])
     last_error = None
