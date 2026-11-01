@@ -13749,10 +13749,19 @@ class RateLimited(Exception):
     """Upstream throttled this model (429 / code 6004). Distinct from a dead
     pool: the credential is fine, only the model is cooling down for a while."""
 
-    def __init__(self, http_error=None, detail="", wait=60, message=""):
+    def __init__(self, http_error=None, detail="", wait=60, message="",
+                 reset_at=None):
         self.http_error = http_error
         self.detail = detail or ""
         self.wait = max(1, int(wait or 60))
+        # 绝对重置时刻（epoch 秒）。wait 是「现在起还要等多久」，reset_at 是
+        # 「什么时候恢复」——同一个窗口的两种说法，但只有后者在客户端排队、
+        # 重试、或者把任务转给别的进程之后仍然成立。上游只在 6004 里给这个
+        # 时刻；其余 429 由网关按自己算出的冷却窗口补上。
+        try:
+            self.reset_at = float(reset_at) if reset_at else None
+        except (TypeError, ValueError):
+            self.reset_at = None
         # 429s answered without an upstream call (the pool is parked by the
         # daily token guard) carry their own text instead of the upstream
         # wording.
@@ -14486,6 +14495,111 @@ def parse_rate_limit_reset(detail):
         return None
 
 
+def rate_limit_reset_at(exc):
+    """这次 429 的绝对恢复时刻（epoch 秒），拿不到就回 None。
+
+    优先用上游正文里写的墙钟（只有 6004 会写），否则由调用方按本地冷却窗口
+    算出并塞进 `reset_at`。两者都拿不到时不编造——客户端退回只看 Retry-After。
+    """
+    # 两个来源都过同一道筛子（见 _usable_reset_epoch）：过去的值、越界的值、
+    # 非数字一律丢掉。裸 int() 会把 now+0.4 截成当前这一秒，客户端拿到一个
+    # 「已经过去」的时刻照着重试，等于没等。
+    epoch = _usable_reset_epoch(getattr(exc, "reset_at", None))
+    if epoch is not None:
+        return epoch
+    return _usable_reset_epoch(
+        parse_rate_limit_reset(getattr(exc, "detail", "") or ""))
+
+
+#: 愿意对外宣称的最远恢复时刻（2100-01-01）。超过它的 epoch 不是「还有很久」，
+#: 而是正文里的时间戳本身可疑（年份写错、时区串了、陈旧响应被重放），对外发出去
+#: 只会让客户端睡到天荒地老。
+RATE_LIMIT_RESET_MAX = 4102444800
+
+
+def _usable_reset_epoch(reset_at, now=None):
+    """把一个候选恢复时刻收敛成可以对外宣称的 epoch，不可用就回 None。
+
+    三道筛子，缺一条都会让客户端拿到一个照做就错的时刻：
+
+      * 不是数字（`"abc"`、`None`）—— 丢掉；
+      * 已经过去 —— 丢掉。上游时钟慢、或者一条陈旧响应被重放时，正文里的墙钟
+        会落在过去；此时「再等 60 秒」和「304 天前就恢复了」同时出现在一个响应
+        里，客户端只会选一个信，而两个都不对；
+      * 远得离谱（超过 2100 年）—— 丢掉。这个范围也正好挡掉 `time.gmtime()`
+        的越界：Windows 上越界抛的是 `OSError`（errno 22），而 `strftime` 的
+        调用点如果漏捕，整条 429 响应会连一个字节都发不出去——这与
+        `parse_rate_limit_reset` 自己「坏正文不许打断请求路径」的契约冲突。
+    """
+    if not reset_at:
+        return None
+    try:
+        value = float(reset_at)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    # 写成一条完整的谓词，而不是 `value <= 0 or value > MAX`：NaN 与任何数
+    # 比较都是 False，两条各写各的时候 NaN 会溜过去，落到 int(nan) 抛
+    # ValueError，把一条本来正常的 429 变成没有响应。
+    if not (0 < value <= RATE_LIMIT_RESET_MAX):
+        return None
+    if now is None:
+        now = time.time()
+    # 向上取整：`int()` 会把 `now + 60` 截掉小数部分，对外宣称的时刻因此可能
+    # 落在 now 之前最多一秒。
+    epoch = int(value)
+    if epoch < value:
+        epoch += 1
+    if epoch <= int(now):
+        # 已经过去（或就是这一秒）——丢掉，交给调用方回落到它自己的冷却窗口。
+        # 不在这里「补到下一秒」：那等于凭空造一个恢复时刻，而本模块的立场是
+        # 宁可不说也不说错的。
+        return None
+    return epoch
+
+
+def _iso_utc(epoch):
+    """epoch → ISO-8601 UTC。调用方保证 epoch 已经被 _usable_reset_epoch 收过。
+
+    429 天然是突发的（限流本身就是突发），同一次响应里正文和响应头各要一份
+    同一个时间戳，所以格式化只做一次（仓库里 build_usage 对 strftime 也有
+    同样的缓存处理）。
+    """
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def rate_limit_headers(reset_at):
+    """429 上除了 Retry-After 之外还要带的头。
+
+    `Retry-After` 只回答「等多久」，而下游真正需要的是「等到什么时候」：
+    多 worker / 多进程的客户端各自记一份相对时间，各自漂移；任务被转交给
+    别的进程后相对时间直接失效。所以再给两个绝对量：
+
+      * `X-RateLimit-Reset`    —— epoch 秒（GitHub 等 API 的通行口径；OpenAI
+        自家那两个头是 "1s" 形式的时长字符串，别与它混用）
+      * `X-RateLimit-Reset-At` —— ISO-8601 UTC，人眼和日志都能直接读
+
+    拿不到可用时刻时一个都不发，绝不用「现在 + 猜测」凑一个出来：一个错的
+    恢复时刻比没有更糟，客户端会照着它睡过头或提前撞墙。
+    """
+    epoch = _usable_reset_epoch(reset_at)
+    if epoch is None:
+        return []
+    return [("X-RateLimit-Reset", str(epoch)),
+            ("X-RateLimit-Reset-At", _iso_utc(epoch))]
+
+
+def rate_limit_reset_note(reset_at):
+    """给 429 正文补一句「什么时候恢复」，没有可用时刻时回空串。
+
+    有些客户端只把 message 打给人看、完全不解析响应头（curl、日志、各类
+    脚本）。头里有的信息，正文里也写一遍，读日志的人就不必再去翻响应头。
+    """
+    epoch = _usable_reset_epoch(reset_at)
+    if epoch is None:
+        return ""
+    return " (resets at %s)" % _iso_utc(epoch)
+
+
 def upstream_timeouts():
     """(header, idle) seconds for the chat upstream socket.
 
@@ -14619,7 +14733,8 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
     if hold > 0:
         raise RateLimited(None, "upstream account restriction in effect",
                           wait=int(hold) + 1,
-                          message=restriction_hold_message(realm, hold))
+                          message=restriction_hold_message(realm, hold),
+                          reset_at=time.time() + int(hold) + 1)
     # 复用调用方已建好的 body：/v1/chat/completions 在进这里之前已经 build 过
     # 一次（那次的产物只用于一行日志和 prompt_fingerprint），此前这里会为同一
     # 个 payload 再建一遍，大请求实测白付 ~13.6ms/请求。403 降级重试时仍按
@@ -15210,8 +15325,14 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             exc.account_uid = last_uid
             raise exc
         if last_429 is not None:
-            exc = RateLimited(last_429, last_429_detail,
-                              wait=retry_after_seconds(model, realm))
+            # `retry_after_seconds` 是全池**最短**的冷却窗口——客户端真正能再次
+            # 得到服务的时刻；`last_429_detail` 却只是**最后一个**失败账号的
+            # 正文。两者来自不同的窗口：别的账号 60 秒后就绪、最后一个撞墙的
+            # 账号回了个 1 小时后的墙钟，照抄墙钟就会让客户端对着「其实马上
+            # 能用」的池子睡上一小时。这里只以池窗口为准。
+            wait = retry_after_seconds(model, realm)
+            exc = RateLimited(last_429, last_429_detail, wait=wait,
+                              reset_at=time.time() + wait)
             exc.account_uid = last_uid
             raise exc
         if last_403_detail:
@@ -15226,28 +15347,31 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
         reason = ("every usable account in realm '%s' is cooling the upstream %s "
                   "window; the pool resumes in %ds" % (realm, model, wait))
         raise RateLimited(None, "usage exceeds frequency limit", wait=wait,
-                          message=reason)
+                          message=reason, reset_at=time.time() + wait)
     enabled = [a for a in POOL.accounts
                if a.realm == realm and a.enabled and a.access_token] if POOL else []
     if enabled and all(a.daily_limit_blocked() for a in enabled):
         reason = ("every usable account reached today's token limit (%s per "
                   "account); the pool resumes after local midnight"
                   % wb_settings.daily_token_limit(ACCOUNTS_DIR, realm))
-        raise RateLimited(None, reason,
-                          wait=seconds_until_local_midnight(), message=reason)
+        midnight = seconds_until_local_midnight()
+        raise RateLimited(None, reason, wait=midnight, message=reason,
+                          reset_at=time.time() + midnight)
     if enabled and model and all(a.credit_limit_blocked(model) for a in enabled):
         reason = ("every usable account reached today's credit limit (%s per "
                   "account); paid models resume after local midnight, free "
                   "models keep working"
                   % wb_settings.daily_credit_limit(ACCOUNTS_DIR, realm))
-        raise RateLimited(None, reason,
-                          wait=seconds_until_local_midnight(), message=reason)
+        midnight = seconds_until_local_midnight()
+        raise RateLimited(None, reason, wait=midnight, message=reason,
+                          reset_at=time.time() + midnight)
     if enabled and model and all(a.model_token_limit_blocked(model) for a in enabled):
         reason = ("every usable account reached today's token limit for %s "
                   "(%s per account); the model resumes after local midnight"
                   % (model, wb_settings.model_daily_token_limit(ACCOUNTS_DIR, realm)))
-        raise RateLimited(None, reason,
-                          wait=seconds_until_local_midnight(), message=reason)
+        midnight = seconds_until_local_midnight()
+        raise RateLimited(None, reason, wait=midnight, message=reason,
+                          reset_at=time.time() + midnight)
     if busy and last_error is None:
         # 名额全满：账号本身完全健康，只是每个都在跑别的请求。必须报得比
         # 「全部停用/冷却/过期」清楚——否则排查的人会去看账号状态，而真正
@@ -15256,7 +15380,8 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
         reason = ("every usable account is already serving %d concurrent "
                   "request(s) (account_max_concurrent=%d); retry shortly or "
                   "raise the cap" % (limit, limit))
-        raise RateLimited(None, reason, wait=1, message=reason)
+        raise RateLimited(None, reason, wait=1, message=reason,
+                          reset_at=time.time() + 1)
     candidates = [a for a in enabled
                   if allowed_accounts is None or a.uid in allowed_accounts]
     if (model and candidates
@@ -15271,7 +15396,8 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                   "to reset (%d account(s), earliest reset in %ds); the pool is "
                   "idle, not broken - retry after the reset"
                   % (model, len(candidates), wait))
-        raise RateLimited(None, detail=reason, wait=wait, message=reason)
+        raise RateLimited(None, detail=reason, wait=wait, message=reason,
+                          reset_at=time.time() + wait)
     scope = ""
     if allowed_accounts:
         scope = ("; this API key may use %d account(s)" % len(allowed_accounts))
@@ -18382,6 +18508,10 @@ class Handler(BaseHTTPRequestHandler):
     # 而不是参数，是因为测试里大量 Handler 桩只覆写了 _json(code, obj) 这两个
     # 位置参数——加参数会让它们全部报错，而属性默认 None 对它们完全无感。
     _json_etag = None
+    # 本次 _json() 响应要额外带的头（429 的恢复时刻，见 rate_limit_headers）。
+    # 与 _json_etag 同一个理由放成实例属性：测试里三十来个 Handler 桩只覆写
+    # 了 _json(code, obj)，加参数会让它们全部报错，而属性对它们完全无感。
+    _json_extra_headers = None
     # The stdlib default caps the request line at 64KB and answers an opaque
     # bare "414 Request-URI Too Long" for anything longer. Raise it and reply in
     # the normal JSON error shape so an over-long URL is diagnosable.
@@ -18396,6 +18526,8 @@ class Handler(BaseHTTPRequestHandler):
         # 校验符同理：留着上一轮的 tag，下一次 _json() 就会把别的请求的 ETag
         # 发出去（keep-alive 上同一个 Handler 实例服务一整条连接）。
         self._json_etag = None
+        # 同一理由：上一轮 429 的恢复时刻不能跟着 keep-alive 漏到下一个响应上。
+        self._json_extra_headers = None
         # Body-tracking state must also start clean for every request, otherwise
         # a later drain would skip a body that has not been read yet.
         self._body_consumed = False
@@ -18469,6 +18601,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        # 429 需要把恢复时刻带出去（见 rate_limit_headers）；其余响应一个
+        # 头都不多发，保持与从前逐字节一致。
+        for name, value in (self._json_extra_headers or ()):
+            self.send_header(name, value)
         # 只有 _json_cached() 覆盖的只读接口才有校验符；其余调用点保持原样，
         # 一个头都不多发。
         etag = self._json_etag
@@ -18682,7 +18818,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except Exception:
             pass
-    def _error(self, code, message, err_type="server_error"):
+    def _error(self, code, message, err_type="server_error", reset_at=None):
         # Every early rejection funnels through here, so draining the body in
         # one place covers all of them. Unblock any client still waiting on
         # "Expect: 100-continue" first, otherwise it never sends the body and
@@ -18693,12 +18829,34 @@ class Handler(BaseHTTPRequestHandler):
         hint = gateway_hint(code, message)
         if hint:
             error["gateway_hint"] = hint
-        self._json(code, {"error": error})
-    def _anthropic_error(self, code, message, err_type=None):
+        epoch = _usable_reset_epoch(reset_at) if code == 429 else None
+        if epoch is None and code == 429:
+            # 透传路径（CodeArts、上游裸 429）手头只有正文：正文里若写了墙钟
+            # （6004 措辞、UTC±N 搭配），照样能给客户端一个恢复时刻。
+            epoch = _usable_reset_epoch(parse_rate_limit_reset(message or ""))
+        if epoch is not None:
+            error["reset_at"] = epoch
+            error["message"] = message + rate_limit_reset_note(epoch)
+            self._json_extra_headers = rate_limit_headers(epoch)
+        try:
+            self._json(code, {"error": error})
+        finally:
+            # 与 _json_etag 同一口径：绝不能把这一轮的头发给下一个响应。
+            self._json_extra_headers = None
+    def _anthropic_error(self, code, message, err_type=None, reset_at=None):
         """Reply with the Anthropic JSON error envelope, not OpenAI's."""
         self._handle_expect_continue()
         self._discard_body()
-        return self._json(code, anthropic_error_obj(code, message, err_type))
+        epoch = _usable_reset_epoch(reset_at) if code == 429 else None
+        if epoch is None and code == 429:
+            epoch = _usable_reset_epoch(parse_rate_limit_reset(message or ""))
+        if epoch is not None:
+            message = message + rate_limit_reset_note(epoch)
+            self._json_extra_headers = rate_limit_headers(epoch)
+        try:
+            return self._json(code, anthropic_error_obj(code, message, err_type))
+        finally:
+            self._json_extra_headers = None
     def _rate_limited(self, exc):
         """429 with Retry-After, so clients back off instead of hammering.
 
@@ -18717,22 +18875,27 @@ class Handler(BaseHTTPRequestHandler):
         detail = ""
         if exc.detail and not custom:
             detail = " - " + exc.detail[:200]
+        reset_at = rate_limit_reset_at(exc)
         # 429 can be answered before the body is read (the model cooldown is
         # checked on the way in), so drain it exactly like _error does.
         self._handle_expect_continue()
         self._discard_body()
-        body = json.dumps({
-            "error": {
-                "message": text + detail,
-                "type": "rate_limit_error",
-                "code": 429,
-                "retry_after": wait,
-            }
-        }, ensure_ascii=False).encode("utf-8")
+        error = {
+            "message": text + detail + rate_limit_reset_note(reset_at),
+            "type": "rate_limit_error",
+            "code": 429,
+            "retry_after": wait,
+        }
+        if reset_at:
+            error["reset_at"] = int(reset_at)
+        body = json.dumps({"error": error},
+                          ensure_ascii=False).encode("utf-8")
         self.send_response(429)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Retry-After", str(wait))
+        for name, value in rate_limit_headers(reset_at):
+            self.send_header(name, value)
         if cors_origin_allowed(self.path):
             self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
@@ -18744,6 +18907,8 @@ class Handler(BaseHTTPRequestHandler):
                 "upstream rate limit reached for this model; retry in %ds" % wait)
         if getattr(exc, "detail", "") and not getattr(exc, "message", ""):
             text += " - " + str(exc.detail)[:200]
+        reset_at = rate_limit_reset_at(exc)
+        text += rate_limit_reset_note(reset_at)
         self._handle_expect_continue()
         self._discard_body()
         body = json.dumps(anthropic_error_obj(429, text, "rate_limit_error"),
@@ -18752,6 +18917,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Retry-After", str(wait))
+        for name, value in rate_limit_headers(reset_at):
+            self.send_header(name, value)
         if cors_origin_allowed(self.path):
             self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
@@ -21012,7 +21179,9 @@ class Handler(BaseHTTPRequestHandler):
                 _login_attempts[client_ip] = attempts
                 if len(attempts) >= 5:
                     wait_sec = int(60 - (now - attempts[0]))
-                    return self._error(429, f"too many login attempts, please wait {max(1, wait_sec)}s", "rate_limit_error")
+                    return self._error(
+                        429, f"too many login attempts, please wait {max(1, wait_sec)}s",
+                        "rate_limit_error", reset_at=attempts[0] + 60)
             password = str(payload.get("password") or "")
             try:
                 valid = wb_settings.verify_panel_password(ACCOUNTS_DIR, password)
@@ -22857,9 +23026,14 @@ class Handler(BaseHTTPRequestHandler):
                        % (key_name, max_key_conc))
             record_error(payload.get("model") or "unknown", 429, message,
                          stream=payload.get("stream"), key=self._key_id())
+            # 什么时候能好说不了——取决于在飞的那个请求还要跑多久；但「过一小
+            # 会儿再来」是确定的。给一个短窗口，别让客户端拿默认退避硬等。
+            reset_at = time.time() + 2
             if is_messages_route:
-                return self._anthropic_error(429, message, "rate_limit_error")
-            return self._error(429, message, "rate_limit_error")
+                return self._anthropic_error(429, message, "rate_limit_error",
+                                             reset_at=reset_at)
+            return self._error(429, message, "rate_limit_error",
+                               reset_at=reset_at)
 
         try:
             if is_messages_route:
