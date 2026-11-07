@@ -217,7 +217,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 274 个套件：207 个 Python + 67 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 275 个套件：208 个 Python + 67 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -227,6 +227,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ### Unreleased
 
+- **请求到达即记日志（`chat head`）**：聊天日志行要等请求体收完才写，上传慢的请求在那段窗口里一行痕迹都没有，看起来像「对话卡住」，也分不清「上传慢」与「请求没到本进程」。现在 `do_POST` 在模型路由的请求头到达时先记一条 `chat head`（带 `content_length` 与 key），配合 `body_wait` 能直接区分两者。只覆盖对话真正使用的路由，面板轮询不刷日志。
 - **`responses:` 日志同时打客户端与实际生效的推理强度**：原来只打请求体里的 `effort`，客户端不填时恒为 `None`，读起来像「没开思考」，实际按模型默认档（如 `high`）在跑。现在同时打 `effort=`（客户端）与 `upstream_effort=`（实际写进上游请求的值），两者用与构造请求体同一份解析逻辑。
 - **自绘下拉面板不再被祖先裁剪、移动端出口/权重格不再互相挤压**：`.cs-panel` 从 `position:absolute` 改为 `position:fixed`，打开 / 滚动 / 缩放时把触发器坐标与最小宽度写进内联样式，向上展开的下拉不会再被账号卡区块的 `overflow-y:auto` 裁掉首行。出口 / 权重两格在移动端改用 `flex:1 1 0` 占剩余宽度，长节点名不再溢出盖住「权重：」标签。
 - **400 / 未处理 4xx 不再泄漏账号并发名额**：上游 400（如 11-128 渠道校验）原样透传时直接 `raise`，跳过了重试循环后的统一归还，账号在 `account_max_concurrent` 计数里永久 +1。上限为 1 时一个漏掉的名额就让它永远「已在服务 1 个请求」——面板健康、账号测试也绿，但派发再也不选它，只有重启进程才恢复。其它未单独处理的 4xx（如打错路径的 404）走同一个 `raise`，问题相同。现在两处 `raise` 之前都先归还名额。
