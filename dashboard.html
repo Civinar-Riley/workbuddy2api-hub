@@ -835,6 +835,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   /* 账号名那行要允许换行，第二行容器再用 flex-basis:100% 强制独占一行；
      只给 width:100% 不够——它是 nowrap flex 的子项，仍会与昵称同排。 */
   table.account-cards td:nth-child(2) .acct-name-row{flex-wrap:wrap}
+  /* 这一格的直接子项默认 min-width:auto（= 内容宽）：长昵称会把整格撑到卡片
+     之外——390px 视口实测单元格内容宽 271px、名字行 434px，右侧被裁掉、也没有
+     省略号。钉住 min-width:0 + max-width:100% 后，昵称才真正按格宽省略。 */
+  table.account-cards td:nth-child(2) > *{min-width:0;max-width:100%}
   .acct-mobile-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
     flex-basis:100%;width:100%;margin-top:4px}
   .acct-mobile-meta .badge{margin-left:0!important}
@@ -16975,6 +16979,16 @@ function renderDeletedKeyRows(){
     + '</div></details>';
 }
 
+/* 出口徽章的单一来源：Key 卡片与编辑态提示都走这里。以前卡片自己写三目，
+   只认 intl / cn，codearts 落进兜底分支被画成「跟随面板切换」（#801）。 */
+function keyRealmBadge(realm, px){
+  const size = 'font-size:' + (px || 11) + 'px';
+  if(realm === 'intl') return '<span class="realm-badge-intl" style="' + size + '">固定国际版出口</span>';
+  if(realm === 'cn') return '<span class="realm-badge-cn" style="' + size + '">固定国内版出口</span>';
+  if(realm === 'codearts') return '<span class="realm-badge-codearts" style="' + size + '">固定 CodeArts 出口</span>';
+  return '<span class="badge s" style="' + size + '">跟随面板切换</span>';
+}
+
 function renderKeyRows(){
   renderDeletedKeyRows();
   renderApiKeyExamples();
@@ -17066,11 +17080,11 @@ function renderKeyRows(){
       ? '<span class="badge ok" style="font-size:11px;font-weight:600;padding:2px 10px">已启用</span>'
       : '<span class="badge off" style="font-size:11px;font-weight:600;padding:2px 10px">已禁用</span>';
 
-    const realmBadge = (row.realm === 'intl')
-      ? '<span class="realm-badge-intl" style="font-size:11px">固定国际版出口</span>'
-      : (row.realm === 'cn')
-      ? '<span class="realm-badge-cn" style="font-size:11px">固定国内版出口</span>'
-      : '<span class="badge s" style="font-size:11px">跟随面板切换</span>';
+    // 出口徽章要覆盖所有可绑定的出口：codearts 落进最后的兜底分支时会被画成
+    // 「跟随面板切换」，与实际绑定（settings.json 里 realm:"codearts"）不一致，
+    // 看起来像没绑上（#801）。统一走 keyRealmBadge()，与已删除 Key 列表的口径
+    // 一致，并复用已有的 .realm-badge-codearts 样式。
+    const realmBadge = keyRealmBadge(row.realm);
 
     const concBadge = (row.concurrency_limit && row.concurrency_limit > 0)
       ? '<span class="badge s mini" style="font-size:11px">并发上限 ' + row.concurrency_limit + '</span>'
@@ -17172,29 +17186,52 @@ function toggleKeyPicker(kind, i){
   const el = document.getElementById(id);
   if(el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
-async function loadKeyModelCatalog(){
-  if(Array.isArray(window.KEY_MODEL_CATALOG) && window.KEY_MODEL_CATALOG.length){
-    return window.KEY_MODEL_CATALOG;
-  }
+/* 模型准入的候选清单（#802）。
+ *
+ * 目录按出口分区：`/v1/models?realm=codearts` 的 13 个模型与 intl / cn 的目录
+ * 完全不交集，所以「只遍历 intl / cn」会让绑定 CodeArts 出口的 Key 根本选不到
+ * 自己的模型。口径：
+ *   - Key 绑定了出口 → 只取该出口的目录（不混入用不上的模型，与设置页
+ *     「按账号自己的区域取模型清单」一致）；那一次调用失败才退回全量清单，
+ *     picker 不会因此空白。
+ *   - 未绑定出口（跟随面板切换）→ 面板会跟着切区域，所以取全量：不带 realm 的
+ *     清单 + intl / cn + （CodeArts 已启用时）codearts。
+ * 结果按分区分别缓存：以前只有一个全局缓存，先打开的 Key 决定了后面所有 Key
+ * 的清单。
+ */
+async function loadKeyModelCatalog(row){
+  const bound = String((row && row.realm) || '');
+  const cacheKey = bound || 'all';
+  const cache = (window.KEY_MODEL_CATALOG_CACHE = window.KEY_MODEL_CATALOG_CACHE || {});
+  if(Array.isArray(cache[cacheKey]) && cache[cacheKey].length) return cache[cacheKey];
   const out = [];
   const seen = new Set();
-  const add = function(list){
+  const add = function(list, realm){
     for(const m of (list || [])){
       const id = String((m && m.id) || '');
-      if(id && !seen.has(id)){ seen.add(id); out.push(m); }
+      if(id && !seen.has(id)){
+        seen.add(id);
+        out.push(realm ? Object.assign({}, m, {_realm: realm}) : m);
+      }
     }
   };
-  // The unscoped listing is the widest catalogue the gateway advertises; the
-  // per-realm calls fill in anything it omits.
-  try { const r = await getJSON('/v1/models'); add(r.data); } catch(e) { /* keep going */ }
-  for(const realm of ['intl', 'cn']){
+  const codeartsOn = bound === 'codearts'
+    || (window.REALM_OPTIONS || []).indexOf('codearts') >= 0;
+  const realms = bound ? [bound] : ['intl', 'cn'];
+  if(!bound && codeartsOn) realms.push('codearts');
+  // 分区目录是主口径；单个分区失败只丢它自己，不把整个 picker 弄空。
+  for(const realm of realms){
     try {
       const r = await getJSON('/v1/models?realm=' + realm);
-      add(r.data);
+      add(r.data, realm);
     } catch(e) { /* one realm failing must not blank the picker */ }
   }
+  // 兜底：分区全挂时用不带 realm 的清单（面板当前区域）顶上。
+  if(!out.length){
+    try { const r = await getJSON('/v1/models'); add(r.data); } catch(e) { /* keep going */ }
+  }
   if(!out.length && Array.isArray(window.MODELS_DATA)) out.push(...window.MODELS_DATA);
-  window.KEY_MODEL_CATALOG = out;
+  if(out.length) cache[cacheKey] = out;
   return out;
 }
 async function renderKeyPickers(i){
@@ -17204,7 +17241,7 @@ async function renderKeyPickers(i){
   if(modelList){
     modelList.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:4px">正在加载模型清单…</div>';
     let models = [];
-    try { models = await loadKeyModelCatalog(); } catch(e) { models = []; }
+    try { models = await loadKeyModelCatalog(row); } catch(e) { models = []; }
     // The all-realm listing is the primary source; fall back to the models tab
     // cache so the picker is never blank just because that one call failed.
     if(!(models || []).length && Array.isArray(window.MODELS_DATA)){
@@ -17213,11 +17250,19 @@ async function renderKeyPickers(i){
     if(!(models || []).length){
       modelList.innerHTML = '<div style="font-size:12px;color:var(--warn);padding:4px">模型清单为空或加载失败，<a href="javascript:void(0)" onclick="renderKeyPickers(' + i + ')">重试</a></div>';
     } else {
-      modelList.innerHTML = models.map(m => {
+      // 绑定了出口的 Key 只列该出口的目录：用已有的出口徽章说明范围，不新增
+      // 需要翻译的句子（词典按整句匹配，新句在英文 / 正體界面会回落中文）。
+      const boundHint = row.realm
+        ? '<div style="padding:2px 4px 6px">' + keyRealmBadge(row.realm, 10) + '</div>'
+        : '';
+      modelList.innerHTML = boundHint + models.map(m => {
         const id = String((m && m.id) || '');
         if(!id) return '';
         const checked = keyModelExact(row).indexOf(id) >= 0 ? ' checked' : '';
-        return '<label class="key-pick-row" data-search="' + esc(id.toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(id) + '"' + checked + ' onchange="toggleKeyModel(' + i + ',this)">' + esc(id) + '</label>';
+        const tag = (m && m._realm === 'codearts')
+          ? '<span class="realm-badge-codearts" style="font-size:10px;padding:0 5px;margin-left:4px">CodeArts</span>'
+          : '';
+        return '<label class="key-pick-row" data-search="' + esc(id.toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(id) + '"' + checked + ' onchange="toggleKeyModel(' + i + ',this)">' + esc(id) + tag + '</label>';
       }).join('');
     }
     updateKeyModelSummary(i);
