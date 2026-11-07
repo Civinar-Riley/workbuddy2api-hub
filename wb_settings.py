@@ -1903,21 +1903,6 @@ def set_enable_anthropic_messages(accounts_dir, enabled):
     return enabled
 
 
-def free_model_credit_fallback(accounts_dir):
-    """Whether exhausted free models (deepseek-v4.1-flash) can fall back to credit siblings."""
-    return load(accounts_dir).get("free_model_credit_fallback") is True
-
-
-def set_free_model_credit_fallback(accounts_dir, enabled):
-    """Persist the free model credit fallback toggle. Returns the stored boolean."""
-    enabled = bool(enabled)
-    with _lock:
-        data = load(accounts_dir)
-        data["free_model_credit_fallback"] = enabled
-        save(accounts_dir, data)
-    return enabled
-
-
 def filter_models_by_key(accounts_dir):
     """Whether /v1/models hides models the requesting key may not use.
 

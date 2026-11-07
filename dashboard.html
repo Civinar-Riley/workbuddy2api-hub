@@ -6620,27 +6620,6 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         </div>
       </section>
 
-      <section data-cat="models">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <h2 style="margin:0">免费额度耗尽回退积分版 <em id="setCreditFallbackState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              国际版 deepseek-v4.1-flash 免费额度在所有账号均耗尽（6004 撞线）后，自动回退到 deepseek-v4.1-flash-sg 付费通道。默认关闭。
-            </div>
-            <div style="font-size:12px;color:var(--warn);margin-top:4px">
-              注意：回退后将消耗账户中的真实积分（x0.03 倍率），请确认知晓积分成本后再开启。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
-              <input id="setCreditFallback" type="checkbox" style="width:16px;height:16px">
-              启用积分回退
-            </label>
-            <button onclick="saveCreditFallback(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
       <section data-cat="network">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
@@ -14837,7 +14816,6 @@ async function loadSettings(showToast){
       window.CURRENT_SETTINGS = data;
     
     const autoSwitch = data.auto_switch_product === true;
-      const creditFallback = data.free_model_credit_fallback === true;
       const anthropicMsg = data.enable_anthropic_messages === true;
       const filterModelsByKey = data.filter_models_by_key === true;
       const reasoningEffortMap = data.reasoning_effort_map !== false;
@@ -14869,13 +14847,6 @@ async function loadSettings(showToast){
       if(anthropicMsgState){
         anthropicMsgState.textContent = anthropicMsg ? '(已启用)' : '(未启用)';
         anthropicMsgState.style.color = anthropicMsg ? 'var(--accent2)' : 'var(--dim)';
-      }
-      const creditFallbackInput = document.getElementById('setCreditFallback');
-      if(creditFallbackInput) creditFallbackInput.checked = creditFallback;
-      const creditFallbackState = document.getElementById('setCreditFallbackState');
-      if(creditFallbackState){
-        creditFallbackState.textContent = creditFallback ? '(已启用)' : '(未启用)';
-        creditFallbackState.style.color = creditFallback ? 'var(--accent2)' : 'var(--dim)';
       }
       const autoSwitchInput = document.getElementById('setAutoSwitch');
       if(autoSwitchInput) autoSwitchInput.checked = autoSwitch;
@@ -15722,21 +15693,6 @@ async function saveFilterModelsByKey(btn){
 }
 
 
-
-async function saveCreditFallback(btn){
-  const el = document.getElementById('setCreditFallback');
-  const value = !!(el && el.checked);
-  if(btn) btn.disabled = true;
-  try {
-    await postJSON('/settings/save', {free_model_credit_fallback: value});
-    toast(value ? '已启用：免费额度耗尽自动回退付费积分版' : '已关闭自动回退付费积分版', 'ok');
-    loadSettings();
-  } catch(e) {
-    toast('保存失败: ' + e.message, 'bad');
-  } finally {
-    if(btn) btn.disabled = false;
-  }
-}
 
 async function saveAutoSwitchProduct(btn){
   const el = document.getElementById('setAutoSwitch');
@@ -21689,7 +21645,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     model: {
       title: '模型与定价',
       desc: '价格估算、Anthropic 适配、思考档位和模型过滤。',
-      items: ['模型价格估算', '启用 Anthropic Messages', '思考等级挡位映射', '按 API Key 过滤模型列表', '只列出可用模型', '免费额度耗尽回退积分版']
+      items: ['模型价格估算', '启用 Anthropic Messages', '思考等级挡位映射', '按 API Key 过滤模型列表', '只列出可用模型']
     },
     automation: {
       title: '自动化',
