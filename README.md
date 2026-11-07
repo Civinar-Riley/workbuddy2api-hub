@@ -1,7 +1,9 @@
 # WorkBuddy2API-Hub — 国际版、国内版多账号网关中枢
 
-> [!CAUTION]
-> **项目停止维护（2026-11-06）**：后续不再更新代码、不跟进上游变化、不再处理新的 issue / PR。感谢大家的 star。
+> [!IMPORTANT]
+> **官方群聊**：[https://t.me/wb2apihub](https://t.me/wb2apihub)
+>
+> **凭证安全**：本项目是本地部署网关，运行时需要在本地读取用户自行导入的账号凭证，才能调用官方接口；凭证保存在用户自己的 `accounts/` 目录。项目不会把凭证上传到本项目的第三方服务器，也没有隐藏的凭证收集或上传逻辑。请立即关闭公网暴露，联系官方吊销全部 OAuth / 设备授权，确认旧 token 返回 `401` 后再重新授权。
 
 > [!IMPORTANT]
 > **项目进入低频维护（2026-10-23） / Low-frequency maintenance**
@@ -30,7 +32,7 @@ This project is for protocol research and personal use only. Prefer the official
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
   <img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/Maintenance-Ended-9f2d2d?style=flat-square" alt="Maintenance ended">
+  <img src="https://img.shields.io/badge/Maintenance-Resumed-0DBD8B?style=flat-square" alt="Maintenance resumed">
 </p>
 
 ## 核心特性
