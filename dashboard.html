@@ -380,6 +380,14 @@ button.mini{padding:3px 9px;font-size:11px}
    单元格。原生 select 的直角白框在暖色表里显得突兀，这里补齐主题样式。 */
 .mini-select{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
   padding:3px 6px;color:var(--fg);font:inherit;font-size:11px;font-variant-numeric:tabular-nums}
+/* 权重列的自绘下拉：通用 .cs-trigger 的内边距（9px）+ 间距（8px）+ 箭头（11px）
+   就吃掉 37px，落在 64px 的格子里（减去 td 左右 12px 只剩 40px）后数字被挤成
+   1px 宽——界面上只剩一个箭头、看不到权重值。这里把该列放宽、内边距收到 8px，
+   并按 mini 家族收紧触发器的 padding/gap，1-3 位数都留得下。 */
+table.account-cards th:nth-child(6),
+table.account-cards td:nth-child(6){padding-left:8px;padding-right:8px}
+table.account-cards td[data-label="权重"] .cs-trigger{padding:3px 6px;gap:4px}
+table.account-cards td[data-label="权重"] .cs-arrow{margin-left:0}
 .slot-input{width:100%;background:var(--panel2);border:1px solid var(--line);
   border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit;font-size:13px}
 table.account-cards td[data-label="账号"]{padding-top:6px;padding-bottom:6px}
@@ -11025,7 +11033,9 @@ function accountMatchesFilters(a){
   if(ACCOUNT_FILTERS.status === 'attention') return !!attention;
   return true;
 }
-function clearAccountFilters(){
+/* 只清筛选状态与控件，不重画。会话丢失时页面正要被闸门盖住，此时重画既没
+   意义也会在还没重新登录时读一遍旧数据。 */
+function resetAccountFilters(){
   ACCOUNT_FILTERS.query = '';
   ACCOUNT_FILTERS.status = '';
   ACCOUNT_FILTERS.group = '';
@@ -11035,6 +11045,9 @@ function clearAccountFilters(){
   if(q) q.value = '';
   if(s) s.value = '';
   if(g) g.value = '';
+}
+function clearAccountFilters(){
+  resetAccountFilters();
   renderAccounts();
 }
 
@@ -11429,7 +11442,7 @@ function renderAccounts(){
     + '<th style="text-align:center;width:84px">状态</th>'
     + '<th style="text-align:center;width:118px">今日活动</th>'
     + '<th style="text-align:center;width:150px">出口</th>'
-    + '<th style="text-align:center;width:64px">权重</th>'
+    + '<th style="text-align:center;width:78px">权重</th>'
     + '<th style="text-align:left;width:120px">积分</th>'
     + '<th style="text-align:right;width:70px">请求</th>'
     + '<th style="text-align:right;width:88px">总 token</th>'
@@ -13391,6 +13404,11 @@ function panelSessionLost(){
   // 每 2.5 秒刷一次 401（实测 9 秒内又发 3 次，永不停止）。
   if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
   panelClearToken();
+  // 账号筛选是内存态，重新登录不会刷新页面：网关重启前设的搜索词 / 状态 / 分组
+  // 会原样留着，于是登录后账号列表被旧条件过滤成空（「当前禁用」区用的是未筛选
+  // 名单，反而还显示账号），看起来像账号全丢了，得手动点「清除筛选」才恢复。
+  // 重启后以「显示全部账号」为安全默认，清掉筛选状态与控件。
+  resetAccountFilters();
   const msg = document.getElementById('panelLoginMsg');
   if(msg) msg.textContent = '会话已失效，请重新输入密码';
   panelNeedsLogin();
@@ -13497,6 +13515,10 @@ let visHookInstalled = false;
 async function startDashboard(){
   if(PANEL_READY) return;
   PANEL_READY = true;
+  // 每次进入面板都从「显示全部账号」开始。网关重启后会话丢失、重新登录并不刷新
+  // 页面，内存里的旧筛选会留着把账号列表过滤成空；普通刷新时浏览器还可能把
+  // <select> 的旧值恢复回 DOM。两边都清掉，状态与控件才一致。
+  resetAccountFilters();
   // 前两步决定下面各自查什么（VIEW_REALM / 面板可见性），必须先行；之后就并行，
   // 别让国内版那条约 2 秒的成长任务接口把首屏的用量卡片拖在后面。
   await loadSettings();
