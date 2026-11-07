@@ -5,13 +5,6 @@
 >
 > **凭证安全**：本项目是本地部署网关，运行时需要在本地读取用户自行导入的账号凭证，才能调用官方接口；凭证保存在用户自己的 `accounts/` 目录。项目不会把凭证上传到本项目的第三方服务器，也没有隐藏的凭证收集或上传逻辑。请立即关闭公网暴露，联系官方吊销全部 OAuth / 设备授权，确认旧 token 返回 `401` 后再重新授权。
 
-> [!IMPORTANT]
-> **项目进入低频维护（2026-10-23） / Low-frequency maintenance**
->
-> 大幅降低更新频率与 Issue / PR 处理速度。请先阅读风险说明，再决定是否继续使用。
->
-> Updates and responses to issues / pull requests will be significantly reduced. Read the risk notice below before continuing.
-
 > [!WARNING]
 > **WorkBuddy 上游正在收紧对非官方客户端的识别与拦截。**
 >
