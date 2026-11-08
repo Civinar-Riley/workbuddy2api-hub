@@ -45,6 +45,31 @@ check("reasoning is not a placeholder space", out_assistant.get("reasoning") != 
       repr(out_assistant.get("reasoning")))
 
 print()
+print("[1b] Prefixes only match the model family, not lookalikes")
+for model in ("kimi-k2-sg", "space-bunny-sg"):
+    body = P.build_upstream_body({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "reasoning_content": trace},
+        ],
+    })
+    check("%s mirrors the family prefix" % model,
+          assistant_messages(body)[0].get("reasoning") == trace,
+          json.dumps(body, ensure_ascii=False))
+for model in ("kimono", "glmish", "stepfather"):
+    body = P.build_upstream_body({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "reasoning_content": trace},
+        ],
+    })
+    check("%s is not a family prefix" % model,
+          "reasoning" not in assistant_messages(body)[0],
+          json.dumps(body, ensure_ascii=False))
+
+print()
 print("[2] Kimi mirrors after adjacent assistant repair")
 tool_trace = "real reasoning after tool call"
 body = P.build_upstream_body({
@@ -102,7 +127,7 @@ check("DeepSeek keeps the single-space placeholder",
 
 print()
 print("[5] Other models do not gain reasoning")
-for model in ("glm-4.6", "gpt-5"):
+for model in ("hy4-preview", "gpt-5"):
     body = P.build_upstream_body({
         "model": model,
         "messages": [

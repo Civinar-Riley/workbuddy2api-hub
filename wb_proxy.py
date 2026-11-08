@@ -13801,7 +13801,9 @@ def mirror_upstream_reasoning(messages, model):
     model_prefixes = (
         "kimi", "glm", "minimax", "mimo", "step", "space-bunny",
     )
-    if not str(model or "").lower().startswith(model_prefixes):
+    model_name = str(model or "").lower()
+    if not any(model_name == prefix or model_name.startswith(prefix + "-")
+               for prefix in model_prefixes):
         return messages
     if not isinstance(messages, list):
         return messages
