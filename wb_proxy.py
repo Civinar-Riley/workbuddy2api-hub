@@ -13794,6 +13794,95 @@ def backfill_reasoning_content(messages, model, thinking_enabled=None):
         else:
             out.append(m)
     return out
+
+
+def mirror_upstream_reasoning(messages, model):
+    """Mirror reasoning_content for models whose upstream reads reasoning."""
+    model_prefixes = (
+        "kimi", "glm", "minimax", "mimo", "step", "space-bunny",
+    )
+    model_name = str(model or "").lower()
+    if not any(model_name == prefix or model_name.startswith(prefix + "-")
+               for prefix in model_prefixes):
+        return messages
+    if not isinstance(messages, list):
+        return messages
+    out = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            out.append(message)
+            continue
+        item = dict(message)
+        reasoning_content = item.get("reasoning_content")
+        reasoning = item.get("reasoning")
+        if (isinstance(reasoning_content, str) and reasoning_content.strip()
+                and not (isinstance(reasoning, str) and reasoning.strip())):
+            item["reasoning"] = reasoning_content
+        out.append(item)
+    return out
+# ---------------------------------------------------------------------------
+# Empty text parts (code 11151)
+# ---------------------------------------------------------------------------
+# 上游对每个 text 段做长度校验：`text` 为 "" 或缺失直接 400 / 11151
+# 「a message has empty content」，整段会话就此退役——每次重试都重放同一历史，
+# 换账号也救不回来。触发点不只是客户端真的发了 parts 数组：上游会把**字符串**
+# content 里以 `[` 开头的 JSON 数组当作 parts 解析，于是工具结果里常见的表单 /
+# 按钮抓取（`[{"type":"text","text":""}, ...]`）被当成一个空文本段。
+# 实测（kimi-k3.1-pro，cn 号池）：
+#   [{"type":"text","text":""}]            -> 400 / 11151
+#   [{"type":"text","text":null}]           -> 400 / 11151
+#   [{"type":"text"}]                       -> 400 / 11151
+#   [{"type":"text","text":"   "}]          -> 200（只看长度是否为零）
+#   [{"type":"textarea","text":""}]         -> 200（未识别的 type 被忽略）
+#   {"type":"text","text":""}（非数组）      -> 200（不嗅探对象）
+# 所以只补值、不删段：空 text 段填一个空格，语义不变（模型本来也看不到内容）。
+# 注意前缀空格挡不住嗅探——上游会先跳过空白再解析，别用那种写法。
+EMPTY_TEXT_PART_FILL = " "
+def _fill_empty_text_parts(parts):
+    """Give every empty text part a placeholder; True when one was filled."""
+    changed = False
+    for part in parts:
+        if not isinstance(part, dict) or part.get("type") != "text":
+            continue
+        text = part.get("text")
+        if text is None or text == "":
+            part["text"] = EMPTY_TEXT_PART_FILL
+            changed = True
+    return changed
+def _sniffed_parts(content):
+    """Return the parsed parts when a string body would be read as part list."""
+    if not isinstance(content, str):
+        return None
+    stripped = content.lstrip()
+    if not stripped.startswith("["):
+        return None
+    try:
+        parts = json.loads(stripped)
+    except Exception:
+        return None
+    if not parts or not isinstance(parts, list):
+        return None
+    if not all(isinstance(part, dict) for part in parts):
+        return None
+    return parts
+def guard_empty_text_parts(messages):
+    """Fill empty text parts, in real part lists and in sniffer-parsed strings."""
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            # 只复制要改的 text 段；图片等其余段保持原引用，不改写调用方载荷。
+            parts = [dict(part) if isinstance(part, dict)
+                     and part.get("type") == "text" else part
+                     for part in content]
+            if _fill_empty_text_parts(parts):
+                m["content"] = parts
+        else:
+            parts = _sniffed_parts(content)
+            if parts is not None and _fill_empty_text_parts(parts):
+                m["content"] = json.dumps(parts, ensure_ascii=False)
+    return messages
 # ---------------------------------------------------------------------------
 # Tool & Tool Choice Normalization (avoids code 11101 on object tool_choice)
 # ---------------------------------------------------------------------------
@@ -14836,7 +14925,11 @@ def build_upstream_body(payload):
     repaired, _merged = merge_adjacent_tool_calls(body["messages"])
     repaired, _repacked = repack_tool_result_blocks(repaired)
     repaired, _cleaned = cleanup_orphan_tool_calls(repaired)
-    body["messages"] = repaired
+    # Last shape check: an empty text part is a hard 400 (11151) whichever side
+    # produced it, and it has to run after the merges above because they can
+    # move a string content into a different message.
+    body["messages"] = guard_empty_text_parts(repaired)
+    body["messages"] = mirror_upstream_reasoning(body["messages"], model)
     translate_max_completion_tokens(body)
     # Upstream GPT-family models enforce a minimum max_output_tokens >= 16;
     # smaller values (e.g. max_tokens=1 from probes) fail with 400 integer_below_min_value (#364, #252).
