@@ -460,5 +460,117 @@ check("compact output is shorter than the old default separators",
           {"role": "user", "content": "hi"}]}, ensure_ascii=False).encode("utf-8")))
 
 print()
+print("[7] empty text parts: upstream answers 11151, so fill them before sending")
+
+# 上游把「字符串 content 里以 [ 开头的 JSON 数组」当 parts 解析，并对每个 text
+# 段的长度做校验；"" / null / 缺失一律 400 / 11151，整段会话就此退役。下面是
+# 抓取表单/按钮时最常见的形状（按钮没有可见文字，text 就是空串）。
+FORM_DUMP = json.dumps([
+    {"cls": "hamburger menu", "tag": "BUTTON", "text": "", "type": "submit"},
+    {"cls": "ss-navigateright", "tag": "BUTTON", "text": "Next Step", "type": "button"},
+    {"name": "title", "placeholder": "Give your list a title",
+     "tag": "INPUT", "text": "", "type": "text"},
+], ensure_ascii=False)
+
+
+def parsed_parts(content):
+    """Parts an upstream sniffer would see: a real list, or a string array."""
+    if isinstance(content, list):
+        return content
+    if not isinstance(content, str):
+        return None
+    stripped = content.lstrip()
+    if not stripped.startswith("["):
+        return None
+    try:
+        value = json.loads(stripped)
+    except ValueError:
+        return None
+    return value if isinstance(value, list) else None
+
+
+def empty_text_parts(content):
+    parts = parsed_parts(content)
+    if parts is None:
+        return []
+    return [part for part in parts if isinstance(part, dict)
+            and part.get("type") == "text"
+            and (part.get("text") is None or part.get("text") == "")]
+
+
+def guarded(content, role="tool"):
+    message = {"role": role, "content": content}
+    if role == "tool":
+        message["tool_call_id"] = "c1"
+    return P.guard_empty_text_parts([message])[0]["content"]
+
+
+# --- the two shapes that really reach the upstream -------------------------
+for label, content in [
+        ("string parts, text is \"\"", '[{"type":"text","text":""}]'),
+        ("string parts, text is null", '[{"type":"text","text":null}]'),
+        ("string parts, text is absent", '[{"type":"text"}]'),
+        ("a captured form dump", FORM_DUMP)]:
+    out = guarded(content)
+    check("filled: " + label, empty_text_parts(out) == [], out)
+
+kept = parsed_parts(guarded(FORM_DUMP))
+check("the non-empty sibling text survives verbatim",
+      [p.get("text") for p in kept if (p.get("text") or "").strip()] == ["Next Step"],
+      kept)
+check("other keys on a filled part are untouched",
+      kept[2].get("name") == "title" and kept[2].get("tag") == "INPUT", kept[2])
+
+real_parts = [{"type": "text", "text": ""},
+              {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+              {"type": "text", "text": "hi"}]
+out_parts = guarded(real_parts)
+check("a real parts list is filled too", empty_text_parts(out_parts) == [])
+check("non-text parts keep their identity (no copy, no rewrite)",
+      out_parts[1] is real_parts[1], out_parts[1])
+check("the caller's own part dicts are not mutated",
+      real_parts[0]["text"] == "", real_parts[0])
+check("the placeholder is one space (length > 0 is all upstream checks)",
+      out_parts[0]["text"] == P.EMPTY_TEXT_PART_FILL == " ", out_parts[0])
+
+# --- shapes that must stay byte-for-byte identical -------------------------
+untouched = [
+    ("whitespace is already long enough", '[{"type":"text","text":"   "}]'),
+    ("an unknown part type is ignored upstream", '[{"type":"textarea","text":""}]'),
+    ("objects are not sniffed as parts", '{"type":"text","text":""}'),
+    ("an object without a type is ignored", '[{"text":""}]'),
+    ("plain text is not JSON", "form: [] {ok}"),
+    ("a data array without part types is data", '[{"cls":"x","text":""}]'),
+    ("arrays of scalars are not parts", '["","x"]'),
+    ("numbers are not strings", '[{"type":"text","text":0}]'),
+]
+for label, content in untouched:
+    check("untouched: " + label, guarded(content) == content, guarded(content))
+
+check("an empty parts array stays empty", guarded("[]") == "[]")
+check("two passes are idempotent", guarded(guarded(FORM_DUMP)) == guarded(FORM_DUMP))
+
+# --- the call site: build_upstream_body must apply it ----------------------
+tool_turn = [
+    {"role": "user", "content": "dump the form"},
+    assistant_with_calls("c1"),
+    {"role": "tool", "tool_call_id": "c1", "content": FORM_DUMP},
+    {"role": "user", "content": "continue"},
+]
+built = P.build_upstream_body({"model": "kimi-k3.1-pro",
+                               "messages": copy.deepcopy(tool_turn)})
+tool_contents = [m.get("content") for m in built["messages"]
+                 if m.get("role") == "tool"]
+check("build_upstream_body fills an empty text part in a tool result",
+      tool_contents and empty_text_parts(tool_contents[0]) == [], tool_contents)
+
+built_list = P.build_upstream_body({"model": "kimi-k3.1-pro", "messages": [
+    {"role": "user", "content": [{"type": "text", "text": ""},
+                                 {"type": "text", "text": "go"}]}]})
+check("build_upstream_body fills an empty part in a user content list",
+      empty_text_parts(built_list["messages"][-1]["content"]) == [],
+      built_list["messages"][-1]["content"])
+
+print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
