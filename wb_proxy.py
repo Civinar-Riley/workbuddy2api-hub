@@ -17243,12 +17243,24 @@ TEST_MODEL_DEFAULT = "deepseek-v4.1-flash"
 #: 一键测试的并发度：每个探针都是一次真实的上游请求，别把池子打成压测。
 PROBE_CONCURRENCY = 4
 
+#: Clash / sing-box / Surge 等本地 DNS 代理的 fake-IP 段（IANA benchmarking）。
+#: 开启 fake-IP 后，域名会先解析到这里，再由本机 TUN / 透明代理按 SNI 转发到真实
+#: 目标——198.18.0.11 本身不是要连的目的地，而是代理的占位地址。Python 的
+#: ipaddress 把 198.18.0.0/15 算作 is_private，不单独放行的话，开了 Clash Verge
+#: 的用户一键测试永远报「解析到非公网地址」，而真实请求其实一切正常。
+FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
 def _is_public_addr(text):
-    """是不是一个可以直连的公网地址（拒绝环回/私有/链路本地/保留段）。"""
+    """是不是一个可以直连的公网地址（拒绝环回/私有/链路本地/保留段）。
+
+    fake-IP 段例外：它只存在于本地 DNS 代理里，连接由代理按域名转发。
+    """
     try:
         addr = ipaddress.ip_address(str(text).split("%")[0])
     except ValueError:
         return False
+    if addr.version == 4 and addr in FAKE_IP_NETWORK:
+        return True
     return not (addr.is_private or addr.is_loopback or addr.is_link_local
                 or addr.is_reserved or addr.is_multicast or addr.is_unspecified)
 
