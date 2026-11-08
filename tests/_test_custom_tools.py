@@ -77,6 +77,186 @@ asst_r = [m for m in c_r["messages"] if m.get("role") == "assistant"]
 check("reasoning attached to assistant message", len(asst_r) == 1 and asst_r[0].get("reasoning_content") == "let me think about 2+2")
 check("assistant message content preserved", asst_r[0].get("content") == "4")
 
+two_turn_reasoning = {"model": "m", "input": [
+    {"role": "user", "content": "第一轮"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "推理一"}]},
+    {"type": "message", "role": "assistant", "content": "回答一"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "推理二"}]},
+    {"type": "message", "role": "assistant", "content": "回答二"},
+]}
+two_turn = P.responses_to_chat(two_turn_reasoning)["messages"]
+two_turn_assistants = [m for m in two_turn if m.get("role") == "assistant"]
+check("adjacent assistant turns are not collapsed",
+      len(two_turn_assistants) == 2, two_turn)
+check("each turn keeps its exact reasoning",
+      len(two_turn_assistants) == 2
+      and two_turn_assistants[0].get("reasoning_content") == "推理一"
+      and two_turn_assistants[1].get("reasoning_content") == "推理二",
+      two_turn_assistants)
+check("each turn keeps its exact text",
+      len(two_turn_assistants) == 2
+      and two_turn_assistants[0].get("content") == "回答一"
+      and two_turn_assistants[1].get("content") == "回答二",
+      two_turn_assistants)
+
+consecutive_reasoning = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "solve math"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "第一段推理"}]},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "第二段推理"}]},
+    {"type": "message", "role": "assistant", "content": "答案"},
+]})["messages"]
+consecutive_assistant = [m for m in consecutive_reasoning if m.get("role") == "assistant"]
+check("consecutive reasoning items are both preserved",
+      len(consecutive_assistant) == 1
+      and consecutive_assistant[0].get("reasoning_content") == "第一段推理\n第二段推理",
+      consecutive_assistant)
+
+grouped_reasoning = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "第一轮"},
+    {"type": "message", "role": "assistant", "content": "回答零"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "推理二之一"}]},
+    {"type": "additional_tools", "tools": [{"type": "function", "name": "noop"}]},
+    {"type": "local_shell_call", "call_id": "unsupported_metadata"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "推理二之二"}]},
+    {"type": "message", "role": "assistant", "content": "回答二"},
+]})["messages"]
+grouped_assistants = [m for m in grouped_reasoning if m.get("role") == "assistant"]
+check("a reasoning group skips inert metadata and stays on its own assistant",
+      len(grouped_assistants) == 2
+      and grouped_assistants[0].get("reasoning_content") is None
+      and grouped_assistants[1].get("reasoning_content") == "推理二之一\n推理二之二",
+      grouped_assistants)
+
+interleaved_tools = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "查询"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "先查工具"}]},
+    {"type": "function_call", "call_id": "call_tool", "name": "noop", "arguments": "{}"},
+    {"type": "function_call_output", "call_id": "call_tool", "output": "完成"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "再总结"}]},
+    {"type": "message", "role": "assistant", "content": "结论"},
+]})["messages"]
+interleaved_assistants = [m for m in interleaved_tools if m.get("role") == "assistant"]
+interleaved_roles = [m.get("role") for m in interleaved_tools]
+check("native tool call and later answer keep separate valid turns",
+      len(interleaved_assistants) == 2
+      and interleaved_assistants[0].get("reasoning_content") == "先查工具"
+      and interleaved_assistants[1].get("reasoning_content") == "再总结"
+      and interleaved_roles[:4] == ["user", "assistant", "tool", "assistant"],
+      interleaved_tools)
+
+chat_shaped = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "solve math"},
+    {"role": "assistant", "content": "答案", "reasoning_content": "内联推理"},
+]})["messages"]
+chat_shaped_assistant = [m for m in chat_shaped if m.get("role") == "assistant"]
+check("Chat-shaped assistant reasoning is preserved",
+      len(chat_shaped_assistant) == 1
+      and chat_shaped_assistant[0].get("reasoning_content") == "内联推理",
+      chat_shaped_assistant)
+
+adjacent_inline = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "第一轮"},
+    {"role": "assistant", "content": "回答一 ", "reasoning_content": " 推理一 "},
+    {"role": "assistant", "content": " 回答二", "reasoning_content": " 推理二 "},
+]})["messages"]
+adjacent_inline_assistant = [m for m in adjacent_inline if m.get("role") == "assistant"]
+check("adjacent inline reasoning is merged in order with exact whitespace",
+      len(adjacent_inline_assistant) == 1
+      and adjacent_inline_assistant[0].get("content") == "回答一 \n 回答二"
+      and adjacent_inline_assistant[0].get("reasoning_content") == " 推理一 \n 推理二 ",
+      adjacent_inline_assistant)
+
+pending_inline_same = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "solve math"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "同一段推理"}]},
+    {"type": "message", "role": "assistant", "content": "答案",
+     "reasoning_content": "同一段推理"},
+]})["messages"]
+pending_inline_assistant = [m for m in pending_inline_same if m.get("role") == "assistant"]
+check("identical pending and inline reasoning is not duplicated",
+      len(pending_inline_assistant) == 1
+      and pending_inline_assistant[0].get("reasoning_content") == "同一段推理",
+      pending_inline_assistant)
+
+multiline_alias = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "solve math"},
+    {"type": "reasoning", "summary": [
+        {"type": "summary_text", "text": " 第一行推理 \n 第二行推理 "}]},
+    {"type": "message", "role": "assistant", "content": "答案",
+     "reasoning_content": " 第一行推理 \n 第二行推理 "},
+]})["messages"]
+multiline_alias_assistant = [m for m in multiline_alias if m.get("role") == "assistant"]
+check("identical multiline pending and inline reasoning dedupes once",
+      len(multiline_alias_assistant) == 1
+      and multiline_alias_assistant[0].get("reasoning_content")
+      == " 第一行推理 \n 第二行推理 ",
+      multiline_alias_assistant)
+
+multiline_partial_repeat = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "第一轮"},
+    {"role": "assistant", "content": "回答一 ",
+     "reasoning_content": " 第一行推理 \n 第二行推理 "},
+    {"role": "assistant", "content": " 回答二", "reasoning_content": " 第一行推理 "},
+]})["messages"]
+multiline_repeat_assistant = [m for m in multiline_partial_repeat
+                              if m.get("role") == "assistant"]
+check("a repeated line inside multiline reasoning is preserved",
+      len(multiline_repeat_assistant) == 1
+      and multiline_repeat_assistant[0].get("reasoning_content")
+      == " 第一行推理 \n 第二行推理 \n 第一行推理 ",
+      multiline_repeat_assistant)
+
+chat_tool_history = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "edit"},
+    {"role": "assistant", "content": "", "reasoning_content": "先调用工具",
+     "tool_calls": [{"id": "call_inline", "type": "function", "function": {
+         "name": "noop", "arguments": "{}"}}]},
+    {"role": "tool", "tool_call_id": "call_inline", "content": "完成"},
+]})["messages"]
+chat_tool_assistant = [m for m in chat_tool_history if m.get("role") == "assistant"]
+check("empty Chat-shaped assistant with tool_calls and reasoning is kept",
+      len(chat_tool_assistant) == 1
+      and chat_tool_assistant[0].get("reasoning_content") == "先调用工具"
+      and chat_tool_assistant[0].get("tool_calls", [{}])[0].get("id") == "call_inline",
+      chat_tool_history)
+
+stale_boundary = P.responses_to_chat({"model": "m", "input": [
+    {"role": "user", "content": "第一轮"},
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "过期推理"}]},
+    {"role": "user", "content": "新请求"},
+    {"type": "message", "role": "assistant", "content": "新回答"},
+]})["messages"]
+stale_assistant = [m for m in stale_boundary if m.get("role") == "assistant"]
+check("stale reasoning does not cross an explicit user boundary",
+      len(stale_assistant) == 1
+      and stale_assistant[0].get("reasoning_content") is None,
+      stale_boundary)
+
+custom_reasoning_chat = P.responses_to_chat({
+    "model": "deepseek-v4.1-flash",
+    "input": [
+        {"role": "user", "content": "edit the file"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "先读再改"}]},
+        {"type": "custom_tool_call", "name": "apply_patch", "call_id": "call_r",
+         "input": "*** Begin Patch\n*** End Patch"},
+        {"type": "custom_tool_call_output", "call_id": "call_r", "output": "完成"},
+        {"role": "user", "content": "继续"},
+    ],
+})
+custom_outbound = P.build_upstream_body(custom_reasoning_chat)
+custom_assistants = [m for m in custom_outbound["messages"] if m.get("role") == "assistant"]
+check("custom tool reasoning survives final outbound normalization",
+      len(custom_assistants) == 1
+      and custom_assistants[0].get("reasoning_content") == "先读再改",
+      custom_assistants)
+check("reasoning is not copied into ordinary message text",
+      all("先读再改" not in str(m.get("content") or "")
+          for m in custom_outbound["messages"] if m.get("role") != "assistant"),
+      custom_outbound["messages"])
+check("thinking backfill mirrors the same reasoning",
+      custom_assistants and custom_assistants[0].get("reasoning") == "先读再改",
+      custom_assistants)
+
 print()
 print("[3] unknown input item types are logged, not silently dropped")
 import io, contextlib
