@@ -158,7 +158,7 @@ print()
 print("[5] the streaming path: one created frame, a real completed frame")
 
 TOOL_CHUNKS = [
-    {"choices": [{"index": 0, "delta": {"tool_calls": [
+    {"choices": [{"index": 0, "delta": {"reasoning_content": "先搜索", "tool_calls": [
         {"index": 0, "id": "call_1", "type": "function",
          "function": {"name": "web_search", "arguments": '{"query":'}}]},
         "finish_reason": None}]},
@@ -166,6 +166,17 @@ TOOL_CHUNKS = [
         {"index": 0, "function": {"arguments": ' "cats"}'}}]}, "finish_reason": None}]},
     {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
      "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}},
+]
+NO_REASON_TOOL_CHUNKS = [
+    {"choices": [{"index": 0, "delta": {"tool_calls": [
+        {"index": 0, "id": "call_2", "type": "function",
+         "function": {"name": "web_search", "arguments": '{"query":'}}]},
+        "finish_reason": None}]},
+    {"choices": [{"index": 0, "delta": {"tool_calls": [
+        {"index": 0, "function": {"arguments": ' "cats again"}'}}]},
+        "finish_reason": None}]},
+    {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+     "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}},
 ]
 ANSWER_CHUNKS = [
     {"choices": [{"index": 0, "delta": {"content": "Cats are "}, "finish_reason": None}]},
@@ -285,6 +296,10 @@ check("the client never sees a web_search call", '"name": "web_search"' not in b
 check("the answer text reaches the client", "Cats are fine." in body, body[-400:])
 check("the tool result was fed back",
       any(m.get("role") == "tool" for m in (opened[0].get("messages") or [])) if opened else False)
+check("the streamed web-tool reasoning was fed back",
+      any(m.get("role") == "assistant" and m.get("reasoning_content") == "先搜索"
+          for m in (opened[0].get("messages") or [])) if opened else False,
+      opened[0].get("messages") if opened else [])
 
 print()
 print("[6] when the rounds run out the tools are withdrawn, not faked")
@@ -324,6 +339,38 @@ check("the last call really had the tools withdrawn",
 check("the earlier calls still carried them",
       "web_search" in [t.get("name") for t in (calls["bodies"][0].get("tools") or [])],
       [t.get("name") for t in (calls["bodies"][0].get("tools") or [])])
+
+multi_round_bodies = []
+stream_holder = {"base_body": dict(chat_body),
+                 "base_messages": list(chat_body["messages"])}
+list(proxy.stream_responses_events(iter(sse(TOOL_CHUNKS)),
+                                   "deepseek-v4.1-flash", stream_holder))
+first_internal = stream_holder.get("internal_calls") or []
+stream_holder.pop("internal_calls", None)
+stream_holder.pop("suppress_completion", None)
+with mock.patch.object(proxy, "open_upstream",
+                       lambda body, **kwargs: multi_round_bodies.append(body)
+                       or (FakeUpstream([]), FakeAccount(), "high")), \
+        mock.patch.object(W, "execute", lambda name, args: "Search results"):
+    proxy.follow_up_with_tool_results(
+        first_internal, stream_holder, "deepseek-v4.1-flash", "sess", 0.0,
+        reasoning_content=stream_holder.get("reasoning_content"))
+    stream_holder.pop("internal_calls", None)
+    stream_holder.pop("reasoning_content", None)
+    stream_holder.pop("suppress_completion", None)
+    list(proxy.stream_responses_events(iter(sse(NO_REASON_TOOL_CHUNKS)),
+                                       "deepseek-v4.1-flash", stream_holder))
+    second_internal = stream_holder.get("internal_calls") or []
+    proxy.follow_up_with_tool_results(
+        second_internal, stream_holder, "deepseek-v4.1-flash", "sess", 0.0,
+        reasoning_content=stream_holder.get("reasoning_content"))
+multi_round_assistants = [m for m in (multi_round_bodies[1].get("messages") or [])
+                          if m.get("role") == "assistant"]
+check("the prior round reasoning survives while a silent round adds none",
+      len(multi_round_assistants) == 2
+      and multi_round_assistants[0].get("reasoning_content") == "先搜索"
+      and multi_round_assistants[1].get("reasoning_content") is None,
+      multi_round_assistants)
 
 print()
 print("[7] the search is visible as a card, and cited as a source")
@@ -365,10 +412,16 @@ check("the three lifecycle events were sent",
 print()
 print("[9] the non-streaming path runs the tools too, instead of leaking the call")
 
-CHAT_CALL = {"choices": [{"message": {"content": "", "tool_calls": [
+CHAT_CALL = {"choices": [{"message": {"content": "", "reasoning_content": "先搜索",
+                                      "tool_calls": [
     {"id": "call_1", "type": "function",
      "function": {"name": "web_search", "arguments": '{"query": "cats"}'}}]}}],
     "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}}
+CHAT_SECOND_CALL = {"choices": [{"message": {"content": "", "reasoning_content": "再筛选",
+                                            "tool_calls": [
+    {"id": "call_2", "type": "function",
+     "function": {"name": "web_search", "arguments": '{"query": "cats domestic"}'}}]}}],
+    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}}
 CHAT_DONE = {"choices": [{"message": {"content":
     "All About Cats: https://example.com/cats"}}],
     "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12}}
@@ -377,7 +430,11 @@ seen = {"aggregate": 0, "bodies": []}
 
 def fake_aggregate(upstream, model, sink, *a, **k):
     seen["aggregate"] += 1
-    return CHAT_CALL if seen["aggregate"] == 1 else CHAT_DONE
+    if seen["aggregate"] == 1:
+        return CHAT_CALL
+    if seen["aggregate"] == 2:
+        return CHAT_SECOND_CALL
+    return CHAT_DONE
 
 
 def capture_open(body, session_key=None, target_realm=None):
@@ -415,7 +472,8 @@ with mock.patch.multiple(proxy,
 
 out = (jh.json_body or {}).get("output") or []
 kinds = [o.get("type") for o in out]
-check("the model ran twice (the tool round is invisible)", seen["aggregate"] == 2, seen["aggregate"])
+check("the model ran three times (two tool rounds are invisible)",
+      seen["aggregate"] == 3, seen["aggregate"])
 check("no web_search function_call reaches the client",
       not any(o.get("type") == "function_call" and o.get("name") == "web_search" for o in out), kinds)
 check("the client gets reasoning + a message", "message" in kinds, kinds)
@@ -424,6 +482,59 @@ check("the citations ride on the non-stream message too", bool(anns), anns)
 check("the tool result was fed back before the second call",
       any(m.get("role") == "tool" for m in (seen["bodies"][0].get("messages") or [])),
       seen["bodies"][0].get("messages"))
+check("the non-streamed web-tool reasoning was fed back",
+      any(m.get("role") == "assistant" and m.get("reasoning_content") == "先搜索"
+          for m in (seen["bodies"][0].get("messages") or [])),
+      seen["bodies"][0].get("messages"))
+nonstream_round_messages = (seen["bodies"][1].get("messages") or []) if len(seen["bodies"]) > 1 else []
+nonstream_assistants = [m for m in nonstream_round_messages if m.get("role") == "assistant"]
+check("non-stream web tools preserve every completed round",
+      len(nonstream_assistants) == 2
+      and nonstream_assistants[0].get("reasoning_content") == "先搜索"
+      and nonstream_assistants[1].get("reasoning_content") == "再筛选"
+      and sum(1 for m in nonstream_round_messages if m.get("role") == "tool") == 2,
+      nonstream_round_messages)
+
+followup_bodies = []
+
+
+def capture_followup(body, session_key=None, target_realm=None):
+    followup_bodies.append(body)
+    return FakeUpstream(sse(ANSWER_CHUNKS)), FakeAccount(), "high"
+
+
+followup_holder = {"base_body": {
+    "model": "deepseek-v4.1-flash",
+    "messages": [{"role": "user", "content": "tell me about cats"}],
+    "stream": True,
+}, "base_messages": [{"role": "user", "content": "tell me about cats"}]}
+with mock.patch.object(proxy, "open_upstream", capture_followup), \
+        mock.patch.object(W, "execute", lambda name, args: "Search results"):
+    proxy.follow_up_with_tool_results(
+        [{"name": "web_search", "arguments": '{"query": "cats"}'}],
+        followup_holder, "deepseek-v4.1-flash", "sess", 0.0,
+        reasoning_content="先搜索再回答")
+
+followup_messages = followup_bodies[0].get("messages") if followup_bodies else []
+followup_assistant = [m for m in followup_messages if m.get("role") == "assistant"]
+check("the web-tool follow-up keeps its reasoning",
+      len(followup_assistant) == 1
+      and followup_assistant[0].get("reasoning_content") == "先搜索再回答",
+      followup_messages)
+check("the follow-up reasoning stays out of tool output",
+      all(m.get("role") != "tool" or "先搜索再回答" not in str(m.get("content") or "")
+          for m in followup_messages),
+      followup_messages)
+check("the final follow-up body retains the original user message",
+      followup_messages[:1] == [{"role": "user", "content": "tell me about cats"}],
+      followup_messages[:1])
+followup_outbound = proxy.build_upstream_body(dict(followup_bodies[0]))
+followup_outbound_assistant = [m for m in followup_outbound["messages"]
+                               if m.get("role") == "assistant"]
+check("the helper body survives final upstream normalization",
+      len(followup_outbound_assistant) == 1
+      and followup_outbound_assistant[0].get("reasoning_content") == "先搜索再回答",
+      followup_outbound_assistant)
 
 print()
 print("[10] with the switch off the client's own call is forwarded, not run")
