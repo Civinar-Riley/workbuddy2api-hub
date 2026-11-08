@@ -5676,7 +5676,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" onclick="testAccounts(this)" title="逐个真发一条最小请求，并同时检查本机到上游的网络：能分清「账号坏了」和「本机断网了」，测试通过还会清掉该账号的熔断/降权计数">一键测试</button>
     </div>
     <div class="tb-group tb-bulk">
-    <button class="sec" onclick="autoAssignSlots()" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">一键分配代理</button>
+    <button class="sec" onclick="autoAssignSlots(this)" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">一键分配代理</button>
     <button class="sec" id="btnProductAll" onclick="cycleAllProducts(this)" title="把全部账号（含另一个版本）的出站身份切到下一个：WB → VSC → CLI">一键切换所有出站身份：<span id="productAllLabel">WB</span></button>
     <button class="sec" onclick="setAll(true, this)">全部启用</button>
     <button class="sec" onclick="setAll(false, this)">全部停用</button>
@@ -6394,8 +6394,21 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="sec" onclick="discoverProxySlots(this)">自动发现 mihomo 端口</button>
+          <button class="sec" onclick="runSubBridgeTest(this)">测试订阅转换</button>
+          <button class="sec" onclick="runSubBridgeImport(this)">订阅转换并导入</button>
           <button class="sec" onclick="addProxySlotRow()">+ 添加槽位</button>
           <button onclick="saveProxySlots(this)">保存槽位</button>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <div style="font-size:12px;color:var(--dim);margin-bottom:6px">
+          订阅链接（每行一条，支持 Clash/Mihomo 订阅、V2Ray/SS/SSR/Trojan 订阅或 base64，也可以直接填 http/socks5 代理）
+        </div>
+        <textarea id="subBridgeSubs" class="mono" style="width:100%;min-height:92px;font-size:12px" placeholder="https://example.com/sub&#10;socks5://user:pass@host:port"></textarea>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="sec" onclick="loadSubBridgeSubs(this)">读取当前订阅</button>
+          <button class="sec" onclick="saveSubBridgeSubs(this,false)">保存订阅</button>
+          <button class="sec" onclick="saveSubBridgeSubs(this,true)">保存并转换</button>
         </div>
       </div>
       <div id="slotList"></div>
@@ -17831,6 +17844,133 @@ async function testProxySlot(index, btn){
   }
 }
 
+function renderSubBridgeCatalog(r){
+  const box = document.getElementById('slotDiscover');
+  if(!box) return;
+  const list = r.nodes || [];
+  if(!list.length){
+    box.innerHTML = '<div style="margin-top:14px"><div style="font-size:12px;color:var(--dim)">订阅解析成功，但没有可用节点</div></div>';
+    return;
+  }
+  box.innerHTML = '<div style="margin-top:14px"><div style="font-size:12px;color:var(--dim);margin-bottom:8px">'
+    + '勾选要开启的节点（只勾选真正要用的，避免开太多端口）：'
+    + '<button class="sec mini" style="margin-left:8px" onclick="subBridgeSelectAll(true)">全选</button>'
+    + '<button class="sec mini" style="margin-left:6px" onclick="subBridgeSelectAll(false)">全不选</button>'
+    + '</div>'
+    + list.map(x =>
+        '<label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">'
+        + '<input type="checkbox" class="fx-import" data-node="' + esc(x.id || x.name) + '" data-kind="' + esc(x.type) + '">'
+        + '<span class="mono" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.name) + '</span>'
+        + '<span style="color:var(--dim)">' + esc(x.type) + (x.server ? (' · ' + esc(x.server) + ':' + x.port) : '') + '</span>'
+        + '</label>').join('')
+    + '<div style="margin-top:8px">'
+    + '<button class="sec" onclick="subBridgeApplyPicked(this)">保存选择并开槽</button>'
+    + '</div></div>';
+}
+
+function subBridgeSelectAll(on){
+  document.querySelectorAll('#slotDiscover input.fx-import').forEach(el => { el.checked = on; });
+}
+
+async function subBridgeApplyPicked(btn){
+  const nodes = Array.from(document.querySelectorAll('#slotDiscover input.fx-import:checked'))
+    .map(el => el.dataset.node);
+  if(!nodes.length){ toast('没有勾选任何节点', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '保存并开槽中...'; }
+  try{
+    const r = await postJSON('/proxy/subbridge', {action: 'apply', nodes, import: true});
+    if(r && r.ok){
+      const total = r.slots_total || (r.reachable || []).length;
+      const ready = r.slots_ready || (r.reachable || []).filter(x => x.ok).length;
+      const down = Math.max(0, total - ready);
+      toast('已更新 ' + total + ' 个槽位：' + ready + ' 个可用' +
+        (down ? '，' + down + ' 个暂不可用（已保留为关闭状态）' : '') +
+        '；旧订阅槽位已替换', down ? 'warn' : 'ok');
+      await loadProxySlots(true);
+      await loadAccounts();
+    }else{
+      toast('开槽失败: ' + ((r && r.error) || 'unknown'), 'bad');
+    }
+  }catch(e){
+    toast('开槽失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '保存选择并开槽'; }
+  }
+}
+
+function updateSubBridgeTextarea(subs){
+  const box = document.getElementById('subBridgeSubs');
+  if(box && Array.isArray(subs)) box.value = subs.join('\n');
+}
+
+function subBridgeLinesFromTextarea(){
+  const box = document.getElementById('subBridgeSubs');
+  if(!box) return [];
+  return (box.value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+}
+
+async function loadSubBridgeSubs(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '读取中...'; }
+  try{
+    const r = await postJSON('/proxy/subbridge', {action: 'list'});
+    if(r && r.ok){
+      updateSubBridgeTextarea(r.subs);
+      renderSubBridgeCatalog(r);
+      toast('解析到 ' + ((r.nodes || []).length) + ' 个节点，请勾选', 'ok');
+    }else{
+      toast('解析失败: ' + ((r && r.error) || 'unknown'), 'bad');
+    }
+  }catch(e){
+    toast('解析失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '读取当前订阅'; }
+  }
+}
+
+async function saveSubBridgeSubs(btn, listAfter){
+  const subs = subBridgeLinesFromTextarea();
+  if(!subs.length){ toast('请至少填写一条订阅或代理链接', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = listAfter ? '保存并解析中...' : '保存中...'; }
+  try{
+    const r = await postJSON('/proxy/subbridge', {action: 'list', subs});
+    if(r && r.ok){
+      updateSubBridgeTextarea(r.subs);
+      if(listAfter){ renderSubBridgeCatalog(r); toast('已解析 ' + ((r.nodes || []).length) + ' 个节点，请勾选', 'ok'); }
+      else { toast('订阅已保存', 'ok'); }
+    }else{
+      toast('保存失败: ' + ((r && r.error) || 'unknown'), 'bad');
+    }
+  }catch(e){
+    toast('保存失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = listAfter ? '保存并转换' : '保存订阅'; }
+  }
+}
+
+async function subBridgeRequest(btn, action, busyText){
+  if(btn){ btn.disabled = true; btn.textContent = busyText; }
+  try{
+    const r = await postJSON('/proxy/subbridge', {action});
+    if(r && r.ok && action === 'list'){
+      updateSubBridgeTextarea(r.subs);
+      renderSubBridgeCatalog(r);
+    } else if(r && r.ok && action === 'test'){
+      const box = document.getElementById('slotDiscover');
+      if(box) box.innerHTML = '<div style="margin-top:14px"><div style="font-size:12px;color:var(--dim)">'
+        + '桥接正常，版本 ' + esc(r.version || '') + '</div></div>';
+    }
+    if(r && r.ok && action === 'test'){ toast('桥接正常', 'ok'); }
+    else if(!(r && r.ok)){ toast('操作失败: ' + (r.error || 'unknown'), 'bad'); }
+  }catch(e){
+    toast('操作失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = action === 'refresh' ? '订阅转换并导入' : '测试订阅转换'; }
+  }
+}
+
+async function runSubBridgeTest(btn){ await subBridgeRequest(btn, 'test', '测试中...'); }
+async function runSubBridgeImport(btn){ await subBridgeRequest(btn, 'list', '解析中...'); }
+
 async function discoverProxySlots(btn){
   if(btn){ btn.disabled = true; btn.textContent = '探测中...'; }
   try{
@@ -17887,22 +18027,42 @@ function importDiscovered(){
   toast('已加入 ' + picked.length + ' 个槽位，记得点「保存槽位」', 'ok');
 }
 
-async function autoAssignSlots(){
+async function autoAssignSlots(btn){
   // Only fills in accounts that have no exit yet: an account that is already
   // bound keeps its slot, so this is not a rebalancer.
-  const unbound = (window.ACCOUNTS || []).filter(a => a.enabled && !a.proxySlot);
-  if(!unbound.length){ toast('所有已启用账号都已绑定代理出口', 'ok'); return; }
-  const slots = PROXY_SLOTS.filter(s => s.enabled !== false);
-  if(!slots.length){ toast('没有启用的代理槽，请先在「设置 → 账号代理槽」添加并保存', 'warn'); return; }
-  let i = 0;
-  for(const a of unbound){
-    const slot = slots[i % slots.length];
-    i++;
-    try{ await postJSON('/accounts/set', {uid: a.uid, proxySlot: slot.id}); }catch(e){}
+  const button = btn;
+  const originalText = button ? button.textContent : '';
+  if(button){ button.disabled = true; button.textContent = '正在读取账号...'; }
+  try{
+    const fresh = await getJSON('/accounts?realm=all');
+    window.ACCOUNTS = fresh.accounts || [];
+    const unbound = (window.ACCOUNTS || []).filter(a => a.enabled && !a.proxySlot);
+    if(!unbound.length){ toast('所有已启用账号都已绑定代理出口', 'ok'); return; }
+    const slots = PROXY_SLOTS.filter(s => s.enabled !== false);
+    if(!slots.length){ toast('没有启用的代理槽，请先在「设置 → 账号代理槽」添加并保存', 'warn'); return; }
+    toast('开始为 ' + unbound.length + ' 个未绑定账号分配代理出口', 'ok');
+    let ok = 0, failed = 0;
+    for(let i = 0; i < unbound.length; i++){
+      const a = unbound[i];
+      const slot = slots[i % slots.length];
+      if(button) button.textContent = '分配中 ' + (i + 1) + '/' + unbound.length;
+      try{
+        await postJSON('/accounts/set', {uid: a.uid, proxySlot: slot.id});
+        ok++;
+      }catch(e){
+        failed++;
+        console.warn('auto assign proxy failed', a.uid, e);
+      }
+    }
+    await loadAccounts();
+    await loadProxySlots();
+    if(failed) toast('代理分配完成：成功 ' + ok + ' 个，失败 ' + failed + ' 个', failed === unbound.length ? 'bad' : 'warn');
+    else toast('已为 ' + ok + ' 个未绑定账号分配代理出口', 'ok');
+  }catch(e){
+    toast('一键分配代理失败: ' + e.message, 'bad');
+  }finally{
+    if(button){ button.disabled = false; button.textContent = originalText || '一键分配代理'; }
   }
-  await loadAccounts();
-  await loadProxySlots();
-  toast('已为 ' + unbound.length + ' 个未绑定账号分配代理出口', 'ok');
 }
 
 /* 智能体配置只在「浏览器和网关进程同一台机器」时成立（issue #246）：服务端 /

@@ -49,6 +49,9 @@ DROP_TOP_DIRS = ("Scripts", "include", "libs", "tcl")
 
 # Stdlib packages the shipped package does not carry. multiprocessing is
 # deliberate (see the module docstring); the rest are development extras.
+# `site-packages` is removed: the gateway has no third-party runtime deps and
+# the optional subscription bridge must report a clear error if PyYAML is not
+# bundled by the caller.
 DROP_LIB_DIRS = ("__pycache__", "ensurepip", "idlelib", "lib2to3", "multiprocessing",
                  "pydoc_data", "site-packages", "tkinter", "turtledemo", "venv")
 
@@ -70,6 +73,7 @@ DROP_SUFFIXES = (".pdb", ".pyc")
 # modules (ast-walked from wb_*.py) - so the trim may not take any of them,
 # and their extension modules have to survive with them.
 REQUIRED_FILES = (
+    "Lib/tempfile.py",
     "python.exe", "pythonw.exe", "python3.dll", "python312.dll",
     "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt",
     "Lib/os.py", "Lib/io.py", "Lib/ssl.py", "Lib/hashlib.py", "Lib/hmac.py", "Lib/stat.py",
@@ -171,6 +175,9 @@ def verify(root):
     for rel in FORBIDDEN_PATHS:
         if os.path.exists(os.path.join(root, *rel.split("/"))):
             problems.append("不该出现 %s（已发布的精简运行时里没有它）" % rel)
+    bridge = os.path.join(root, "Lib", "yaml")
+    if os.path.isdir(bridge):
+        problems.append("不该出现 Lib/yaml（订阅桥接的第三方依赖不随精简运行时发布）")
     stray = []
     for dirpath, _dirnames, filenames in os.walk(root):
         for fn in filenames:
