@@ -7335,6 +7335,115 @@ def proxy_slots_view():
     return out
 
 
+SUBBRIDGE_HOST = os.environ.get("WB_SUBBRIDGE_HOST") or os.environ.get(
+    "WB_SUBBRIDGE_LISTEN") or "172.17.0.1"
+_SUBBRIDGE_SLOT_PORT_RE = re.compile(
+    r"^http://(?:%s|127\.0\.0\.1):(\d+)(?:/)?$"
+    % re.escape(SUBBRIDGE_HOST))
+SUBBRIDGE_PORT_START = int(os.environ.get("WB_SUBBRIDGE_PORT_START") or "17901")
+SUBBRIDGE_PORT_COUNT = int(os.environ.get("WB_SUBBRIDGE_PORT_COUNT") or "64")
+SUBBRIDGE_PORT_RANGE = range(SUBBRIDGE_PORT_START,
+                             SUBBRIDGE_PORT_START + SUBBRIDGE_PORT_COUNT)
+
+
+def _is_subbridge_slot(entry):
+    """Whether a slot is managed by the subscription bridge port pool."""
+    match = _SUBBRIDGE_SLOT_PORT_RE.match(str((entry or {}).get("url") or ""))
+    if not match:
+        return False
+    try:
+        return int(match.group(1)) in SUBBRIDGE_PORT_RANGE
+    except ValueError:
+        return False
+
+
+def reconcile_subbridge_slots(current, probes, probed_at=None):
+    """Replace bridge-managed slots while preserving manual slots and slot ids."""
+    now = int(probed_at if probed_at is not None else time.time())
+    existing = {}
+    manual = []
+    for raw in current or []:
+        if not isinstance(raw, dict):
+            continue
+        entry = dict(raw)
+        if _is_subbridge_slot(entry):
+            url = str(entry.get("url") or "")
+            if url:
+                existing[url] = entry
+        else:
+            manual.append(entry)
+
+    managed = []
+    seen = set()
+    for probe in probes or []:
+        if not isinstance(probe, dict):
+            continue
+        url = str(probe.get("url") or "").strip()
+        if not url or url in seen or not _is_subbridge_slot({"url": url}):
+            continue
+        seen.add(url)
+        entry = dict(existing.get(url) or {"id": "", "url": url})
+        name = str(probe.get("name") or "").strip()
+        if name:
+            entry["name"] = name
+        entry["enabled"] = bool(probe.get("ok"))
+        entry["ip"] = str(probe.get("exit_ip") or "").strip()
+        entry["probed_at"] = now
+        for field in ("country", "country_code", "ip_type", "isp", "asn"):
+            value = str(probe.get(field) or "").strip()
+            if value:
+                entry[field] = value
+        managed.append(wb_settings._clean_slot_entry(entry) or entry)
+    return manual + managed
+
+
+def probe_subbridge_listeners(listeners, rounds=3, workers=8):
+    """Probe newly rendered listener ports concurrently, retaining failures."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    targets = []
+    for item in listeners or []:
+        try:
+            port = int(item.get("port"))
+        except (TypeError, ValueError):
+            continue
+        targets.append({
+            "port": port,
+            "url": "http://%s:%d" % (SUBBRIDGE_HOST, port),
+            "name": str(item.get("proxy") or item.get("name") or "").strip(),
+            "ok": False,
+            "exit_ip": "",
+            "error": "not probed",
+        })
+
+    def probe(target):
+        exit_ip, error = probe_proxy_exit(target["url"], timeout=7)
+        return {
+            "port": target["port"],
+            "url": target["url"],
+            "name": target["name"],
+            "ok": bool(exit_ip),
+            "exit_ip": exit_ip,
+            "error": error,
+        }
+
+    for attempt in range(max(1, int(rounds))):
+        pending = [index for index, target in enumerate(targets)
+                   if not target.get("ok")]
+        if not pending:
+            break
+        with ThreadPoolExecutor(max_workers=min(max(1, int(workers)),
+                                                len(pending))) as pool:
+            results = list(pool.map(lambda index: (index, probe(targets[index])),
+                                    pending))
+        for index, result in results:
+            targets[index] = result
+        if attempt + 1 < max(1, int(rounds)) and any(
+                not target.get("ok") for target in targets):
+            time.sleep(3)
+    return targets
+
+
 _byacct_cache = {"at": 0.0, "data": None}
 _byacct_lock = threading.Lock()
 
@@ -23468,7 +23577,116 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, reply)
         if path == "/proxy/discover":
             return self._json(200, {"candidates": discover_proxy_slots()})
+        if path == "/proxy/subbridge":
+            return self._handle_proxy_subbridge(payload)
         return self._error(404, "not found", "invalid_request_error")
+
+    def _handle_proxy_subbridge(self, payload):
+        """Manage subscription sources and synchronize their proxy slots."""
+        import subprocess
+
+        action = str(payload.get("action") or "test").strip()
+        if action not in ("test", "list", "refresh", "apply"):
+            return self._error(400, "unsupported subbridge action",
+                               "invalid_request_error")
+        env = dict(os.environ)
+        env.setdefault("WB_SUBBRIDGE_HOST", SUBBRIDGE_HOST)
+        env.setdefault("WB_SUBBRIDGE_PORT_START", str(SUBBRIDGE_PORT_START))
+        env.setdefault("WB_SUBBRIDGE_PORT_COUNT", str(SUBBRIDGE_PORT_COUNT))
+        env.setdefault("WB_SUBBRIDGE_CONTROLLER_ADDR", "172.17.0.1:19090")
+        secret = ""
+        try:
+            with open("/etc/default/wb-sub-bridge", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("WB_SUBBRIDGE_SECRET="):
+                        secret = line.strip().split("=", 1)[1]
+                        break
+        except OSError:
+            pass
+
+        converter = os.environ.get("WB_SUBBRIDGE_SCRIPT") or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "wb_subbridge.py")
+        script = [sys.executable, converter, "--json"]
+        wanted_subs = payload.get("subs")
+        if isinstance(wanted_subs, list):
+            cleaned = [str(item).strip() for item in wanted_subs
+                       if str(item).strip()]
+            script += ["--set-subs", json.dumps(cleaned, ensure_ascii=False)]
+            if action == "test":
+                action = "list"
+        if action == "test":
+            script += ["--probe-controller"]
+        elif action == "list":
+            script += ["--list"]
+        elif action == "apply":
+            nodes = payload.get("nodes")
+            if not isinstance(nodes, list) or not nodes:
+                return self._error(400, "apply requires nodes",
+                                   "invalid_request_error")
+            script += ["--render", "--nodes", json.dumps(nodes,
+                                                        ensure_ascii=False)]
+        else:
+            script += ["--render"]
+
+        try:
+            proc = subprocess.run(
+                script,
+                env={**env, "WB_SUBBRIDGE_SECRET": secret},
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+        except FileNotFoundError:
+            return self._error(503, "subbridge converter is not installed",
+                               "invalid_request_error")
+        except subprocess.TimeoutExpired:
+            return self._error(504, "subbridge converter timed out",
+                               "invalid_request_error")
+
+        result = None
+        for line in reversed((proc.stdout or "").splitlines()):
+            try:
+                candidate = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(candidate, dict):
+                result = candidate
+                break
+        if result is None:
+            result = {
+                "ok": False,
+                "error": (proc.stderr or "converter output invalid")[:300],
+            }
+        result["mode"] = action
+        if not result.get("ok") or action in ("test", "list"):
+            return self._json(200, result)
+
+        # The .path unit reloads mihomo after config.yaml changes. Give the
+        # controller time to bind every listener, then probe concurrently and
+        # retain failed nodes as disabled slots instead of silently dropping
+        # them.
+        time.sleep(2)
+        probes = probe_subbridge_listeners(result.get("listeners") or [])
+        result["reachable"] = probes
+        result["slots_total"] = len(probes)
+        result["slots_ready"] = sum(1 for item in probes if item.get("ok"))
+        result["ok"] = True
+        if payload.get("import") or action == "refresh":
+            current = proxy_slots_view()
+            slots = reconcile_subbridge_slots(current, probes)
+            saved = wb_settings.set_proxy_slots(ACCOUNTS_DIR, slots)
+            if POOL:
+                dropped = wb_settings.drop_missing_bindings(POOL, saved)
+                POOL.apply_proxy_slots(saved)
+                if dropped:
+                    log("proxy slots: unbound %d account(s) from removed "
+                        "subbridge slots" % dropped)
+            result["imported"] = len(probes)
+            result["slots_raw"] = len(saved)
+            log("subbridge slots synchronized: %d total, %d ready"
+                % (result["slots_total"], result["slots_ready"]))
+        return self._json(200, result)
 
     # ---- one-click agent integration (wb_agents) ----
 

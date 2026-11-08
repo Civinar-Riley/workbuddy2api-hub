@@ -86,3 +86,4 @@ wb_webagent.py
 wb_webprompts.py
 wb_webtools.py
 wb_window_probe.py
+wb_subbridge.py

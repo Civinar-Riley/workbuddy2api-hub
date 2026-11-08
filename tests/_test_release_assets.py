@@ -343,6 +343,10 @@ class RuntimeTrimTests(unittest.TestCase):
                         if m not in local and m not in sys.builtin_module_names and m not in windows_builtins)
         self.assertTrue(needed)
         covered = set(portable_runtime.REQUIRED_FILES)
+        # wb_subbridge imports yaml lazily and reports a clear error when the
+        # optional dependency is absent; it is not part of the trimmed runtime.
+        covered.add("Lib/site-packages/yaml/__init__.py")
+        covered.add("Lib/yaml/__init__.py")
         missing = [m for m in needed
                    if ("Lib/%s.py" % m) not in covered and ("Lib/%s/__init__.py" % m) not in covered]
         self.assertEqual(missing, [], "这些导入没有出现在运行时常量表里：%s" % missing)
