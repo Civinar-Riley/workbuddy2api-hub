@@ -16,6 +16,7 @@ PROG_DIR=/usr/lib/workbuddy2api
 
 start_service() {
 	local host port accounts_dir usage_dir api_key panel_password stats_ttl
+	local tls_bridge_setting tls_bridge tls_fingerprint bridge_machine bridge_binary
 	config_load workbuddy2api
 	config_get host main host '0.0.0.0'
 	config_get port main port '8788'
@@ -31,6 +32,29 @@ start_service() {
 	# 限额判定不受影响——限额为 0 时那条扫描路径本来就不执行；用了限额的话
 	# 这个值别调太大（限额计数也吃这份缓存）。
 	config_get stats_ttl main stats_ttl '900'
+	# 可选桥默认关闭。只有用户显式打开、当前 CPU 在打包支持范围内、且包里
+	# 确实存在对应可执行文件时才切到 Go/uTLS；其余情况一律保留 Python 默认。
+	config_get tls_bridge_setting main tls_bridge '0'
+	tls_fingerprint=python
+	tls_bridge=off
+	case "$tls_bridge_setting" in
+		1|on|true|yes|enabled|node)
+			bridge_machine="$(uname -m 2>/dev/null)"
+			case "$bridge_machine" in
+				x86_64|amd64) bridge_binary="$PROG_DIR/bin/wb-tls-bridge-linux-amd64" ;;
+				aarch64|arm64) bridge_binary="$PROG_DIR/bin/wb-tls-bridge-linux-arm64" ;;
+				armv7l) bridge_binary="$PROG_DIR/bin/wb-tls-bridge-linux-arm" ;;
+				*) bridge_binary="" ;;
+			esac
+			if [ -n "$bridge_binary" ] && [ -x "$bridge_binary" ]; then
+				tls_fingerprint=node
+				tls_bridge=auto
+			else
+				logger -t workbuddy2api \
+					"uTLS bridge 不可用（CPU: ${bridge_machine:-unknown}，二进制: ${bridge_binary:-无}）；继续使用 Python/OpenSSL"
+			fi
+			;;
+	esac
 
 	mkdir -p "$accounts_dir" "$usage_dir"
 	chmod 700 "$accounts_dir" 2>/dev/null
@@ -45,7 +69,7 @@ start_service() {
 	[ -n "$panel_password" ] && procd_append_param command --panel-password "$panel_password"
 	# procd 的 env 是整组设置：PYTHONPATH 必须和原有变量并成同一行，
 	# 否则后一次调用会把前一次的变量清掉。
-	procd_set_param env PYTHONPATH="$PROG_DIR" WB_STATS_TTL="$stats_ttl" WB_COUNT_TTL="$stats_ttl"
+	procd_set_param env PYTHONPATH="$PROG_DIR" WB_STATS_TTL="$stats_ttl" WB_COUNT_TTL="$stats_ttl" WB_TLS_FINGERPRINT="$tls_fingerprint" WB_TLS_BRIDGE="$tls_bridge"
 	# 进程意外退出时自动拉起（60 秒内崩 5 次就放弃，避免刷日志）
 	procd_set_param respawn 60 10 5
 	# 应用日志走 stderr（[wb-proxy] 行），启动横幅与端口占用等错误走 stdout，

@@ -18,25 +18,87 @@ wrt/
         └── files/                 # init.d、uci 配置、面板缓存预热脚本
 ```
 
-两种包的内容一致：`wb_*.py` + `dashboard.html`（纯 Python 标准库）+
-`/etc/init.d/workbuddy2api` + `/etc/config/workbuddy2api` + `/usr/bin/workbuddy2api-warm`。
+默认两种包的内容一致：`wb_*.py` + `dashboard.html`（纯 Python 标准库）+
+`/etc/init.d/workbuddy2api` + `/etc/config/workbuddy2api` +
+`/usr/bin/workbuddy2api-warm`，不包含任何 CPU 架构相关文件，行为与此前相同。
+显式加 `--with-bridge` 或 `--bridge-bin` 后，包内才额外出现三个 Go/uTLS
+二进制：
+
+```
+/usr/lib/workbuddy2api/bin/wb-tls-bridge-linux-amd64
+/usr/lib/workbuddy2api/bin/wb-tls-bridge-linux-arm64
+/usr/lib/workbuddy2api/bin/wb-tls-bridge-linux-arm
+```
+
+含桥包同时安装以下许可证到 `/usr/share/licenses/workbuddy2api/`：
+
+```
+brotli.txt
+compress.txt
+utls.txt
+x-crypto.txt
+x-sys.txt
+wb-tls-bridge-README.md    # 原项目 MIT 许可及版权声明
+```
+
+无桥包不创建该许可证目录。打包脚本在存在桥二进制但缺少上述任一文件时会直接
+失败，避免生成许可证不完整的产物。
 
 | 产物 | 适用系统 | 安装方式 |
 | --- | --- | --- |
 | `workbuddy2api_<版本>-<发布号>_all.ipk` | opkg 系（OpenWrt 24.10 及更早） | `opkg install <文件>` |
 | `workbuddy2api-<版本>-r<发布号>.apk` | apk-tools 3（OpenWrt 25.x） | `apk add --allow-untrusted <文件>`（未签名时） |
 
+文件名不带 `bridge` 标记；带桥构建会覆盖同名的无桥产物，CI 一次只应选择
+其中一种构建。两种格式的产物分别写到 `wrt/ipk/` 与 `wrt/apk/`。
+
 依赖（两套系统同名）：`python3-light`、`python3-urllib`、`python3-uuid`、
 `python3-openssl`、`python3-sqlite3`、`python3-codecs`。OpenWrt 为了省空间把
 ssl、sqlite3 和完整编码表拆成了独立包，缺任何一个都会在启动或首次解析域名时
 报 `ModuleNotFoundError`。
+
+## 可选 Go/uTLS 桥
+
+桥从 Go 1.24 起可构建。打包脚本固定交叉编译下面三个目标，使用
+`CGO_ENABLED=0` 生成静态二进制：
+
+| 路由器 `uname -m` | Go 目标 | 随包文件 |
+| --- | --- | --- |
+| `x86_64` / `amd64` | `linux/amd64` | `wb-tls-bridge-linux-amd64` |
+| `aarch64` / `arm64` | `linux/arm64` | `wb-tls-bridge-linux-arm64` |
+| `armv7l` | `linux/arm`、`GOARM=7` | `wb-tls-bridge-linux-arm` |
+
+**兼容边界**：`PKGARCH:=all` 只表示基础 Python 包仍可按通用包安装，不等于所有
+CPU 都能使用 Go/uTLS。上述三种之外的架构（例如 mips、riscv64、armv6）没有
+随包桥；即使打开 UCI 开关，init 也会写 syslog 告警并继续使用
+Python/OpenSSL。不要对外宣称该可选构建“全硬件支持”。
+
+默认 UCI 开关为关闭：
+
+```sh
+option tls_bridge '0'
+```
+
+确认当前包内有与 CPU 匹配的二进制后，可显式启用：
+
+```sh
+uci set workbuddy2api.main.tls_bridge='1'
+uci commit workbuddy2api
+/etc/init.d/workbuddy2api restart
+logread -e workbuddy2api     # 看是否告警回退
+```
+
+启用时 init 设置 `WB_TLS_FINGERPRINT=node`、`WB_TLS_BRIDGE=auto`；关闭或回退
+时显式设置 `WB_TLS_FINGERPRINT=python`、`WB_TLS_BRIDGE=off`。桥只监听回环地址，
+由网关进程拉起并通过 stdin 传认证密钥，不额外开放网络端口。
 
 ## 与 release 工作流的关系
 
 `.github/workflows/release.yml` 在 `v*` tag 上跑：先校验 tag 与源码版本一致、
 等同一提交的测试矩阵通过，然后依次构建便携 ZIP、`.ipk`、`.apk`，生成
 `SHA256SUMS`，最后创建/更新 **Draft Release**（永不自动 publish）。
-本目录的两个脚本就是它的第 4 步，工作流不重复实现打包逻辑。
+本目录的两个脚本就是它的第 4 步，工作流不重复实现打包逻辑。当前工作流仍使用
+不带桥的默认命令；若 CI 要出带桥包，需要按下面的“复用预构建”方式显式传参。
 
 脚本不再从网络拉源码：`--app-src` 不给时默认用当前仓库检出，CI 直接把
 `$GITHUB_WORKSPACE` 传进来。
@@ -44,12 +106,40 @@ ssl、sqlite3 和完整编码表拆成了独立包，缺任何一个都会在启
 ## 本地构建
 
 ```sh
+# 默认：纯 Python/OpenSSL，不需要 Go
 # .ipk：任意 POSIX sh + python3 即可，不需要 SDK（脚本内嵌打包器并自检）
 sh wrt/openwrt/build-ipk.sh --app-src "$PWD"      # 产物在 wrt/ipk/
 
 # .apk：需要 OpenWrt 25.x 的 x86_64 SDK（glibc 宿主机）
 sh wrt/openwrt/build-apk.sh <SDK 目录> "$PWD"     # 产物在 wrt/apk/
+
+# 可选：让脚本自行交叉编译并装入桥（两种包分别执行一次）
+sh wrt/openwrt/build-ipk.sh --with-bridge --app-src "$PWD"
+sh wrt/openwrt/build-apk.sh <SDK 目录> "$PWD" --with-bridge
 ```
+
+CI 更推荐只编译一次桥，再把同一个目录交给两个打包脚本：
+
+```sh
+mkdir -p wrt/bridge
+(
+  cd tools/wb-tls-bridge
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' \
+    -o ../../wrt/bridge/wb-tls-bridge-linux-amd64 .
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' \
+    -o ../../wrt/bridge/wb-tls-bridge-linux-arm64 .
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' \
+    -o ../../wrt/bridge/wb-tls-bridge-linux-arm .
+)
+sh wrt/openwrt/build-ipk.sh --bridge-bin "$PWD/wrt/bridge" --app-src "$PWD"
+sh wrt/openwrt/build-apk.sh <SDK 目录> "$PWD" --bridge-bin "$PWD/wrt/bridge"
+```
+
+桥构建需要 Go 1.24+；`--bridge-bin` 要求目录按上表提供三个固定文件名，缺一个
+都会拒绝打包，避免生成“看起来带桥、实际某架构不可用”的包。
 
 ## 升级版本
 

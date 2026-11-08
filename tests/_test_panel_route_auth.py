@@ -45,12 +45,19 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-panel-route-auth-")
 
 import wb_proxy as proxy  # noqa: E402
+import wb_accounts  # noqa: E402
 import wb_settings  # noqa: E402
 
 KEY = "panel-route-key"
 PANEL_ONLY_MESSAGE = "panel password required"
 MODEL_ID = "injected-panel-route-model"
 LATEST = "1.6.18"
+
+
+def clear_device_token_cache():
+    with wb_accounts._DEVICE_TOKEN_LOCK:
+        wb_accounts._DEVICE_TOKEN_CACHE.update(
+            {"key": None, "token": "", "at": 0.0})
 
 
 def injected_models(realm=None):
@@ -135,7 +142,8 @@ class BoundaryCase(unittest.TestCase):
     # the two pricing writes are the ones the panel's own buttons post to.
     PANEL_ONLY_POST = ("/updates/check", "/pricing/refresh",
                        "/pricing/mapping", "/settings/save",
-                       "/catalog/refresh")
+                       "/catalog/refresh",
+                       "/settings/device-token/reload")
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="panel-route-")
@@ -260,6 +268,79 @@ class PanelOnlyPostTests(BoundaryCase):
             "/updates/install", headers=self.session(), command="POST")
         self.assertEqual(status, 409)
         self.assertEqual(payload.get("msg"), "当前没有可安装的新版本")
+
+
+class DeviceTokenSettingsTests(BoundaryCase):
+    """The settings API exposes device-token state, never the token value."""
+
+    def setUp(self):
+        super().setUp()
+        clear_device_token_cache()
+
+    def tearDown(self):
+        clear_device_token_cache()
+        super().tearDown()
+
+    def test_settings_get_redacts_a_literal_token(self):
+        token_file = os.path.join(self.directory, "device-token.txt")
+        with open(token_file, "w", encoding="utf-8") as fh:
+            fh.write("file-secret")
+        wb_settings.set_upstream_config(self.directory, {
+            "device_token": "literal-secret",
+            "device_token_file": token_file,
+        })
+
+        status, payload, raw = self.dispatch("/settings", self.session())
+        self.assertEqual(status, 200)
+        self.assertNotIn("literal-secret", raw)
+        self.assertNotIn("device_token", payload["upstream"])
+        self.assertEqual(payload["upstream"]["device_token_file"], token_file)
+        self.assertEqual(payload["device_token_status"]["source"], "literal")
+        self.assertTrue(payload["device_token_status"]["loaded"])
+        self.assertIs(payload["desktop_chat_compat"], False)
+
+    def test_settings_save_and_reload_keep_the_value_redacted(self):
+        token_file = os.path.join(self.directory, "device-token.txt")
+        with open(token_file, "w", encoding="utf-8") as fh:
+            fh.write("file-secret-one")
+        wb_settings.set_upstream_config(self.directory, {
+            "device_token": "",
+            "device_token_file": token_file,
+        })
+
+        body = json.dumps({
+            "upstream": {"device_token_file": token_file},
+            "desktop_chat_compat": True,
+        }).encode("utf-8")
+        headers = dict(self.session(), **{
+            "Content-Length": str(len(body)),
+        })
+        status, payload, raw = self.dispatch(
+            "/settings/save", headers, command="POST", body=body)
+        self.assertEqual(status, 200, payload)
+        self.assertNotIn("file-secret-one", raw)
+        self.assertNotIn("device_token", payload["upstream"])
+        self.assertEqual(payload["device_token_status"]["source"], "file")
+        self.assertTrue(payload["device_token_status"]["loaded"])
+        self.assertEqual(payload["device_token_status"]["length"],
+                         len("file-secret-one"))
+        self.assertIs(payload["desktop_chat_compat"], True)
+        self.assertTrue(wb_settings.desktop_chat_compat(self.directory))
+
+        with open(token_file, "w", encoding="utf-8") as fh:
+            fh.write("file-secret-two")
+        body = b"{}"
+        headers = dict(self.session(), **{
+            "Content-Length": str(len(body)),
+        })
+        status, payload, raw = self.dispatch(
+            "/settings/device-token/reload", headers, command="POST",
+            body=body)
+        self.assertEqual(status, 200, payload)
+        self.assertNotIn("file-secret-two", raw)
+        self.assertNotIn("device_token", payload["device_token_status"])
+        self.assertEqual(payload["device_token_status"]["length"],
+                         len("file-secret-two"))
 
 
 class RemoteAgentsTests(BoundaryCase):

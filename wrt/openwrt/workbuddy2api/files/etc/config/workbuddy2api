@@ -34,3 +34,9 @@ config workbuddy2api 'main'
 	# 全部命中时一轮只有毫秒级成本；只有真的重建过（慢）或失败才写 syslog。
 	# 0 = 关闭（面板仍可用，只是缓存过期后第一次打开要等十几秒）。
 	option warm '1'
+
+	# 可选 Go/uTLS TLS 指纹桥。默认 0，继续使用 Python/OpenSSL，行为与没有
+	# 二进制文件时完全一致。只有 x86_64 / aarch64 / armv7l 且安装包确实带有
+	# 对应 linux/Go 二进制的构建才会启用；其他架构会记录告警并保持 Python。
+	# 1 = 自动拉起随包桥（WB_TLS_FINGERPRINT=node、WB_TLS_BRIDGE=auto）。
+	option tls_bridge '0'

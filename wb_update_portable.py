@@ -269,7 +269,14 @@ def backup_current(root, package, files, version):
             continue
         dst = os.path.join(backup, *rel.split("/"))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
+        for attempt in range(20):
+            try:
+                shutil.copy2(src, dst)
+                break
+            except PermissionError:
+                if not rel.startswith("bin/wb-tls-bridge-") or attempt == 19:
+                    raise
+                time.sleep(0.25)
         saved.append(rel)
     current_manifest = os.path.join(package, MANIFEST_NAME)
     if os.path.isfile(current_manifest):

@@ -222,13 +222,83 @@ jobs:
         if: steps.decide.outputs.writes != 'true'
         run: python tests/run_all.py --jobs 4
 
-  # ---- 3. portable ZIP ----------------------------------------------------
+  # ---- 3. Go/uTLS bridge binaries -----------------------------------------
+  # Build every shipped target in CI from the checked-in Go source. The
+  # toolchain is pinned exactly and GOTOOLCHAIN=local prevents go.mod from
+  # silently downloading a different compiler on a future runner.
+  tls-bridge:
+    name: tls bridge (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: [version, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: linux
+            goarch: arm
+            ext: ""
+    env:
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+          cache: true
+          cache-dependency-path: tools/wb-tls-bridge/go.sum
+      - name: Assert the pinned Go toolchain
+        run: |
+          set -euo pipefail
+          go version
+          test "$(go env GOVERSION)" = "go1.24.0"
+          test "$(go env GOTOOLCHAIN)" = "local"
+      - name: Build from source
+        working-directory: tools/wb-tls-bridge
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: "7"
+        run: |
+          set -euo pipefail
+          go mod verify
+          OUT="$GITHUB_WORKSPACE/bin/wb-tls-bridge-${GOOS}-${GOARCH}${{ matrix.ext }}"
+          mkdir -p "$(dirname "$OUT")"
+          go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o "$OUT" .
+          test -s "$OUT"
+          file "$OUT"
+      - name: Keep the bridge binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-bridge-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/
+          if-no-files-found: error
+
+  # ---- 4. portable ZIP ----------------------------------------------------
   # The green package ships a Windows runtime and the launchers start it as
   # python\python.exe, so it is assembled and booted on Windows. Building it on
   # Linux could only ever produce the source archive this asset must not be.
   portable:
     name: portable zip
-    needs: [version, gate]
+    needs: [version, gate, tls-bridge]
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -263,6 +333,12 @@ jobs:
       - name: Trim the runtime
         shell: pwsh
         run: python release/portable_runtime.py prepare --tarball "$env:RUNTIME_TARBALL" --dest python
+      - name: Download every cross-built uTLS bridge
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tls-bridge-*
+          path: bin
+          merge-multiple: true
       - name: Build the portable archive
         shell: pwsh
         run: |
@@ -270,6 +346,7 @@ jobs:
             --version "${{ needs.version.outputs.version }}" `
             --tag "$env:TAG" `
             --runtime python `
+            --bridge-dir bin `
             --out "dist/workbuddy2api-hub-v${{ needs.version.outputs.version }}.zip"
       - name: Boot the packaged runtime
         # Presence is not enough: the archive has to start the gateway with the
@@ -302,6 +379,24 @@ jobs:
           if (-not (Test-Path (Join-Path $root 'console_tail.py'))) {
             throw "包内没有 console_tail.py（静默模式的日志窗口依赖它）"
           }
+          $bridges = @(
+            'bin\wb-tls-bridge-windows-amd64.exe',
+            'bin\wb-tls-bridge-darwin-amd64',
+            'bin\wb-tls-bridge-darwin-arm64',
+            'bin\wb-tls-bridge-linux-amd64',
+            'bin\wb-tls-bridge-linux-arm64'
+          )
+          foreach ($name in $bridges) {
+            $path = Join-Path $root $name
+            if (-not (Test-Path $path)) { throw "包内缺少 bridge：$name" }
+            if ((Get-Item $path).Length -le 0) { throw "bridge 为空：$name" }
+          }
+          $manifest = Get-Content (Join-Path $stage 'release-manifest.json') -Raw | ConvertFrom-Json
+          foreach ($name in $bridges) {
+            $rel = $name.Replace('\', '/')
+            if ($manifest.files -notcontains $rel) { throw "manifest 未管理 bridge：$rel" }
+            if ($manifest.bridges.files -notcontains $rel) { throw "bridge 元数据缺少：$rel" }
+          }
 
           # The launcher has to look exactly where the runtime is.
           $bat = Get-Content (Join-Path $root 'start-wb-proxy.bat') -Raw
@@ -309,6 +404,8 @@ jobs:
 
           & $py --version
           if ($LASTEXITCODE -ne 0) { throw "包内运行时无法执行" }
+          & (Join-Path $root 'bin\wb-tls-bridge-windows-amd64.exe') --help
+          if ($LASTEXITCODE -ne 0) { throw "Windows Go/uTLS bridge 无法执行" }
           Push-Location $root
           try {
             & $py -c "import wb_proxy, wb_accounts, wb_pricing, wb_atrest, wb_webagent, wb_webtools, wb_scheduler, wb_tasks; print('app imports ok')"
@@ -346,18 +443,23 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
-  # ---- 4. OpenWrt .ipk + .apk ---------------------------------------------
+  # ---- 5. OpenWrt .ipk + .apk ---------------------------------------------
   openwrt:
     name: openwrt packages
-    needs: [version, gate]
+    needs: [version, gate, tls-bridge]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.CHECKOUT_REF }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tls-bridge-linux-*
+          path: wrt/bridge
+          merge-multiple: true
       - name: Build .ipk (opkg path, no SDK needed)
-        run: sh wrt/openwrt/build-ipk.sh --app-src "$GITHUB_WORKSPACE"
+        run: sh wrt/openwrt/build-ipk.sh --app-src "$GITHUB_WORKSPACE" --bridge-bin "$GITHUB_WORKSPACE/wrt/bridge"
       - name: Cache the OpenWrt SDK tarball
         id: sdk-cache
         uses: actions/cache@v4
@@ -401,7 +503,7 @@ jobs:
           echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
           echo "SDK ok: $SDK_DIR"
       - name: Build .apk (apk-tools path, OpenWrt 25.x+)
-        run: sh wrt/openwrt/build-apk.sh "$SDK_DIR" "$GITHUB_WORKSPACE"
+        run: sh wrt/openwrt/build-apk.sh "$SDK_DIR" "$GITHUB_WORKSPACE" --bridge-bin "$GITHUB_WORKSPACE/wrt/bridge"
       - name: Verify both packages against the tag
         # The .ipk packer self-checks its own structure while it builds (GNU tar
         # members, control fields, reproducible mtime). The .apk is checked here
@@ -440,7 +542,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # ---- 5. checksums + preview ---------------------------------------------
+  # ---- 6. checksums + preview ---------------------------------------------
   # Runs for a tag push *and* for a manual packaging run. It reads releases
   # (to keep the maintainer's notes) but never writes one: everything it
   # produces goes into an artifact for the writer below, or to the log.
@@ -454,8 +556,12 @@ jobs:
           ref: ${{ env.CHECKOUT_REF }}
       - uses: actions/download-artifact@v4
         with:
+          name: portable-zip
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: openwrt-packages
+          path: dist
       - name: Generate SHA256SUMS from the final assets
         run: |
           set -euo pipefail
@@ -509,7 +615,7 @@ jobs:
             dist/release-body.md
           if-no-files-found: error
 
-  # ---- 6. the only release writer -----------------------------------------
+  # ---- 7. the only release writer -----------------------------------------
   # The single condition under which a GitHub Release may be created, edited or
   # uploaded to. `workflow_dispatch` cannot satisfy it - its ref is a branch and
   # its event is not `push` - so no input combination reaches this job.
@@ -525,8 +631,12 @@ jobs:
           ref: ${{ env.CHECKOUT_REF }}
       - uses: actions/download-artifact@v4
         with:
+          name: portable-zip
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: openwrt-packages
+          path: dist
       - name: Refuse to write a release without the full matrix
         # Belt and braces next to the gate job: the requirement is stated where
         # the mutation happens, so no later reshuffle of `needs` can drop it.

@@ -2841,6 +2841,33 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '单请求体上限': 'Single request body limit',
     '单次尝试等上游返回响应头的上限（秒）。拿到响应头之前网关不会向客户端发出任何字节，所以这个值就是客户端要空等的时长：设得比客户端的首字节预算还大时，客户端会先断开（表现为 499 / 首字节迟迟不返回），而网关仍会按这个上限继续换账号重试。默认 120。': 'How long one attempt may wait for the upstream to send response headers (seconds). Nothing is sent to the client before those headers arrive, so this is exactly how long the client can end up waiting: set it above the client\'s first-byte budget and the client disconnects first (seen as a 499, or a first byte that never comes) while the gateway keeps retrying on the next account under the same limit. Default 120.',
     '调小的代价：上游偶尔确实算得慢的正常请求会被提前判失败、换账号重试，多消耗一次额度。建议不高于客户端的首字节预算。': 'The cost of lowering it: a normal request the upstream genuinely takes a long time to compute is failed early and retried on another account, spending one more unit of quota. Prefer a value no higher than the client\'s first-byte budget.',
+    '设备 Token 文件': 'Device token file',
+    '国内版桌面身份会随请求发送 X-Device-Token。这里只配置文件路径；面板只显示脱敏后的来源、长度与加载状态，token 本体不会返回浏览器。留空表示不读取文件。': 'The China desktop identity sends X-Device-Token with requests. Configure only the file path here; the panel shows the redacted source, length and load state, and never returns the token itself to the browser. Leave it blank to read no file.',
+    'Token 文件路径': 'Token file path',
+    '例如 /etc/workbuddy/device-token': 'e.g. /etc/workbuddy/device-token',
+    '保存路径': 'Save path',
+    '重新加载': 'Reload',
+    '(未配置)': '(not configured)',
+    '(字面值优先)': '(literal value takes precedence)',
+    '(文件未加载)': '(file not loaded)',
+    '已加载': 'Loaded',
+    '字面值优先': 'Literal value takes precedence',
+    '字符': 'characters',
+    '已脱敏': 'redacted',
+    'settings.json 里的 device_token 字面值优先；文件路径仅作为后备。': 'The device_token literal in settings.json takes precedence; the file path is only a fallback.',
+    '来源：文件；值已脱敏，只显示长度与加载状态。': 'Source: file. The value is redacted; only its length and load state are shown.',
+    '文件路径已配置，但当前没有读到内容；请检查路径、权限和文件内容。': 'A file path is configured, but nothing could be read. Check the path, permissions and file contents.',
+    '未配置设备 token，桌面端不会发送 X-Device-Token。': 'No device token is configured, so desktop requests send no X-Device-Token.',
+    '设备 Token 文件路径已保存': 'Device token file path saved',
+    '设备 token 已重新加载': 'Device token reloaded',
+    '设备 token 未加载，请检查文件路径和内容': 'Device token was not loaded; check the file path and contents',
+    '重新加载失败: ': 'Reload failed: ',
+    '桌面 chat 兼容头': 'Desktop chat compatibility headers',
+    '开启后桌面 chat 使用 SDK 兼容请求头，并在当前用户消息中补充会话字段。默认关闭。环境变量 WB_DESKTOP_CHAT_COMPAT 设置后会覆盖这里的值。': 'Enables SDK-compatible headers and adds conversation fields to the current user message for desktop chat. Off by default. The WB_DESKTOP_CHAT_COMPAT environment variable overrides this setting.',
+    '启用桌面 chat 兼容头': 'Enable desktop chat compatibility headers',
+    '(默认关闭)': '(off by default)',
+    '已启用：桌面 chat 兼容头': 'Enabled: desktop chat compatibility headers',
+    '已关闭桌面 chat 兼容头': 'Desktop chat compatibility headers disabled',
     '请输入不小于 1 的整数秒': 'Enter a whole number of seconds, at least 1',
     '总剩余积分：全部账号（含停用）之和；「可用」只算启用且未触发限额护栏的账号': 'Total remaining credits: the sum over every account, disabled included; "available" counts only accounts that are enabled and not parked by a limit guard.',
     '总计（全部历史）': 'Total (all time)',
@@ -4140,7 +4167,34 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "；变体继承当前已关闭": "；變體繼承目前已關閉",
     "未活跃打卡一键打卡": "未活躍打卡一鍵打卡",
     "今日未打卡账号": "今日未打卡帳號",
-    "国际版账号今天都已打卡": "國際版帳號今天都已打卡"
+    "国际版账号今天都已打卡": "國際版帳號今天都已打卡",
+    "设备 Token 文件": "裝置 Token 檔案",
+    "国内版桌面身份会随请求发送 X-Device-Token。这里只配置文件路径；面板只显示脱敏后的来源、长度与加载状态，token 本体不会返回浏览器。留空表示不读取文件。": "國內版桌面身分會隨請求傳送 X-Device-Token。這裡只設定檔案路徑；面板只顯示去識別化後的來源、長度與載入狀態，token 本體不會回傳瀏覽器。留空表示不讀取檔案。",
+    "Token 文件路径": "Token 檔案路徑",
+    "例如 /etc/workbuddy/device-token": "例如 /etc/workbuddy/device-token",
+    "保存路径": "儲存路徑",
+    "重新加载": "重新載入",
+    "(未配置)": "(未設定)",
+    "(字面值优先)": "(字面值優先)",
+    "(文件未加载)": "(檔案未載入)",
+    "已加载": "已載入",
+    "字面值优先": "字面值優先",
+    "字符": "字元",
+    "已脱敏": "已去識別化",
+    "settings.json 里的 device_token 字面值优先；文件路径仅作为后备。": "settings.json 裡的 device_token 字面值優先；檔案路徑僅作為後備。",
+    "来源：文件；值已脱敏，只显示长度与加载状态。": "來源：檔案；值已去識別化，只顯示長度與載入狀態。",
+    "文件路径已配置，但当前没有读到内容；请检查路径、权限和文件内容。": "檔案路徑已設定，但目前沒有讀到內容；請檢查路徑、權限和檔案內容。",
+    "未配置设备 token，桌面端不会发送 X-Device-Token。": "未設定裝置 token，桌面端不會傳送 X-Device-Token。",
+    "设备 Token 文件路径已保存": "裝置 Token 檔案路徑已儲存",
+    "设备 token 已重新加载": "裝置 token 已重新載入",
+    "设备 token 未加载，请检查文件路径和内容": "裝置 token 未載入，請檢查檔案路徑和內容",
+    "重新加载失败: ": "重新載入失敗: ",
+    "桌面 chat 兼容头": "桌面 chat 相容標頭",
+    "开启后桌面 chat 使用 SDK 兼容请求头，并在当前用户消息中补充会话字段。默认关闭。环境变量 WB_DESKTOP_CHAT_COMPAT 设置后会覆盖这里的值。": "開啟後桌面 chat 使用 SDK 相容請求標頭，並在目前使用者訊息中補充會話欄位。預設關閉。環境變數 WB_DESKTOP_CHAT_COMPAT 設定後會覆蓋這裡的值。",
+    "启用桌面 chat 兼容头": "啟用桌面 chat 相容標頭",
+    "(默认关闭)": "(預設關閉)",
+    "已启用：桌面 chat 兼容头": "已啟用：桌面 chat 相容標頭",
+    "已关闭桌面 chat 兼容头": "已關閉桌面 chat 相容標頭"
   };
   var HANT_TERMS = {"下拉菜单":"下拉選單","任务":"任務","会话":"會話","余额":"餘額","保存":"儲存","信息":"資訊","内存":"記憶體","凭证":"憑證","删除":"刪除","刷新":"重新整理","加载":"載入","启用":"啟用","响应":"回應","在线":"線上","复制":"複製","失败":"失敗","导入":"匯入","导出":"匯出","当前":"目前","按钮":"按鈕","搜索":"搜尋","支持":"支援","数据":"資料","文件":"檔案","日志":"日誌","权限":"權限","添加":"新增","用户":"使用者","登录":"登入","禁用":"停用","积分":"積分","端口":"埠","筛选":"篩選","粘贴":"貼上","统计":"統計","缓存":"快取","编辑":"編輯","网关":"閘道","网络":"網路","视频":"影片","计划":"計畫","设置":"設定","请求":"請求","账号":"帳號","账户":"帳戶","质量":"品質","软件":"軟體","输入框":"輸入框","运行":"執行","链接":"連結","错误":"錯誤","队列":"佇列","页面":"頁面","默认":"預設"};
   Object.keys(HANT_TERMS).forEach(function(k){ HANT_PHRASES[k] = HANT_TERMS[k]; });
@@ -6782,6 +6836,45 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
             </label>
             <button onclick="saveIdentityVersions(this)">保存版本号</button>
             <span style="font-size:12px;color:var(--warn)">保存后立即生效；输入框留空表示恢复默认</span>
+          </div>
+        </div>
+      </section>
+
+      <section data-cat="network">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">设备 Token 文件 <em id="setDeviceTokenState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              国内版桌面身份会随请求发送 X-Device-Token。这里只配置文件路径；面板只显示脱敏后的来源、长度与加载状态，token 本体不会返回浏览器。留空表示不读取文件。
+            </div>
+            <div id="setDeviceTokenMeta" style="font-size:12px;color:var(--dim);margin-top:4px"></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim);flex:1;min-width:280px">
+              Token 文件路径
+              <input id="setDeviceTokenFile" type="text" placeholder="例如 /etc/workbuddy/device-token"
+                     style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--fg);font:inherit">
+            </label>
+            <button onclick="saveDeviceTokenFile(this)">保存路径</button>
+            <button class="sec" onclick="reloadDeviceToken(this)">重新加载</button>
+          </div>
+        </div>
+      </section>
+
+      <section data-cat="network">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">桌面 chat 兼容头 <em id="setDesktopChatCompatState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              开启后桌面 chat 使用 SDK 兼容请求头，并在当前用户消息中补充会话字段。默认关闭。环境变量 WB_DESKTOP_CHAT_COMPAT 设置后会覆盖这里的值。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setDesktopChatCompat" type="checkbox" style="width:16px;height:16px">
+              启用桌面 chat 兼容头
+            </label>
+            <button onclick="saveDesktopChatCompat(this)">保存</button>
           </div>
         </div>
       </section>
@@ -15215,6 +15308,8 @@ async function loadSettings(showToast){
         headerTimeoutState.textContent = headerTimeoutDefault ? '(默认 120 秒)' : '(' + headerTimeout + ' 秒)';
         headerTimeoutState.style.color = headerTimeoutDefault ? 'var(--dim)' : 'var(--accent2)';
       }
+      applyDeviceTokenStatus(data.device_token_status);
+      applyDesktopChatCompat(data.desktop_chat_compat === true);
       const logDbEnabled = data.log_db_enabled === true;
       const logDbEnabledInput = document.getElementById('setLogDbEnabled');
       if(logDbEnabledInput) logDbEnabledInput.checked = logDbEnabled;
@@ -16496,6 +16591,118 @@ async function saveHeaderTimeout(btn){
     await postJSON('/settings/save', {upstream: {header_timeout_seconds: value}});
     toast('已保存：上游响应头超时 ' + value + ' 秒', 'ok');
     loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* ---- 设备 Token 与桌面 chat 兼容 ---- */
+function applyDeviceTokenStatus(status){
+  status = status || {};
+  const source = status.source === 'literal' || status.source === 'file'
+    ? status.source : 'none';
+  const length = Number(status.length) || 0;
+  const loaded = status.loaded === true;
+  const file = typeof status.configured_file === 'string' ? status.configured_file : '';
+  const input = document.getElementById('setDeviceTokenFile');
+  if(input) input.value = file;
+
+  const state = document.getElementById('setDeviceTokenState');
+  if(state){
+    if(source === 'literal'){
+      state.textContent = loaded
+        ? ('(字面值优先 · ' + length + ' 字符 · 已脱敏)')
+        : '(字面值优先)';
+      state.style.color = loaded ? 'var(--warn)' : 'var(--dim)';
+    } else if(source === 'file'){
+      state.textContent = loaded
+        ? ('(已加载 · ' + length + ' 字符 · 已脱敏)')
+        : '(文件未加载)';
+      state.style.color = loaded ? 'var(--accent2)' : 'var(--warn)';
+    } else {
+      state.textContent = '(未配置)';
+      state.style.color = 'var(--dim)';
+    }
+  }
+
+  const meta = document.getElementById('setDeviceTokenMeta');
+  if(meta){
+    if(source === 'literal'){
+      meta.textContent = 'settings.json 里的 device_token 字面值优先；文件路径仅作为后备。';
+    } else if(source === 'file' && loaded){
+      meta.textContent = '来源：文件；值已脱敏，只显示长度与加载状态。';
+    } else if(source === 'file'){
+      meta.textContent = '文件路径已配置，但当前没有读到内容；请检查路径、权限和文件内容。';
+    } else {
+      meta.textContent = '未配置设备 token，桌面端不会发送 X-Device-Token。';
+    }
+  }
+}
+
+async function saveDeviceTokenFile(btn){
+  const input = document.getElementById('setDeviceTokenFile');
+  const path = String(input && input.value || '').trim();
+  if(btn) btn.disabled = true;
+  try {
+    const res = await postJSON('/settings/save', {
+      upstream: {device_token_file: path},
+    });
+    if(res && res.device_token_status){
+      applyDeviceTokenStatus(res.device_token_status);
+    } else {
+      loadSettings();
+    }
+    toast('设备 Token 文件路径已保存', 'ok');
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function reloadDeviceToken(btn){
+  if(btn) btn.disabled = true;
+  try {
+    const res = await postJSON('/settings/device-token/reload', {});
+    const status = (res && res.device_token_status) || {};
+    applyDeviceTokenStatus(status);
+    if(status.loaded === true){
+      toast('设备 token 已重新加载', 'ok');
+    } else {
+      toast('设备 token 未加载，请检查文件路径和内容', 'warn');
+    }
+  } catch(e) {
+    toast('重新加载失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+function applyDesktopChatCompat(enabled){
+  enabled = enabled === true;
+  const input = document.getElementById('setDesktopChatCompat');
+  if(input) input.checked = enabled;
+  const state = document.getElementById('setDesktopChatCompatState');
+  if(state){
+    state.textContent = enabled ? '(已启用)' : '(默认关闭)';
+    state.style.color = enabled ? 'var(--accent2)' : 'var(--dim)';
+  }
+}
+
+async function saveDesktopChatCompat(btn){
+  const input = document.getElementById('setDesktopChatCompat');
+  const enabled = !!(input && input.checked);
+  if(btn) btn.disabled = true;
+  try {
+    const res = await postJSON('/settings/save', {
+      desktop_chat_compat: enabled,
+    });
+    const stored = res && typeof res.desktop_chat_compat === 'boolean'
+      ? res.desktop_chat_compat : enabled;
+    applyDesktopChatCompat(stored);
+    toast(stored ? '已启用：桌面 chat 兼容头' : '已关闭桌面 chat 兼容头', 'ok');
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
   } finally {
@@ -21948,7 +22155,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     api: {
       title: 'API 与出口',
       desc: 'API Key、CodeArts、代理槽、账号限额和出站身份。',
-      items: ['API Key', 'CodeArts 接入', '账号代理槽', '账号限额', '自动切换出站身份', '出站身份版本号', '跨出口回退']
+      items: ['API Key', 'CodeArts 接入', '账号代理槽', '账号限额', '自动切换出站身份', '出站身份版本号', '设备 Token 文件', '桌面 chat 兼容头', '跨出口回退']
     },
     model: {
       title: '模型与定价',

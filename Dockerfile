@@ -1,3 +1,9 @@
+# Stage 1: Build the local Go/uTLS ClientHello bridge
+FROM golang:1.24-alpine AS tls-bridge
+WORKDIR /src
+COPY tools/wb-tls-bridge/go.mod tools/wb-tls-bridge/go.sum* tools/wb-tls-bridge/main.go ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /wb-tls-bridge .
+
 # WorkBuddy Multi-Account Reverse Proxy Gateway
 FROM python:3.11-alpine
 
@@ -12,6 +18,9 @@ RUN apk add --no-cache tzdata ca-certificates &&     cp /usr/share/zoneinfo/${TZ
 # Copy application files. The gateway itself uses only the standard library;
 # PyYAML is installed below solely for the optional subscription bridge.
 COPY wb_*.py dashboard.html ./
+COPY --from=tls-bridge /wb-tls-bridge /app/bin/wb-tls-bridge
+COPY tools/wb-tls-bridge/README.md /app/licenses/wb-tls-bridge/README.md
+COPY tools/wb-tls-bridge/licenses/ /app/licenses/wb-tls-bridge/
 
 # The subscription bridge writes config.yaml for a mihomo instance that must
 # run on the host (or in another container). Persist its data and mount the

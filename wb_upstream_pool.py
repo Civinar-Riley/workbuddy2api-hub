@@ -32,12 +32,17 @@ Connection: keep-alive 这一处，见下面各函数的注释。
 _KeepAlivePool._sweep_locked）：只回收被碰到过的那个键的话，一个之后再没人用过
 的键（比如某个代理出口的账号被禁用）会把连接一直留到进程退出。
 """
+import atexit
 import base64
 import hashlib
 import http.client
 import io
 import os
+import platform
+import secrets
+import socket
 import ssl
+import subprocess
 import threading
 import time
 import urllib.error
@@ -50,6 +55,207 @@ _KEEPALIVE_OFF = ("0", "off", "false", "no")
 #: 错误响应体的读取上限。上游的错误体都是几百字节的小 JSON，调用方最多读 600 字节；
 #: 这个上限只是防止一个异常大的 body 把内存吃掉。超限的部分不读、连接直接丢弃。
 _ERROR_BODY_MAX = 1024 * 1024
+
+OFFICIAL_TLS13_CIPHERS = (
+    "TLS_AES_128_GCM_SHA256:"
+    "TLS_AES_256_GCM_SHA384:"
+    "TLS_CHACHA20_POLY1305_SHA256"
+)
+OFFICIAL_TLS12_CIPHERS = (
+    "ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-SHA256:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-AES128-SHA:"
+    "ECDHE-RSA-AES128-SHA:"
+    "ECDHE-ECDSA-AES256-SHA:"
+    "ECDHE-RSA-AES256-SHA:"
+    "AES128-GCM-SHA256:"
+    "AES256-GCM-SHA384:"
+    "AES128-SHA:"
+    "AES256-SHA"
+)
+OFFICIAL_TLS_GROUPS = "X25519:P-256:P-384"
+OFFICIAL_TLS_SIGALGS = (
+    "ECDSA+SHA256:RSA-PSS+SHA256:RSA+SHA256:"
+    "ECDSA+SHA384:RSA-PSS+SHA384:RSA+SHA384:"
+    "RSA-PSS+SHA512:RSA+SHA512:RSA+SHA1"
+)
+
+_TLS_FINGERPRINT_OFF = ("0", "off", "false", "no", "python", "native", "stdlib")
+_TLS_BRIDGE_OFF = ("0", "off", "false", "no", "none")
+_TLS_BRIDGE_CACHE = None
+_TLS_BRIDGE_PROCESS = None
+_TLS_BRIDGE_SECRET = ""
+_TLS_BRIDGE_LOCK = threading.Lock()
+
+
+def tls_fingerprint_mode():
+    """Return the active TLS profile: Node/OpenSSL by default, or stdlib."""
+    raw = os.environ.get("WB_TLS_FINGERPRINT", "python").strip().lower()
+    if raw in _TLS_FINGERPRINT_OFF or not raw:
+        return "python"
+    if raw == "node":
+        return "node"
+    raise ValueError("WB_TLS_FINGERPRINT must be python or node")
+
+
+def _apply_node_tls_profile(ctx):
+    """Keep the supported stdlib TLS defaults when no bridge is active."""
+    return ctx
+
+
+def _parse_tls_bridge_address(raw):
+    """Parse host:port, http://host:port, or LISTEN host:port."""
+    text = str(raw or "").strip()
+    if text.lower().startswith("listen "):
+        text = text[7:].strip()
+    try:
+        if "://" in text:
+            parts = urllib.parse.urlsplit(text)
+            if parts.scheme.lower() != "http":
+                return ""
+        else:
+            parts = urllib.parse.urlsplit("//" + text)
+        if not parts.hostname or parts.port is None:
+            return ""
+        return (parts.hostname, int(parts.port))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _tls_bridge_arch():
+    machine = (platform.machine() or "").strip().lower()
+    return {
+        "x86_64": "amd64",
+        "amd64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "x86": "386",
+        "i386": "386",
+        "i686": "386",
+        "armv7l": "arm",
+    }.get(machine, machine or "amd64")
+
+
+def _tls_bridge_candidates():
+    root = os.path.dirname(os.path.abspath(__file__))
+    system = (platform.system() or "").strip().lower()
+    if not system:
+        system = "windows" if os.name == "nt" else "linux"
+    suffix = ".exe" if os.name == "nt" else ""
+    return (
+        os.path.join(root, "bin", "wb-tls-bridge-%s-%s%s" % (
+            system, _tls_bridge_arch(), suffix)),
+        os.path.join(root, "bin", "wb-tls-bridge" + suffix),
+        os.path.join(root, "tools", "wb-tls-bridge", "wb-tls-bridge" + suffix),
+    )
+
+
+def _stop_tls_bridge_process(proc):
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    for stream in (getattr(proc, "stdin", None), getattr(proc, "stdout", None)):
+        try:
+            stream.close()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=3)
+    except Exception:
+        pass
+
+
+def _shutdown_tls_bridge():
+    global _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_CACHE, _TLS_BRIDGE_SECRET
+    with _TLS_BRIDGE_LOCK:
+        if _TLS_BRIDGE_PROCESS is not None:
+            _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
+        _TLS_BRIDGE_PROCESS = None
+        _TLS_BRIDGE_CACHE = None
+        _TLS_BRIDGE_SECRET = ""
+
+
+atexit.register(_shutdown_tls_bridge)
+
+
+def _ensure_auto_tls_bridge(bin_path):
+    """Start the bundled bridge once and cache the loopback address it prints."""
+    global _TLS_BRIDGE_CACHE, _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_SECRET
+    with _TLS_BRIDGE_LOCK:
+        if _TLS_BRIDGE_CACHE and _TLS_BRIDGE_PROCESS is not None:
+            if _TLS_BRIDGE_PROCESS.poll() is None:
+                return _TLS_BRIDGE_CACHE
+            _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
+            _TLS_BRIDGE_CACHE = None
+            _TLS_BRIDGE_PROCESS = None
+
+        proc = subprocess.Popen(
+            [bin_path, "--listen", "127.0.0.1:0", "--parent-watch"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        )
+        try:
+            secret = secrets.token_hex(32)
+            proc.stdin.write(secret + "\n")
+            proc.stdin.flush()
+            result = []
+            reader = threading.Thread(target=lambda: result.append(proc.stdout.readline()), daemon=True)
+            reader.start()
+            reader.join(5)
+            if reader.is_alive():
+                raise TimeoutError("TLS bridge startup timed out")
+            line = result[0] if result else ""
+            address = _parse_tls_bridge_address(line)
+            if not address:
+                raise RuntimeError("TLS bridge did not announce a listen address")
+        except Exception:
+            _stop_tls_bridge_process(proc)
+            raise
+        _TLS_BRIDGE_PROCESS = proc
+        _TLS_BRIDGE_SECRET = secret
+        _TLS_BRIDGE_CACHE = address
+        return address
+
+
+def tls_bridge_addr():
+    """Return the optional local Go/uTLS bridge address as (host, port)."""
+    if tls_fingerprint_mode() != "node":
+        return ""
+    raw = os.environ.get("WB_TLS_BRIDGE", "").strip()
+    if raw.lower() in _TLS_BRIDGE_OFF:
+        return ""
+    if ca_bundle_path():
+        raise RuntimeError("TLS bridge does not support WB_CA_BUNDLE; use Python TLS for custom CAs")
+    if raw and raw.lower() != "auto":
+        address = _parse_tls_bridge_address(raw)
+        if not address or address[0] not in ("127.0.0.1", "::1", "localhost"):
+            raise ValueError("TLS bridge must use a loopback address")
+        if not os.environ.get("WB_TLS_BRIDGE_SECRET"):
+            raise ValueError("WB_TLS_BRIDGE_SECRET is required for an external bridge")
+        return address
+    ident, _build = _resolve_ssl_factory()
+    if ident not in _INITIAL_SSL_FACTORIES:
+        return ""
+    if _PooledHTTPSConnection is not _INITIAL_POOLED_HTTPS_CONN:
+        return ""
+    for path in _tls_bridge_candidates():
+        if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+            continue
+        try:
+            return _ensure_auto_tls_bridge(path)
+        except Exception as exc:
+            raise RuntimeError("TLS bridge failed to start") from exc
+    raise RuntimeError("TLS bridge is enabled but no compatible binary was found")
 
 
 def enabled():
@@ -92,6 +298,11 @@ def _idle_ttl():
 _SSL_CONTEXT = None
 _SSL_CONTEXT_KEY = None
 _SSL_CONTEXT_LOCK = threading.Lock()
+_INITIAL_SSL_FACTORIES = (
+    getattr(http.client, "_create_https_context", None),
+    getattr(ssl, "_create_default_https_context", None),
+    ssl.create_default_context,
+)
 
 
 def ca_bundle_path():
@@ -165,11 +376,11 @@ def shared_ssl_context():
     """
     global _SSL_CONTEXT, _SSL_CONTEXT_KEY
     ident, build = _resolve_ssl_factory()
-    key = (ident, ca_bundle_path())
+    key = (ident, ca_bundle_path(), tls_fingerprint_mode())
     if _SSL_CONTEXT is None or _SSL_CONTEXT_KEY != key:
         with _SSL_CONTEXT_LOCK:
             ident, build = _resolve_ssl_factory()
-            key = (ident, ca_bundle_path())
+            key = (ident, ca_bundle_path(), tls_fingerprint_mode())
             if _SSL_CONTEXT is None or _SSL_CONTEXT_KEY != key:
                 if key[1]:
                     # Keep the system roots and add the private bundle on top:
@@ -179,6 +390,8 @@ def shared_ssl_context():
                     _SSL_CONTEXT.load_verify_locations(cafile=key[1])
                 else:
                     _SSL_CONTEXT = build()
+                if key[2] == "node" and ident in _INITIAL_SSL_FACTORIES:
+                    _apply_node_tls_profile(_SSL_CONTEXT)
                 _SSL_CONTEXT_KEY = key
     return _SSL_CONTEXT
 
@@ -330,6 +543,57 @@ class _PooledHTTPConnection(http.client.HTTPConnection):
 
 class _PooledHTTPSConnection(http.client.HTTPSConnection):
     response_class = _PooledResponse
+    _wb_proxy_url = ""
+
+    def connect(self):
+        target_host = self._tunnel_host or self.host
+        target_port = (self._tunnel_port or 443) if self._tunnel_host else self.port
+        if target_host not in ("127.0.0.1", "localhost", "::1"):
+            bridge = tls_bridge_addr()
+            if bridge:
+                self._connect_via_tls_bridge(bridge, target_host, target_port)
+                return
+        http.client.HTTPSConnection.connect(self)
+
+    def _connect_via_tls_bridge(self, bridge, target_host, target_port):
+        bridge_host, bridge_port = bridge
+        sock = socket.create_connection((bridge_host, bridge_port), self.timeout)
+        try:
+            target_authority = "[%s]:%d" % (target_host, int(target_port)) if ":" in target_host else "%s:%d" % (target_host, int(target_port))
+            lines = ["CONNECT %s HTTP/1.1" % target_authority,
+                     "Host: %s" % target_authority]
+            secret = os.environ.get("WB_TLS_BRIDGE_SECRET", "") if os.environ.get("WB_TLS_BRIDGE", "").strip().lower() not in ("", "auto") else _TLS_BRIDGE_SECRET
+            if not secret or "\r" in secret or "\n" in secret:
+                raise ValueError("TLS bridge authentication is unavailable")
+            lines.append("X-WB-Bridge-Auth: " + secret)
+            if self._wb_proxy_url:
+                lines.append("X-WB-Upstream-Proxy: %s" % self._wb_proxy_url)
+            lines.append("")
+            lines.append("")
+            sock.sendall("\r\n".join(lines).encode("latin-1"))
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = sock.recv(1)
+                if not chunk:
+                    raise OSError("TLS bridge closed before CONNECT reply")
+                buf += chunk
+                if len(buf) > 16384:
+                    raise OSError("TLS bridge CONNECT header too large")
+            status_line = buf.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+            parts = status_line.split(None, 2)
+            code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+            if code != 200:
+                raise OSError("TLS bridge CONNECT failed: %s" % status_line)
+        except Exception:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            raise
+        self.sock = sock
+
+
+_INITIAL_POOLED_HTTPS_CONN = _PooledHTTPSConnection
 
 
 class _KeepAlivePool(object):
@@ -540,6 +804,28 @@ def _proxy_auth_header(proxy_info):
     return "Basic " + base64.b64encode(creds.encode()).decode("ascii")
 
 
+def _proxy_url(proxy_info):
+    """Restore an HTTP proxy URL, including percent-encoded credentials."""
+    if not proxy_info:
+        return ""
+    host = str(proxy_info.get("host") or "")
+    if not host:
+        return ""
+    if ":" in host and not host.startswith("["):
+        host = "[%s]" % host
+    port = str(proxy_info.get("port") or "")
+    authority = host + (":" + port if port else "")
+    user = str(proxy_info.get("user") or "")
+    password = str(proxy_info.get("password") or "")
+    if user or password:
+        authority = "%s:%s@%s" % (
+            urllib.parse.quote(user, safe=""),
+            urllib.parse.quote(password, safe=""),
+            authority,
+        )
+    return "http://" + authority
+
+
 def _proxy_bypassed(host):
     """目标主机是否在系统代理旁路清单里（判定与 urllib ProxyHandler 完全一致）。
 
@@ -572,6 +858,7 @@ def _new_connection(scheme, host, port, proxy_info, timeout):
         if scheme == "https":
             conn = _PooledHTTPSConnection(proxy_info["host"], proxy_port, timeout=timeout,
                                           context=shared_ssl_context())
+            conn._wb_proxy_url = _proxy_url(proxy_info)
             tunnel_headers = {}
             auth = _proxy_auth_header(proxy_info)
             if auth:
@@ -637,6 +924,87 @@ def _exact_header_pairs(headers):
     if hasattr(headers, "items"):
         return list(headers.items())
     return list(headers)
+
+
+#: Canonical wire spelling for the official client header families. The legacy
+#: default path intentionally still uses .title(); this table is available to
+#: callers that opt into normalization without changing old request bytes.
+_OFFICIAL_HEADER_SPELLING = {
+    "accept": "Accept",
+    "accept-encoding": "Accept-Encoding",
+    "accept-language": "Accept-Language",
+    "authorization": "Authorization",
+    "b3": "b3",
+    "connection": "Connection",
+    "content-encoding": "Content-Encoding",
+    "content-length": "Content-Length",
+    "content-type": "Content-Type",
+    "host": "Host",
+    "origin": "Origin",
+    "proxy-authorization": "Proxy-Authorization",
+    "referer": "Referer",
+    "traceparent": "traceparent",
+    "user-agent": "User-Agent",
+    "x-agent-intent": "X-Agent-Intent",
+    "x-agent-purpose": "X-Agent-Purpose",
+    "x-agent-runtime": "X-Agent-Runtime",
+    "x-agent-type": "X-Agent-Type",
+    "x-api-key": "X-API-Key",
+    "x-auth-method": "X-Auth-Method",
+    "x-b3-parentspanid": "X-B3-ParentSpanId",
+    "x-b3-sampled": "X-B3-Sampled",
+    "x-b3-spanid": "X-B3-SpanId",
+    "x-b3-traceid": "X-B3-TraceId",
+    "x-codebuddy-request": "X-CodeBuddy-Request",
+    "x-conversation-id": "X-Conversation-ID",
+    "x-conversation-message-id": "X-Conversation-Message-ID",
+    "x-conversation-request-id": "X-Conversation-Request-ID",
+    "x-device-token": "X-Device-Token",
+    "x-domain": "X-Domain",
+    "x-enterprise-id": "X-Enterprise-Id",
+    "x-env-id": "X-Env-ID",
+    "x-ide-name": "X-IDE-Name",
+    "x-ide-type": "X-IDE-Type",
+    "x-ide-version": "X-IDE-Version",
+    "x-id-source": "X-Id-Source",
+    "x-machine-id": "X-Machine-ID",
+    "x-model-id": "X-Model-ID",
+    "x-no-enterprise-id": "X-No-Enterprise-Id",
+    "x-private-data": "X-Private-Data",
+    "x-product": "X-Product",
+    "x-product-version": "X-Product-Version",
+    "x-refresh-token": "X-Refresh-Token",
+    "x-request-id": "X-Request-ID",
+    "x-request-trace-id": "X-Request-Trace-Id",
+    "x-requested-with": "X-Requested-With",
+    "x-root-request-id": "X-Root-Request-ID",
+    "x-session-id": "X-Session-ID",
+    "x-stainless-arch": "x-stainless-arch",
+    "x-stainless-lang": "x-stainless-lang",
+    "x-stainless-os": "x-stainless-os",
+    "x-stainless-package-version": "x-stainless-package-version",
+    "x-stainless-retry-count": "x-stainless-retry-count",
+    "x-stainless-runtime": "x-stainless-runtime",
+    "x-stainless-runtime-version": "x-stainless-runtime-version",
+    "x-stainless-timeout": "x-stainless-timeout",
+    "x-tenant-id": "X-Tenant-Id",
+    "x-trace-id": "X-Trace-ID",
+    "x-user-id": "X-User-Id",
+    "x-userinfo": "X-Userinfo",
+    "monitor_promptpreparestarttime": "monitor_promptPrepareStartTime",
+    "monitor_httpsendtime": "monitor_httpSendTime",
+}
+
+
+def normalize_header_spelling(headers):
+    """Return a dict with the official case for known WorkBuddy headers."""
+    pairs = headers.items() if hasattr(headers, "items") else headers
+    normalized = {}
+    for name, value in pairs:
+        original = str(name).strip()
+        normalized[_OFFICIAL_HEADER_SPELLING.get(
+            original.lower(), original)] = value
+    return normalized
 
 
 def _request_headers(req, scheme, proxy_info, ordered_headers=None):
@@ -799,8 +1167,12 @@ def urlopen(req, timeout=30, proxy="", headers=None):
     # 池键按（目标, 代理串, 凭据）分：不同出口的账号绝不共用一条连接，即使代理
     # 地址相同、只是串写法不同（宁可多一条连接，也不赌两个出口是同一个）；同一
     # 出口上的不同账号也绝不共用（凭据摘要不同），见模块 docstring。
+    bridge_setting = os.environ.get("WB_TLS_BRIDGE", "") if tls_fingerprint_mode() == "node" else ""
+    bridge_secret = os.environ.get("WB_TLS_BRIDGE_SECRET", "") if bridge_setting else ""
+    transport_key = (tls_fingerprint_mode(), bridge_setting,
+                     hashlib.sha256(bridge_secret.encode("utf-8")).hexdigest() if bridge_secret else "")
     key = (scheme, host, port, proxy_raw,
-           _identity_discriminator(req, ordered_headers))
+           _identity_discriminator(req, ordered_headers), transport_key)
 
     def factory():
         return _new_connection(scheme, host, port, proxy_info, timeout)

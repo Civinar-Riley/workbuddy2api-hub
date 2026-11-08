@@ -32,6 +32,14 @@ let updatesStatus = 200;
 let saveReply = {ok: true};
 let saveStatus = 200;
 let confirmCalls = 0;
+let deviceTokenStatus = {
+  source: 'file',
+  configured_file: '/data/device-token',
+  loaded: true,
+  length: 48,
+  cached_at: 1760000000,
+};
+let deviceTokenReloadStatus = deviceTokenStatus;
 
 const SETTINGS = {
   panel_password_is_default: false,
@@ -44,6 +52,8 @@ const SETTINGS = {
   daily_chat_web: false,
   local_web_tools: false,
   update_check_enabled: true,
+  device_token_status: deviceTokenStatus,
+  desktop_chat_compat: false,
   version: '1.6.17',
   accounts_dir: '/data/accounts',
   usage_dir: '/data/usage',
@@ -70,9 +80,32 @@ dom.installDom({
         text: () => Promise.resolve(JSON.stringify(updatesPayload))});
     }
     if(target === '/settings/save') {
+      const body = options && options.body ? JSON.parse(options.body) : {};
+      const reply = Object.assign({}, saveReply);
+      if(body.upstream && typeof body.upstream.device_token_file === 'string'){
+        deviceTokenStatus = {
+          source: body.upstream.device_token_file ? 'file' : 'none',
+          configured_file: body.upstream.device_token_file,
+          loaded: !!body.upstream.device_token_file,
+          length: body.upstream.device_token_file ? 17 : 0,
+          cached_at: 1760000001,
+        };
+        reply.upstream = {device_token_file: deviceTokenStatus.configured_file};
+        reply.device_token_status = deviceTokenStatus;
+      }
+      if(typeof body.desktop_chat_compat === 'boolean'){
+        reply.desktop_chat_compat = body.desktop_chat_compat;
+      }
       return Promise.resolve({status: saveStatus, ok: saveStatus === 200,
-        json: () => Promise.resolve(saveReply),
-        text: () => Promise.resolve(JSON.stringify(saveReply))});
+        json: () => Promise.resolve(reply),
+        text: () => Promise.resolve(JSON.stringify(reply))});
+    }
+    if(target === '/settings/device-token/reload') {
+      return Promise.resolve({status: 200, ok: true,
+        json: () => Promise.resolve({ok: true,
+          device_token_status: deviceTokenReloadStatus}),
+        text: () => Promise.resolve(JSON.stringify({ok: true,
+          device_token_status: deviceTokenReloadStatus}))});
     }
     return Promise.resolve({status: 200, ok: true,
       json: () => Promise.resolve({}), text: () => Promise.resolve('{}')});
@@ -95,6 +128,9 @@ try {
       applyUpdateStatus: applyUpdateStatus,
       saveDailyChatModule: saveDailyChatModule,
       resetDailyChatModule: resetDailyChatModule,
+      saveDeviceTokenFile: saveDeviceTokenFile,
+      reloadDeviceToken: reloadDeviceToken,
+      saveDesktopChatCompat: saveDesktopChatCompat,
     };`)();
 } catch(e) {
   console.log = realLog;
@@ -154,6 +190,73 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('自动检查开关跟随后端值', element('setUpdateCheckEnabled').checked === true);
   check('打开设置页只读 /updates，不会自己发起检查',
         urls().indexOf('GET /updates') !== -1 && posts().length === 0, urls().join(', '));
+
+  // ---- 1b. 设备 Token 文件 / 脱敏状态 / 重载，以及桌面 chat 兼容开关 ----
+  check('设备 token 文件路径按脱敏状态写回',
+        element('setDeviceTokenFile').value === '/data/device-token',
+        element('setDeviceTokenFile').value);
+  check('设备 token 状态只显示长度并标明脱敏',
+        element('setDeviceTokenState').textContent === '(已加载 · 48 字符 · 已脱敏)',
+        element('setDeviceTokenState').textContent);
+  check('桌面 chat 兼容默认关闭',
+        element('setDesktopChatCompat').checked === false &&
+        element('setDesktopChatCompatState').textContent === '(默认关闭)');
+
+  calls.length = 0;
+  toasts.length = 0;
+  element('setDeviceTokenFile').value = '  /data/new-device-token  ';
+  const tokenPathBtn = {disabled: false};
+  await api.saveDeviceTokenFile(tokenPathBtn);
+  await settled();
+  const tokenSaves = posts().filter(c => c.url === '/settings/save');
+  const tokenSaveBody = tokenSaves.length ? JSON.parse(tokenSaves[0].body) : {};
+  check('设备 token 路径保存走 POST /settings/save',
+        tokenSaves.length === 1, urls().join(', '));
+  check('只提交 device_token_file，绝不上送 token 值',
+        tokenSaveBody.upstream &&
+        tokenSaveBody.upstream.device_token_file === '/data/new-device-token' &&
+        !Object.prototype.hasOwnProperty.call(tokenSaveBody.upstream, 'device_token'),
+        JSON.stringify(tokenSaveBody));
+  check('保存后立即刷新脱敏状态',
+        element('setDeviceTokenState').textContent === '(已加载 · 17 字符 · 已脱敏)',
+        element('setDeviceTokenState').textContent);
+  check('保存路径按钮结束后恢复可用', tokenPathBtn.disabled === false);
+
+  calls.length = 0;
+  toasts.length = 0;
+  element('setDesktopChatCompat').checked = true;
+  const compatBtn = {disabled: false};
+  await api.saveDesktopChatCompat(compatBtn);
+  await settled();
+  const compatSaves = posts().filter(c => c.url === '/settings/save');
+  const compatBody = compatSaves.length ? JSON.parse(compatSaves[0].body) : {};
+  check('桌面 chat 兼容开关按布尔值保存',
+        compatSaves.length === 1 && compatBody.desktop_chat_compat === true,
+        JSON.stringify(compatBody));
+  check('桌面 chat 兼容开关状态写回',
+        element('setDesktopChatCompat').checked === true &&
+        element('setDesktopChatCompatState').textContent === '(已启用)');
+
+  calls.length = 0;
+  toasts.length = 0;
+  deviceTokenReloadStatus = {
+    source: 'file',
+    configured_file: '/data/new-device-token',
+    loaded: true,
+    length: 21,
+    cached_at: 1760000002,
+  };
+  const reloadBtn = {disabled: false};
+  await api.reloadDeviceToken(reloadBtn);
+  await settled();
+  check('重新加载走带面板鉴权的 settings POST 路由',
+        posts().length === 1 &&
+        posts()[0].url === '/settings/device-token/reload',
+        urls().join(', '));
+  check('重新加载后只刷新脱敏状态',
+        element('setDeviceTokenState').textContent === '(已加载 · 21 字符 · 已脱敏)',
+        element('setDeviceTokenState').textContent);
+  check('重新加载按钮结束后恢复可用', reloadBtn.disabled === false);
 
   // ---- 2. 已是最新 / 检查失败两种状态 ----
   api.applyUpdateStatus({current_version: '1.6.18', latest_version: '1.6.18',

@@ -18,6 +18,7 @@ import argparse
 import base64
 import bisect
 import calendar
+import copy
 import errno
 import gzip
 import hashlib
@@ -11481,8 +11482,31 @@ def _usage_cache_maybe_save(kind, offset):
     return wrote
 
 
+def _panel_upstream_config(accounts_dir):
+    """Upstream settings safe for the panel; the token value never leaves here."""
+    config = wb_settings.upstream_config(accounts_dir)
+    config.pop("device_token", None)
+    return config
+
+
+def _panel_device_token_status(accounts_dir):
+    """Redacted device-token status; a broken file must not break settings."""
+    try:
+        return wb_accounts.device_token_status(accounts_dir)
+    except Exception as exc:
+        log("could not read device token status: %s" % type(exc).__name__,
+            level="WARN", tag="settings")
+        return {
+            "source": "none",
+            "configured_file": "",
+            "loaded": False,
+            "length": 0,
+            "cached_at": 0,
+        }
+
+
 def runtime_settings_view():
-    """Current panel-visible settings (never returns the password or the key)."""
+    """Current panel-visible settings (never returns passwords or secrets)."""
     key = API_KEY or ""
     if len(key) > 8:
         masked = key[:4] + "*" * 6 + key[-4:]
@@ -11624,7 +11648,9 @@ def runtime_settings_view():
         ],
         "keep_backups": wb_settings.keep_backups(ACCOUNTS_DIR),
         "keep_backups_max": wb_settings.MAX_KEEP_BACKUPS,
-        "upstream": wb_settings.upstream_config(ACCOUNTS_DIR),
+        "upstream": _panel_upstream_config(ACCOUNTS_DIR),
+        "device_token_status": _panel_device_token_status(ACCOUNTS_DIR),
+        "desktop_chat_compat": wb_settings.desktop_chat_compat(ACCOUNTS_DIR),
         "max_payload_mb": wb_settings.max_payload_mb(ACCOUNTS_DIR),
         "max_payload_bytes_effective": (wb_settings.max_payload_mb(ACCOUNTS_DIR) * 1024 * 1024
                                         if wb_settings.max_payload_mb(ACCOUNTS_DIR) is not None
@@ -11638,7 +11664,7 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
-        "version": "2.0.2",
+        "version": "2.0.3",
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
@@ -13424,6 +13450,27 @@ def preserve_request_contract_enabled():
         "1", "true", "yes", "on")
 
 
+def sanitize_tools(tools):
+    """Remove channel fingerprints from function descriptions."""
+    if not isinstance(tools, list):
+        return tools
+    out = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            out.append(tool)
+            continue
+        item = dict(tool)
+        fn = item.get("function")
+        if isinstance(fn, dict):
+            fn = dict(fn)
+            desc = fn.get("description")
+            if isinstance(desc, str):
+                fn["description"] = sanitize_text(desc, identity=True)
+            item["function"] = fn
+        out.append(item)
+    return out
+
+
 def sanitize_tool_calls(tool_calls):
     if not isinstance(tool_calls, list):
         return tool_calls
@@ -13475,6 +13522,9 @@ def sanitize_messages(messages):
             if isinstance(item.get("reasoning_content"), str):
                 item["reasoning_content"] = sanitize_text(
                     item["reasoning_content"], identity=False)
+            if not preserve_request_contract_enabled() and isinstance(item.get("reasoning"), str):
+                item["reasoning"] = sanitize_text(
+                    item["reasoning"], identity=False)
             if "tool_calls" in item:
                 item["tool_calls"] = sanitize_tool_calls(item["tool_calls"])
             out.append(item)
@@ -14050,7 +14100,7 @@ def _normalize_tool_parameters(fn):
     if params is None or not isinstance(params, dict):
         fn["parameters"] = {"type": "object", "properties": {}}
         return
-    p = dict(params)
+    p = copy.deepcopy(params)
     if p.get("type") != "object":
         p["type"] = "object"
     if "properties" not in p or not isinstance(p.get("properties"), dict):
@@ -14131,6 +14181,137 @@ def normalize_tools(obj):
             obj.pop("tools", None)
     else:
         obj.pop("tools", None)
+    if obj.get("tools") and not preserve_request_contract_enabled():
+        obj["tools"] = sanitize_tools(obj["tools"])
+
+
+def _schema_contains_ref(node):
+    if isinstance(node, dict):
+        if "$ref" in node:
+            return True
+        return any(_schema_contains_ref(value) for key, value in node.items()
+                   if key not in ("default", "examples", "example", "enum", "const"))
+    if isinstance(node, list):
+        return any(_schema_contains_ref(value) for value in node)
+    return False
+
+
+def _inline_kimi_schema_node(node, defs, seen=None, depth=0, budget=None):
+    """Inline local JSON Schema references for Kimi tool declarations."""
+    if budget is None:
+        budget = [10000]
+    if depth > 64:
+        return {}
+    if budget[0] <= 0:
+        budget[0] = -1
+        return {}
+    budget[0] -= 1
+
+    if isinstance(node, list):
+        out = []
+        for value in node:
+            expanded = _inline_kimi_schema_node(
+                value, defs, seen=seen, depth=depth + 1, budget=budget)
+            if budget[0] < 0:
+                return {}
+            out.append(expanded)
+        return out
+    if not isinstance(node, dict):
+        return node
+
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        name = None
+        for prefix in ("#/$defs/", "#/definitions/"):
+            if ref.startswith(prefix):
+                name = ref[len(prefix):].replace("~1", "/").replace("~0", "~")
+                break
+        if name is None:
+            return dict(node)
+        active = set(seen or ())
+        if not name or name not in defs:
+            return {"type": "object"}
+        if name in active:
+            return {}
+        active.add(name)
+        expanded = _inline_kimi_schema_node(
+            defs[name], defs, seen=active, depth=depth + 1, budget=budget)
+        if budget[0] < 0:
+            return {}
+        siblings = {}
+        root = depth == 0
+        for key, value in node.items():
+            if key == "$ref" or (
+                    root and key in ("$defs", "definitions", "$schema")):
+                continue
+            child = _inline_kimi_schema_node(
+                value, defs, seen=active, depth=depth + 1, budget=budget)
+            if budget[0] < 0:
+                return {}
+            siblings[key] = child
+        if siblings and isinstance(expanded, dict):
+            expanded = dict(expanded)
+            expanded.update(siblings)
+        return expanded
+
+    out = {}
+    root = depth == 0
+    for key, value in node.items():
+        if root and key in ("$defs", "definitions", "$schema"):
+            continue
+        if key in ("default", "examples", "example", "enum", "const"):
+            out[key] = value
+            continue
+        child = _inline_kimi_schema_node(
+            value, defs, seen=seen, depth=depth + 1, budget=budget)
+        if budget[0] < 0:
+            return {}
+        out[key] = child
+    return out
+
+
+def inline_kimi_tool_schemas(body):
+    """Inline $ref/$defs in Kimi tool schemas before the request leaves."""
+    if not isinstance(body, dict):
+        return body
+    model = str(body.get("model") or "").strip().lower()
+    if model.startswith("cn:"):
+        model = model[3:].strip()
+    if not model.startswith("kimi") or not isinstance(body.get("tools"), list):
+        return body
+
+    for tool in body["tools"]:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if not isinstance(fn, dict):
+            continue
+        params = fn.get("parameters")
+        if not isinstance(params, dict):
+            continue
+        if not ("$defs" in params or "definitions" in params
+                or _schema_contains_ref(params)):
+            continue
+
+        defs = {}
+        for key in ("definitions", "$defs"):
+            values = params.get(key)
+            if isinstance(values, dict):
+                defs.update(values)
+        budget = [10000]
+        expanded = _inline_kimi_schema_node(
+            params, defs, seen=set(), depth=0, budget=budget)
+        if budget[0] < 0:
+            continue
+        if not isinstance(expanded, dict):
+            expanded = {"type": "object"}
+        fn = dict(fn)
+        fn["parameters"] = expanded
+        _normalize_tool_parameters(fn)
+        tool["function"] = fn
+    return body
+
+
 # ---------------------------------------------------------------------------
 # Stop Sequence Normalization (avoids code 11101 on a string stop)
 # ---------------------------------------------------------------------------
@@ -14878,6 +15059,94 @@ def apply_prompt_mode(messages):
     return messages
 
 
+MIN_BUDGET_BY_EFFORT = {
+    "minimal": 4096,
+    "low": 4096,
+    "medium": 6144,
+    "high": 8192,
+    "xhigh": 12288,
+    "max": 16384,
+}
+MIN_OUTPUT_BUDGET_PROBE = 16
+
+
+def min_output_budget_enabled():
+    return os.environ.get("WB_MIN_OUTPUT_BUDGET", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def ensure_min_output_budget(body, model=None):
+    """Raise explicit output budgets to the floor for the active effort."""
+    if not isinstance(body, dict) or "max_tokens" not in body:
+        return body
+    try:
+        current = int(body.get("max_tokens"))
+    except (TypeError, ValueError):
+        return body
+    if current < MIN_OUTPUT_BUDGET_PROBE:
+        return body
+
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and \
+            str(thinking.get("type") or "").strip().lower() == "disabled":
+        return body
+    effort = str(body.get("reasoning_effort")
+                 or body.get("reasoningEffort") or "").strip().lower()
+    if effort == "none":
+        return body
+    floor = MIN_BUDGET_BY_EFFORT.get(effort)
+    if floor is None:
+        return body
+    cap = model_default_max_output_tokens(model) if model else None
+    if cap and cap < floor:
+        floor = cap
+    if current < floor:
+        body["max_tokens"] = floor
+    return body
+
+
+def is_starved_completion(content_text, tool_calls, finish_reason):
+    """A length stop with no visible output and no tool call needs a retry."""
+    return (str(finish_reason or "").strip().lower() == "length"
+            and not str(content_text or "").strip()
+            and not tool_calls)
+
+
+def build_starved_retry_body(body, floor=0):
+    """Build the no-thinking retry body for a starved completion."""
+    if not isinstance(body, dict):
+        return None, False
+    current = None
+    if "max_tokens" in body:
+        try:
+            current = int(body.get("max_tokens"))
+        except (TypeError, ValueError):
+            current = None
+        if current is not None and current < MIN_OUTPUT_BUDGET_PROBE:
+            return None, False
+
+    thinking = body.get("thinking")
+    effort = str(body.get("reasoning_effort")
+                 or body.get("reasoningEffort") or "").strip().lower()
+    if (isinstance(thinking, dict)
+            and str(thinking.get("type") or "").strip().lower() == "disabled") \
+            or effort in ("none", "off", "disabled", "disable"):
+        return None, False
+
+    out = dict(body)
+    out["thinking"] = {"type": "disabled"}
+    out.pop("reasoning_effort", None)
+    out.pop("reasoningEffort", None)
+    try:
+        floor = int(floor or 0)
+    except (TypeError, ValueError):
+        floor = 0
+    if floor > 0 and current is not None \
+            and current >= MIN_OUTPUT_BUDGET_PROBE and current < floor:
+        out["max_tokens"] = floor
+    return out, True
+
+
 def build_upstream_body(payload):
     model = payload.get("model") or ""
     # Map an unsupported level before anything below reads the effort, so the
@@ -14975,6 +15244,8 @@ def build_upstream_body(payload):
                         body["reasoning_effort"] = chosen
     # 显式档位模型（glm-5.1）：不带档位上游直接 400 / 11150，补上目录档位。
     ensure_explicit_effort(body, model)
+    if min_output_budget_enabled():
+        ensure_min_output_budget(body, model)
     body["stream"] = True
     if "stream_options" not in body:
         body["stream_options"] = {"include_usage": True}
@@ -16870,6 +17141,12 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             attempt_body = inject_prompt_cache_key(upstream_body, account.uid, session_key)
         else:
             attempt_body = upstream_body
+        if account.realm == "cn" and isinstance(attempt_body.get("tools"), list):
+            attempt_body = dict(attempt_body)
+            attempt_body["tools"] = [dict(tool, function=dict(tool["function"]))
+                                     if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+                                     else tool for tool in attempt_body["tools"]]
+            inline_kimi_tool_schemas(attempt_body)
         # 官方 CLI 的 chat 请求体（见 wb_identity）：gzip（RequestBodyGzip=true，
         # 带 Content-Encoding: gzip）+ 注入 cache_retention=long；Responses API
         # 的字段 / 客户端 metadata 不带。VSCode 官方主 chat 也默认 gzip
@@ -16880,12 +17157,6 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             attempt_body = {k: v for k, v in attempt_body.items()
                             if k not in wb_identity.CLI_BODY_DROP_FIELDS}
             attempt_body["cache_retention"] = wb_identity.CLI_CACHE_RETENTION
-        # 紧凑 JSON：官方客户端（Node JSON.stringify）不带分隔符后的空格，默认的
-        # json.dumps(separators=(", ", ": ")) 会让 body 字节与 Content-Length 都成
-        # 一处机器特征。上游解析等价，只影响线上字节。
-        attempt_data = encode_upstream_body(attempt_body)
-        if cli_identity or vscode_identity:
-            attempt_data = wb_identity.gzip_body(attempt_data)
         # 会话头族（X-Conversation-ID / -Request-ID）的语义见 wb_identity：桌面端
         # 官方客户端同一会话复用同一个 id：桌面端 / CLI 按 (账号, 会话键) 稳定
         # 派生（#448），客户端没给会话键时保持每请求新生成；VSCode 按官方
@@ -16903,6 +17174,13 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             purpose="chat", session_key=session_key,
             turn_request_id=turn_request_id, model=model,
             conversation_id=conv_id)
+        if (account.product == wb_identity.PRODUCT_DESKTOP
+                and wb_identity.desktop_chat_compat_enabled(getattr(account, "accounts_dir", None))):
+            attempt_body = wb_identity.inject_conversation_fields(
+                attempt_body, req_headers.get("X-Conversation-Request-ID"))
+        attempt_data = encode_upstream_body(attempt_body)
+        if cli_identity or vscode_identity:
+            attempt_data = wb_identity.gzip_body(attempt_data)
         if cli_identity or vscode_identity:
             req_headers["Content-Encoding"] = wb_identity.REQUEST_CONTENT_ENCODING
         req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
@@ -20544,7 +20822,8 @@ def _release_key_slot(key_entry):
 # 新增这类「不读 body」的面板路由，请加进这个元组，别在路由里另写一份。
 BODYLESS_PANEL_POSTS = ("/console/toggle", "/shutdown", "/updates/check",
                         "/updates/install", "/quota-scan/run",
-                        "/settings/restriction/reset")
+                        "/settings/restriction/reset",
+                        "/settings/device-token/reload")
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -20633,7 +20912,7 @@ class Handler(BaseHTTPRequestHandler):
             super().finish()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
-    server_version = "wb-proxy/2.0.2"
+    server_version = "wb-proxy/2.0.3"
     def log_message(self, fmt, *args):
         # 静默过滤前端看板高频定时心跳的正常 200 GET 请求（/logs、/usage、/accounts 轮询等）
         # 避免自增死循环刷屏与日志污染。遇 4xx/5xx 异常或所有非 GET 业务操作依然如实记录。
@@ -22977,6 +23256,20 @@ class Handler(BaseHTTPRequestHandler):
             "/v1/messages", "/messages",
             "/v1/messages/count_tokens", "/messages/count_tokens",
         )
+    def _route_device_token_reload(self):
+        """Reload the cached device token without exposing the token itself."""
+        try:
+            wb_accounts.reload_device_token(ACCOUNTS_DIR)
+        except Exception as exc:
+            log("device token reload failed: %s" % type(exc).__name__,
+                level="WARN", tag="settings")
+            return self._error(500, "device token reload failed",
+                               "invalid_request_error")
+        return self._json(200, {
+            "ok": True,
+            "device_token_status": _panel_device_token_status(ACCOUNTS_DIR),
+        })
+
     def _handle_settings_save(self):
         """Persist panel-managed settings from the web settings tab."""
         payload = self._payload_or_error()
@@ -23650,7 +23943,16 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return self._error(400, str(exc), "invalid_request_error")
             wb_settings.set_upstream_config(ACCOUNTS_DIR, patch)
-            reply["upstream"] = wb_settings.upstream_config(ACCOUNTS_DIR)
+            reply["upstream"] = _panel_upstream_config(ACCOUNTS_DIR)
+            reply["device_token_status"] = _panel_device_token_status(ACCOUNTS_DIR)
+        if "desktop_chat_compat" in payload:
+            raw = payload.get("desktop_chat_compat")
+            if not isinstance(raw, bool):
+                return self._error(
+                    400, "desktop_chat_compat must be true or false",
+                    "invalid_request_error")
+            wb_settings.set_desktop_chat_compat(ACCOUNTS_DIR, raw)
+            reply["desktop_chat_compat"] = raw
         if "usage" in payload:
             raw = payload.get("usage")
             if not isinstance(raw, dict):
@@ -26144,6 +26446,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._panel_ok():
                 return self._error(401, "panel password required", "invalid_request_error")
             return self._handle_settings_save()
+        if path == "/settings/device-token/reload":
+            if not self._panel_ok():
+                return self._error(401, "panel password required", "invalid_request_error")
+            return self._route_device_token_reload()
         if path == "/settings/restriction/reset":
             if not self._panel_ok():
                 return self._error(401, "panel password required", "invalid_request_error")

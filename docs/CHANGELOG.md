@@ -1,3 +1,12 @@
+## v2.0.3
+
+- **可选 Go/uTLS 传输桥**：新增本地 Go/uTLS CONNECT 桥接器，启用后使用 Node/OpenSSL 兼容的 ClientHello（18 个 Cipher、10 个 Extension、无 ALPN），Python 继续负责 HTTP 构造、keep-alive 复用与 SSE 读取。默认仍为 Python/OpenSSL，仅 `WB_TLS_FINGERPRINT=node` 时启用；支持自动发现便携包内的 Windows / macOS / Linux amd64、arm64 桥接器，OpenWrt 额外支持 armv7。桥接器只监听回环地址，使用启动时随机认证密钥，继续验证上游证书，并在 `WB_CA_BUNDLE` 或不受支持的代理路径下拒绝静默降级。
+- **设备 Token 支持**：账号新增独立 `deviceToken`；设置页可配置文件路径 `device_token_file`，面板只显示脱敏来源、长度和加载状态，token 本体不返回浏览器，并支持热重载。优先级为账号 token > `settings.json` 字面值 > 文件；导入/导出仅在显式包含 secrets 时保留设备 token。
+- **桌面 chat 兼容头**：新增默认关闭的桌面 chat 兼容模式，按需发送 SDK 兼容请求头、`X-Agent-Runtime`、`baggage` 与会话字段；环境变量 `WB_DESKTOP_CHAT_COMPAT` 优先于面板设置。
+- **请求体兼容与输出预算**：国内版 Kimi 工具 schema 自动内联 `$ref/$defs`；新增可选最小输出预算与空输出重试，降低推理模型把 token 全用在思考、最终 `finish_reason=length` 但无可见输出的概率。
+- **发布工程**：便携包与 OpenWrt 包接入可选 uTLS 桥；Go 桥由 CI 从源码交叉构建，五个便携目标与三个 OpenWrt 目标均为可选二进制；本仓库不提交本地构建产物。Release 正文改为优先从本文件提取对应版本说明，避免发布页只剩下载块。
+- 全量测试：**285 个套件：216 个 Python + 69 个 JS，`285 passed, 0 failed, 0 skipped`**。
+
 ## v2.0.2
 
 - **文本号池 / 媒体号池分区**（#841）：账号新增 `poolScope`（`text` / `media`），文本对话只派文本号，图片 / 视频只派媒体号，空媒体池不回落到文本池。老账号默认 `text`，升级后行为不变；面板可按号池筛选、单号切换或勾选批量挪池，`/accounts/set` 与 `/accounts/set-all` 同步支持 `poolScope`。单实例靠字段过滤，双实例可分别设 `WB_POOL_SCOPE=text|media` 做进程级硬隔离；`WB_POOL_SEPARATION=0` 可回退旧的单池行为。文本任务（签到、成长、猫猫、国际每日活跃）只处理文本号，Token 保活仍覆盖全部账号。

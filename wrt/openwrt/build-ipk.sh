@@ -4,17 +4,21 @@
 #
 # 用法：
 #   sh wrt/openwrt/build-ipk.sh [--arch <arch>] [--app-src <目录>]
+#                              [--with-bridge | --bridge-bin <目录>]
 #
 # 产物（写到 wrt/ipk/ 目录）：
 #   wrt/ipk/workbuddy2api_<版本>-<发布号>_all.ipk
 #
 # 为什么默认 Architecture: all
-#   本包**全部是脚本**：wb_*.py（纯标准库 Python）+ dashboard.html + ash 服务脚本 +
-#   uci 配置 —— 没有任何架构相关二进制。所以一个 all 包在 x86_64 / aarch64 /
-#   armv7a 等架构上通用，不需要为每个架构各打一份。--arch 只改 control 的
-#   Architecture 字段与产物文件名，给「按架构分目录的私有源」这类场景用。
+#   默认包全部是脚本：wb_*.py（纯标准库 Python）+ dashboard.html + ash 服务脚本 +
+#   uci 配置，没有任何架构相关二进制。--with-bridge / --bridge-bin 会额外携带
+#   Linux x86_64、aarch64、armv7 三个静态 Go 二进制，由 Python 按 platform 选择。
+#   这三个之外的架构仍可使用 Python/OpenSSL；不能把这个可选构建说成全硬件支持。
+#   --arch 只改 control 的 Architecture 字段与产物文件名，给「按架构分目录的
+#   私有源」这类场景用。
 #
-# 依赖：POSIX sh + python3（只用标准库）。
+# 依赖：基础包只需要 POSIX sh + python3（只用标准库）。可选桥构建还需要 Go
+#   1.24+；--bridge-bin 则可直接复用别处构建好的三个固定命名文件。
 #   不需要 OpenWrt SDK，不需要 ar/tar/gzip；路由器（busybox ash）或任意
 #   Linux/macOS 上都能直接跑。Windows 上要先有 POSIX sh（WSL / Git Bash）。
 #
@@ -42,10 +46,15 @@ set -e
 usage() {
 	cat <<'EOF'
 用法: sh wrt/openwrt/build-ipk.sh [--arch <arch>] [--app-src <目录>]
+                                  [--with-bridge | --bridge-bin <目录>]
 
   --arch <arch>    写进 control 的 Architecture 字段与产物文件名（默认 all）。
-                   纯脚本包用 all 即可（x86_64 / aarch64 / armv7a 通用）。
+                   默认纯脚本包用 all 即可；带桥的 all 包只含三个 Linux 目标。
   --app-src <目录> 含 wb_*.py + dashboard.html 的目录（可选，默认本仓库检出）。
+  --with-bridge    用 Go 交叉编译 linux/amd64、linux/arm64、linux/arm(GOARM=7)
+                   并放入包内；需要 Go 1.24+ 与 tools/wb-tls-bridge。
+  --bridge-bin <目录>
+                   不重新编译，直接装入该目录下三个约定文件名的桥二进制。
   -h, --help       显示本帮助
 
 产物: wrt/ipk/workbuddy2api_<版本>-<发布号>_<架构>.ipk
@@ -54,12 +63,32 @@ EOF
 
 ARCH=all
 APP_SRC=""
+BRIDGE_MODE=none
+BRIDGE_INPUT=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--arch)    [ -n "$2" ] || { echo "错误: --arch 需要一个参数" >&2; exit 1; }; ARCH="$2"; shift 2 ;;
 		--arch=*)  ARCH="${1#--arch=}"; shift ;;
 		--app-src) [ -n "$2" ] || { echo "错误: --app-src 需要一个参数" >&2; exit 1; }; APP_SRC="$2"; shift 2 ;;
 		--app-src=*) APP_SRC="${1#--app-src=}"; shift ;;
+		--with-bridge)
+			[ "$BRIDGE_MODE" = none ] || { echo "错误: --with-bridge 与 --bridge-bin 只能选一个" >&2; exit 1; }
+			BRIDGE_MODE=build
+			shift
+			;;
+		--bridge-bin)
+			[ -n "$2" ] || { echo "错误: --bridge-bin 需要一个目录参数" >&2; exit 1; }
+			[ "$BRIDGE_MODE" = none ] || { echo "错误: --with-bridge 与 --bridge-bin 只能选一个" >&2; exit 1; }
+			BRIDGE_MODE=input
+			BRIDGE_INPUT="$2"
+			shift 2
+			;;
+		--bridge-bin=*)
+			[ "$BRIDGE_MODE" = none ] || { echo "错误: --with-bridge 与 --bridge-bin 只能选一个" >&2; exit 1; }
+			BRIDGE_MODE=input
+			BRIDGE_INPUT="${1#--bridge-bin=}"
+			shift
+			;;
 		-h|--help) usage; exit 0 ;;
 		*) echo "错误: 未知参数 '$1'" >&2; usage >&2; exit 1 ;;
 	esac
@@ -76,6 +105,7 @@ esac
 # 包目录是 wrt/openwrt/workbuddy2api，应用源码默认取仓库根。
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+ROOT=$(CDPATH= cd -- "$REPO/.." && pwd)
 
 PY=
 for _c in python3 python; do
@@ -177,6 +207,68 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 DATA="$WORK/data-workbuddy2api"
 CTRL="$WORK/control-workbuddy2api"
+BRIDGE_DIR=""
+BRIDGE_SRC="$ROOT/tools/wb-tls-bridge"
+BRIDGE_LICENSE_NAMES="brotli.txt compress.txt utls.txt x-crypto.txt x-sys.txt"
+
+check_bridge_licenses() {
+	[ -s "$BRIDGE_SRC/README.md" ] || {
+		echo "错误: 含桥包缺少原项目许可 $BRIDGE_SRC/README.md" >&2; exit 1; }
+	for _license in $BRIDGE_LICENSE_NAMES; do
+		[ -s "$BRIDGE_SRC/licenses/$_license" ] || {
+			echo "错误: 含桥包缺少依赖许可证 licenses/$_license" >&2; exit 1; }
+	done
+}
+
+# prepare_bridge_bins <输出目录>
+#   固定生成三个 Python 运行时约定的文件名。Go 二进制用 CGO_ENABLED=0 静态
+#   链接，避免依赖路由器上的 glibc/musl；buildvcs=false 让脱离 .git 的源码树
+#   也能可复现地构建。
+prepare_bridge_bins() {
+	_out="$1"
+	check_bridge_licenses
+	mkdir -p "$_out"
+	if [ "$BRIDGE_MODE" = build ]; then
+		command -v go >/dev/null 2>&1 || {
+			echo "错误: --with-bridge 需要 Go 1.24+（PATH 里找不到 go）" >&2; exit 1; }
+		[ -f "$BRIDGE_SRC/go.mod" ] && [ -f "$BRIDGE_SRC/main.go" ] || {
+			echo "错误: 找不到桥源码 $BRIDGE_SRC" >&2; exit 1; }
+		echo "    交叉编译 Go/uTLS bridge（linux/amd64、linux/arm64、linux/arm GOARM=7）"
+		(
+			cd "$BRIDGE_SRC"
+			CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+				go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' \
+				-o "$_out/wb-tls-bridge-linux-amd64" .
+			CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+				go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' \
+				-o "$_out/wb-tls-bridge-linux-arm64" .
+			CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+				go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' \
+				-o "$_out/wb-tls-bridge-linux-arm" .
+		)
+	else
+		[ -d "$BRIDGE_INPUT" ] || {
+			echo "错误: --bridge-bin 目录不存在: $BRIDGE_INPUT" >&2; exit 1; }
+		for _name in \
+			wb-tls-bridge-linux-amd64 \
+			wb-tls-bridge-linux-arm64 \
+			wb-tls-bridge-linux-arm
+		do
+			[ -s "$BRIDGE_INPUT/$_name" ] || {
+				echo "错误: --bridge-bin 缺少非空文件 $_name" >&2; exit 1; }
+			cp "$BRIDGE_INPUT/$_name" "$_out/$_name"
+		done
+	fi
+	for _name in \
+		wb-tls-bridge-linux-amd64 \
+		wb-tls-bridge-linux-arm64 \
+		wb-tls-bridge-linux-arm
+	do
+		[ -s "$_out/$_name" ] || {
+			echo "错误: 桥二进制构建失败: $_name" >&2; exit 1; }
+		chmod 0755 "$_out/$_name"
+	done
+}
 
 # install_file <源文件> <暂存根> <安装路径> <权限>
 install_file() {
@@ -184,6 +276,15 @@ install_file() {
 	mkdir -p "$(dirname "$2/$3")"
 	cp "$1" "$2/$3"
 	chmod "$4" "$2/$3"
+}
+
+install_bridge_licenses() {
+	for _license in $BRIDGE_LICENSE_NAMES; do
+		install_file "$BRIDGE_SRC/licenses/$_license" "$1" \
+			"usr/share/licenses/workbuddy2api/$_license" 0644
+	done
+	install_file "$BRIDGE_SRC/README.md" "$1" \
+		usr/share/licenses/workbuddy2api/wb-tls-bridge-README.md 0644
 }
 
 echo "==> 2/4 暂存包内文件"
@@ -196,6 +297,23 @@ for _f in "$APP_SRC"/wb_*.py; do
 	install_file "$_f" "$DATA" "usr/lib/workbuddy2api/$(basename "$_f")" 0644
 done
 install_file "$APP_SRC/dashboard.html" "$DATA" usr/lib/workbuddy2api/dashboard.html 0644
+if [ "$BRIDGE_MODE" = none ]; then
+	echo "    uTLS bridge: 未包含（默认 Python/OpenSSL）"
+else
+	BRIDGE_DIR="$WORK/bridge-bin"
+	prepare_bridge_bins "$BRIDGE_DIR"
+	for _name in \
+		wb-tls-bridge-linux-amd64 \
+		wb-tls-bridge-linux-arm64 \
+		wb-tls-bridge-linux-arm
+	do
+		install_file "$BRIDGE_DIR/$_name" "$DATA" \
+			"usr/lib/workbuddy2api/bin/$_name" 0755
+	done
+	install_bridge_licenses "$DATA"
+	echo "    uTLS bridge: 已包含 linux/amd64、linux/arm64、linux/arm(GOARM=7)"
+	echo "    许可证: /usr/share/licenses/workbuddy2api/（5 个依赖 + 原项目 README）"
+fi
 
 mkdir -p "$CTRL"
 write_control "$PKG/Makefile" workbuddy2api net feeds/base/workbuddy2api "" "$CTRL/control"
@@ -319,10 +437,21 @@ def make_tar_gz(root, epoch):
             ti.mtime = epoch
             if stat.S_ISDIR(st.st_mode):
                 ti.type = tarfile.DIRTYPE
+                ti.mode = 0o755
                 tf.addfile(ti)
             else:
                 ti.type = tarfile.REGTYPE
                 ti.size = st.st_size
+                # Windows 的 NTFS/Git Bash 不保留 chmod 位；按包内约定写权限，
+                # 让同一脚本在 Windows 与 Linux 上生成一致的、可执行的包。
+                executable = (
+                    name in ("./etc/init.d/workbuddy2api",
+                             "./usr/bin/workbuddy2api-warm",
+                             "./postinst", "./prerm", "./postrm")
+                    or "/bin/wb-tls-bridge-linux-" in name
+                )
+                ti.mode = 0o755 if executable else (
+                    0o600 if name == "./etc/config/workbuddy2api" else 0o644)
                 with open(full, "rb") as f:
                     tf.addfile(ti, f)
     return buf.getvalue()

@@ -1,8 +1,9 @@
 #
 # WorkBuddy2API-Hub · OpenWrt 版
 #
-# 纯 Python 包（只用标准库，零 pip 依赖），与 CPU 架构无关，
-# 因此 PKGARCH:=all，产物是 workbuddy2api-1.6.20-r1.apk（架构 all）。
+# 基础包仍然只用 Python 标准库、零 pip 依赖，所以 PKGARCH:=all。可选的
+# Go/uTLS 桥构建会额外携带 x86_64、aarch64、armv7 三个静态二进制，由运行时
+# 按 CPU 选择；其他架构继续走 Python/OpenSSL，不能把该可选包说成“全硬件支持”。
 #
 # 在 OpenWrt SDK 里构建：
 #   sh wrt/openwrt/build-apk.sh <SDK 目录> [应用源码目录]
@@ -20,7 +21,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=workbuddy2api
-PKG_VERSION:=2.0.2
+PKG_VERSION:=2.0.3
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -33,6 +34,18 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 APP_SRC:=$(firstword $(wildcard $(CURDIR)/files/usr/lib/workbuddy2api) $(wildcard $(CURDIR)/../../app-src))
 ifeq ($(APP_SRC),)
 $(error 找不到应用源码（files/usr/lib/workbuddy2api 或 ../../app-src），请先运行 openwrt/build-apk.sh)
+endif
+
+# build-apk.sh 选择带桥构建时会把固定命名的二进制放进上述目录。manual copy
+# 也可以直接使用同一布局；没有这些文件时 BRIDGE_BINS 为空，安装内容与旧包一致。
+BRIDGE_BINS:=$(wildcard $(CURDIR)/files/usr/lib/workbuddy2api/bin/wb-tls-bridge-linux-*)
+BRIDGE_LICENSE_DIR:=$(CURDIR)/files/usr/share/licenses/workbuddy2api
+BRIDGE_LICENSE_NAMES:=brotli.txt compress.txt utls.txt x-crypto.txt x-sys.txt wb-tls-bridge-README.md
+BRIDGE_LICENSES:=$(foreach license,$(BRIDGE_LICENSE_NAMES),$(wildcard $(BRIDGE_LICENSE_DIR)/$(license)))
+ifneq ($(strip $(BRIDGE_BINS)),)
+ifneq ($(words $(BRIDGE_LICENSES)),6)
+$(error 含桥包缺少依赖许可证或原项目 README，拒绝打包)
+endif
 endif
 
 include $(INCLUDE_DIR)/package.mk
@@ -51,8 +64,10 @@ define Package/workbuddy2api/description
   OpenAI 兼容 API 的多账号网关：/v1/chat/completions 与 /v1/responses，
   自带看板（8788 端口）做账号管理、用量统计、定价估算与每日自动任务。
 
-  纯 Python 标准库实现（上游不引入任何 pip 依赖）。OpenWrt 把 ssl、sqlite3
-  与完整编码表拆成了独立包，所以依赖里显式带上 python3-openssl /
+  默认是纯 Python 标准库实现（上游不引入任何 pip 依赖），使用 Python/OpenSSL。
+  可选 Go/uTLS 桥构建仅随包附带 Linux x86_64、aarch64、armv7 三个静态二进制；
+  其他 CPU 架构没有桥，打开开关也会告警并保持 Python/OpenSSL。OpenWrt 把 ssl、
+  sqlite3 与完整编码表拆成了独立包，所以依赖里显式带上 python3-openssl /
   python3-sqlite3 / python3-codecs；Windows 专属功能（从桌面客户端内存
   回收解码密钥）在 Linux 上自动跳过，账号用看板的浏览器 OAuth 添加。
 
@@ -82,6 +97,12 @@ define Package/workbuddy2api/install
 	$(INSTALL_DIR) $(1)/usr/lib/workbuddy2api
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/usr/lib/workbuddy2api/wb_*.py $(1)/usr/lib/workbuddy2api/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/usr/lib/workbuddy2api/dashboard.html $(1)/usr/lib/workbuddy2api/
+	[ -z "$(BRIDGE_BINS)" ] || { \
+		$(INSTALL_DIR) $(1)/usr/lib/workbuddy2api/bin; \
+		$(INSTALL_BIN) $(BRIDGE_BINS) $(1)/usr/lib/workbuddy2api/bin/; \
+		$(INSTALL_DIR) $(1)/usr/share/licenses/workbuddy2api; \
+		$(INSTALL_DATA) $(BRIDGE_LICENSES) $(1)/usr/share/licenses/workbuddy2api/; \
+	}
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/usr/bin/workbuddy2api-warm $(1)/usr/bin/workbuddy2api-warm
 	$(INSTALL_DIR) $(1)/etc/init.d

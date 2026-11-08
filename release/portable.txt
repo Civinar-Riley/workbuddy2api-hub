@@ -49,6 +49,12 @@ allow-firewall.command
 # 随包价格快照：wb_pricing._candidate_file() 优先读它（存在即覆盖内置那份），
 # 少了它便携包只能退回 wb_pricing.py 里内嵌的旧价
 pricing/pricing.json
+tools/wb-tls-bridge/README.md
+tools/wb-tls-bridge/licenses/utls.txt
+tools/wb-tls-bridge/licenses/brotli.txt
+tools/wb-tls-bridge/licenses/compress.txt
+tools/wb-tls-bridge/licenses/x-crypto.txt
+tools/wb-tls-bridge/licenses/x-sys.txt
 
 wb_accounts.py
 wb_activity.py

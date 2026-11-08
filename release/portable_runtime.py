@@ -80,7 +80,7 @@ REQUIRED_FILES = (
     "Lib/platform.py", "Lib/socket.py",
     "Lib/json/__init__.py", "Lib/urllib/__init__.py", "Lib/urllib/request.py",
     "Lib/uuid.py", "Lib/secrets.py",
-    "Lib/argparse.py", "Lib/base64.py", "Lib/bisect.py", "Lib/calendar.py", "Lib/datetime.py",
+    "Lib/argparse.py", "Lib/base64.py", "Lib/bisect.py", "Lib/calendar.py", "Lib/copy.py", "Lib/datetime.py",
     "Lib/difflib.py", "Lib/fnmatch.py", "Lib/getpass.py", "Lib/gzip.py", "Lib/heapq.py",
     "Lib/ipaddress.py", "Lib/queue.py", "Lib/shutil.py", "Lib/random.py", "Lib/string.py",
     "Lib/subprocess.py", "Lib/threading.py", "Lib/sqlite3/__init__.py",

@@ -22,19 +22,23 @@ Run with: python tests/_test_release_assets.py
 import ast
 import glob
 import hashlib
+import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import unittest
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "release"))
 
 import matrix_legs  # noqa: E402
 import portable_runtime  # noqa: E402
 import release_tools as tools  # noqa: E402
+import wb_update_portable as portable_update  # noqa: E402
 
 # The legs the repository has to keep running for a release today. The gate
 # reads them from tests.yml rather than from this tuple - this is the
@@ -57,6 +61,16 @@ def make_runtime(directory, extra=()):
     for rel in list(portable_runtime.REQUIRED_FILES) + list(extra):
         path = os.path.join(directory, *rel.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b"stub:" + rel.encode("utf-8"))
+    return directory
+
+
+def make_bridges(directory):
+    """A stand-in directory containing every target release_tools requires."""
+    os.makedirs(directory, exist_ok=True)
+    for rel in tools.BRIDGE_FILES:
+        path = os.path.join(directory, os.path.basename(rel))
         with open(path, "wb") as fh:
             fh.write(b"stub:" + rel.encode("utf-8"))
     return directory
@@ -297,6 +311,15 @@ class ManifestTests(unittest.TestCase):
                      "tests/run_all.py"):
             self.assertNotIn(name, listed)
 
+    def test_bridge_build_outputs_are_ignored(self):
+        ignored = read(".gitignore")
+        for pattern in (
+                "tools/wb-tls-bridge/wb-tls-bridge",
+                "tools/wb-tls-bridge/wb-tls-bridge.exe",
+                "tools/wb-tls-bridge/bin/",
+                "bin/wb-tls-bridge*"):
+            self.assertIn(pattern, ignored)
+
 
 class VisibleLauncherTests(unittest.TestCase):
     """Issue #559: the silent default stays, the console entry is opt-in."""
@@ -504,6 +527,81 @@ class PortableZipTests(unittest.TestCase):
                                      runtime_dir=runtime)
 
 
+class PortableBridgeTests(unittest.TestCase):
+    """The optional bridge set is complete, executable and updater-visible."""
+
+    VERSION = tools.source_version(ROOT)
+    TAG = "v" + VERSION
+
+    def build(self, directory, bridge_dir):
+        runtime = make_runtime(os.path.join(directory, "python"))
+        return tools.build_portable(
+            self.VERSION, self.TAG, os.path.join(directory, "bridge.zip"),
+            source=ROOT, runtime_dir=runtime, bridge_dir=bridge_dir)
+
+    def test_all_targets_are_managed_files_with_executable_modes(self):
+        with tempfile.TemporaryDirectory(prefix="relbridge-") as directory:
+            bridges = make_bridges(os.path.join(directory, "bridges"))
+            path, files = self.build(directory, bridges)
+            with zipfile.ZipFile(path) as zf:
+                manifest = json.loads(zf.read(tools.MANIFEST_NAME).decode("utf-8"))
+                for rel in tools.BRIDGE_FILES:
+                    self.assertIn(rel, files)
+                    info = zf.getinfo(tools.PACKAGE_ROOT + "/" + rel)
+                    self.assertEqual((info.external_attr >> 16) & 0o777, 0o755)
+                    self.assertEqual(zf.read(info), b"stub:" + rel.encode("utf-8"))
+            self.assertEqual(manifest["files"], files)
+            self.assertEqual(manifest["bridges"]["prefix"], "bin/")
+            self.assertEqual(manifest["bridges"]["files"], list(tools.BRIDGE_FILES))
+            self.assertEqual(
+                manifest["bridges"]["targets"],
+                ["windows-amd64", "darwin-amd64", "darwin-arm64",
+                 "linux-amd64", "linux-arm64"])
+            self.assertTrue(set(tools.BRIDGE_FILES).issubset(
+                manifest["profiles"]["app"]))
+
+    def test_the_portable_updater_accepts_the_same_managed_list(self):
+        with tempfile.TemporaryDirectory(prefix="relbridge-update-") as directory:
+            bridges = make_bridges(os.path.join(directory, "bridges"))
+            path, files = self.build(directory, bridges)
+            stage = os.path.join(directory, "stage")
+            portable_update.safe_extract(path, stage, tools.PACKAGE_ROOT)
+            manifest = portable_update.validate_stage(
+                stage, self.VERSION, tools.PACKAGE_ROOT)
+            managed = portable_update.profile_files(manifest, None)
+            self.assertEqual(managed, files)
+            self.assertEqual(manifest["bridges"]["files"], list(tools.BRIDGE_FILES))
+            for rel in tools.BRIDGE_FILES:
+                path = os.path.join(stage, tools.PACKAGE_ROOT, *rel.split("/"))
+                self.assertTrue(os.path.isfile(path))
+                if os.name != "nt":
+                    self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o755)
+
+    def test_missing_or_empty_bridge_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="relbridge-bad-") as directory:
+            bridges = make_bridges(os.path.join(directory, "missing"))
+            os.remove(os.path.join(bridges, "wb-tls-bridge-linux-arm64"))
+            with self.assertRaises(SystemExit):
+                self.build(os.path.join(directory, "m1"), bridges)
+
+            bridges = make_bridges(os.path.join(directory, "empty"))
+            with open(os.path.join(bridges, "wb-tls-bridge-darwin-arm64"), "wb"):
+                pass
+            with self.assertRaises(SystemExit):
+                self.build(os.path.join(directory, "m2"), bridges)
+
+    def test_no_bridge_directory_keeps_the_historical_local_build(self):
+        with tempfile.TemporaryDirectory(prefix="relbridge-local-") as directory:
+            runtime = make_runtime(os.path.join(directory, "python"))
+            path, files = tools.build_portable(
+                self.VERSION, self.TAG, os.path.join(directory, "local.zip"),
+                source=ROOT, runtime_dir=runtime)
+            with zipfile.ZipFile(path) as zf:
+                manifest = json.loads(zf.read(tools.MANIFEST_NAME).decode("utf-8"))
+            self.assertFalse(any(name.startswith(tools.BRIDGE_PREFIX) for name in files))
+            self.assertNotIn("bridges", manifest)
+
+
 class ChecksumTests(unittest.TestCase):
     def test_covers_every_asset_once_in_sha256sum_format(self):
         with tempfile.TemporaryDirectory(prefix="relsum-") as directory:
@@ -563,6 +661,40 @@ class ReleaseBodyTests(unittest.TestCase):
         twice = tools.compose_body(once, self.block)
         self.assertEqual(once, twice)
         self.assertEqual(twice.count(tools.MARKER), 1)
+
+    def test_changelog_notes_fill_an_empty_release_body(self):
+        with tempfile.TemporaryDirectory(prefix="relnotes-") as directory:
+            changelog = os.path.join(directory, "CHANGELOG.md")
+            with open(changelog, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("## v9.9.9\n\n- reviewed note\n\n## v9.9.8\n\n- old\n")
+            out = os.path.join(directory, "body.md")
+            self.assertEqual(tools.main([
+                "body", "--version", "9.9.9", "--release", "1",
+                "--existing", os.devnull, "--changelog", changelog,
+                "--out", out]), 0)
+            with open(out, encoding="utf-8") as fh:
+                body = fh.read()
+        self.assertIn("- reviewed note", body)
+        self.assertNotIn("- old", body)
+        self.assertIn(tools.MARKER, body)
+
+    def test_maintainer_notes_win_over_changelog(self):
+        with tempfile.TemporaryDirectory(prefix="relnotes-") as directory:
+            changelog = os.path.join(directory, "CHANGELOG.md")
+            with open(changelog, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("## v9.9.9\n\n- generated note\n")
+            existing = os.path.join(directory, "existing.md")
+            with open(existing, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("## 本版要点\n\n- hand-written note\n\n" + tools.MARKER + "\n")
+            out = os.path.join(directory, "body.md")
+            self.assertEqual(tools.main([
+                "body", "--version", "9.9.9", "--release", "1",
+                "--existing", existing, "--changelog", changelog,
+                "--out", out]), 0)
+            with open(out, encoding="utf-8") as fh:
+                body = fh.read()
+        self.assertIn("- hand-written note", body)
+        self.assertNotIn("- generated note", body)
 
 
 class MatrixLegsTests(unittest.TestCase):
@@ -708,6 +840,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("/health", portable)
         self.assertIn("RUNTIME_SHA256", portable)
         self.assertIn("release-manifest.json", portable)
+
+    def test_bridge_binaries_are_cross_built_from_source_on_pinned_go(self):
+        bridge = workflow_jobs(self.text)["tls-bridge"]
+        self.assertIn("go-version: \"1.24.0\"", bridge)
+        self.assertIn("GOTOOLCHAIN: local", bridge)
+        self.assertIn("working-directory: tools/wb-tls-bridge", bridge)
+        self.assertIn("GOOS: ${{ matrix.goos }}", bridge)
+        self.assertIn("GOARCH: ${{ matrix.goarch }}", bridge)
+        self.assertIn("go build -trimpath -buildvcs=false", bridge)
+        for goos, goarch, _suffix in tools.BRIDGE_TARGETS:
+            self.assertIn("goos: %s" % goos, bridge)
+            self.assertIn("goarch: %s" % goarch, bridge)
+        self.assertNotIn("tools/wb-tls-bridge/wb-tls-bridge.exe", bridge)
+
+    def test_portable_job_explicitly_requires_every_downloaded_bridge(self):
+        portable = self.text.split("  portable:", 1)[1].split("\n  openwrt:", 1)[0]
+        self.assertIn("needs: [version, gate, tls-bridge]", portable)
+        self.assertIn("pattern: tls-bridge-*", portable)
+        self.assertIn("merge-multiple: true", portable)
+        self.assertIn("--bridge-dir bin", portable)
+        for name in tools.BRIDGE_FILES:
+            self.assertIn(name.replace("/", "\\"), portable)
+        self.assertIn("manifest.files -notcontains", portable)
 
     def test_every_release_writer_needs_the_full_matrix(self):
         # The gate derives the legs from tests.yml and checks each one by name.
@@ -861,13 +1016,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("python3-light", self.text)
 
     def test_packages_are_staged_flat_before_upload(self):
-        # The rehearsal caught this: download-artifact with merge-multiple
-        # rebuilds the tree relative to the upload root, so uploading
-        # wrt/ipk/*.ipk and wrt/apk/*.apk in one artifact delivered them as
-        # dist/ipk/ and dist/apk/ - the checksum step's dist/*.apk glob then
-        # matched nothing and the release job died on a FileNotFoundError.
-        # Every artifact is uploaded from one flat directory instead.
-        self.assertIn("merge-multiple: true", self.text)
+        # The rehearsal caught nested ipk/apk paths, so the OpenWrt job uploads
+        # one flat artifact. The bridge jobs add five more artifacts; the two
+        # release consumers must name only the assets that belong in dist/.
+        jobs = workflow_jobs(self.text)
+        for name in ("draft-preview", "write-draft"):
+            self.assertIn("name: portable-zip", jobs[name])
+            self.assertIn("name: openwrt-packages", jobs[name])
+            self.assertNotIn("pattern: tls-bridge", jobs[name])
         self.assertIn("cp wrt/ipk/*.ipk wrt/apk/*.apk dist/", self.text)
         for line in self.text.splitlines():
             stripped = line.strip()

@@ -65,6 +65,8 @@ import threading
 import time
 import uuid
 
+import wb_settings
+
 # 5.9.4 实测（本机国际版桌面客户端 5.9.4 的日志/解包）: 对话请求的版本号与 UA。
 # UA 末段 CLI/2.165.0 是客户端内置 CLI 的版本（cli/package.json），不是桌面端
 # 自己的版本。客户端日志原样记录：
@@ -119,9 +121,14 @@ def _identity_arch():
         machine, machine or "x64")
 
 
-def desktop_chat_compat_enabled():
+def desktop_chat_compat_enabled(accounts_dir=None):
     """Opt in to desktop chat headers without changing billing or other products."""
-    return os.environ.get("WB_DESKTOP_CHAT_COMPAT", "").strip() == "1"
+    value = os.environ.get("WB_DESKTOP_CHAT_COMPAT")
+    if value is not None:
+        return value.strip() == "1"
+    if accounts_dir:
+        return wb_settings.desktop_chat_compat(accounts_dir)
+    return False
 
 
 def cli_stainless_headers():
@@ -466,7 +473,7 @@ def build_identity_headers(product, realm, uid, token,
                            conversation_id=None, enterprise_id="",
                            tenant_id="", department="",
                            model=None, session_key=None, turn_request_id=None,
-                           private_data=None):
+                           private_data=None, accounts_dir=None):
     """回传这一轮要用的身分标头。product = 'workbuddy' (桌面端), 'vscode' 或 'cli'。
 
     conversation_id 由调用方显式指定时优先使用；留空时按身分处理：
@@ -530,7 +537,7 @@ def build_identity_headers(product, realm, uid, token,
             "X-Conversation-Message-ID": msg_id,
             "X-Request-ID": msg_id,
         }
-        compat = desktop_chat_compat_enabled()
+        compat = desktop_chat_compat_enabled(accounts_dir)
         headers.update(trace_headers(with_parent=compat))
         if compat:
             # Desktop profile reported by workbuddy2api-panel's headers.go
@@ -540,6 +547,11 @@ def build_identity_headers(product, realm, uid, token,
             # Desktop request timeout is not verified; do not copy CLI's budget.
             sdk_headers.pop("x-stainless-timeout", None)
             headers.update(sdk_headers)
+            headers["X-Agent-Runtime"] = "local-agent"
+            headers["baggage"] = (
+                "buddyId=,buddyName=,codebuddy.session_id=%s,"
+                "codebuddy.conversation_request_id=%s" % (conv, conv_req_id)
+            )
     elif product == PRODUCT_VSCODE:
         # 官方 VSCode 扩展 4.12.39997873 的 chat 请求头（解包源码实锤）：
         #   - 全局拦截器：UA / X-IDE-* / X-Product-Version（UserAgent +
@@ -646,3 +658,39 @@ def build_identity_headers(product, realm, uid, token,
         headers["X-Private-Data"] = private_data
 
     return headers
+
+
+def inject_conversation_fields(body, conv_req_id):
+    """Attach this turn's request id to the last user message without mutation."""
+    request_id = str(conv_req_id or "").strip()
+    if not isinstance(body, dict) or not request_id:
+        return body
+    msgs = body.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return body
+
+    idx = None
+    for index in range(len(msgs) - 1, -1, -1):
+        message = msgs[index]
+        if (isinstance(message, dict)
+                and str(message.get("role") or "").strip().lower() == "user"):
+            idx = index
+            break
+    if idx is None:
+        return body
+
+    current = msgs[idx]
+    existing = current.get("conversationRequestId")
+    if isinstance(existing, str) and existing.strip():
+        return body
+
+    out = dict(body)
+    new_msgs = list(msgs)
+    updated = dict(current)
+    updated["conversationRequestId"] = request_id
+    updated["startsNewUserRequest"] = True
+    if not str(updated.get("agent") or "").strip():
+        updated["agent"] = "cli"
+    new_msgs[idx] = updated
+    out["messages"] = new_msgs
+    return out

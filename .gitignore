@@ -44,6 +44,12 @@ wrt/apk/
 # build-apk.sh 把 wb_*.py 暂存进包目录再拷给 SDK，这是构建中间产物
 wrt/openwrt/workbuddy2api/files/usr/lib/
 
+# Go/uTLS bridge 只从源码构建；本地/CI 产物不得提交
+tools/wb-tls-bridge/wb-tls-bridge
+tools/wb-tls-bridge/wb-tls-bridge.exe
+tools/wb-tls-bridge/bin/
+bin/wb-tls-bridge*
+
 # 项目隔离测试环境
 .venv/
 .playwright-browsers/

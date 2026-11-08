@@ -16,6 +16,7 @@ repository-wide glob: that list is also the contract #29's updater consumes
 an accidental new file in the checkout can never end up in a release.
 
     python release/release_tools.py portable --version 1.6.17 --tag v1.6.17 \
+        --runtime python --bridge-dir bin \
         --out dist/workbuddy2api-hub-v1.6.17.zip
 """
 from __future__ import annotations
@@ -49,6 +50,21 @@ PROTECTED = ["accounts/", "usage/"]
 # Reproducible-build timestamp, the same convention the .ipk recipe uses.
 DEFAULT_EPOCH = 1700000000
 
+# The optional Go/uTLS bridge is built per target by CI. Keeping the exact
+# names here makes the ZIP, manifest and Python-side discovery use one contract.
+BRIDGE_PREFIX = "bin/"
+BRIDGE_TARGETS = (
+    ("windows", "amd64", ".exe"),
+    ("darwin", "amd64", ""),
+    ("darwin", "arm64", ""),
+    ("linux", "amd64", ""),
+    ("linux", "arm64", ""),
+)
+BRIDGE_FILES = tuple(
+    "%swb-tls-bridge-%s-%s%s" % (BRIDGE_PREFIX, goos, goarch, suffix)
+    for goos, goarch, suffix in BRIDGE_TARGETS
+)
+
 
 def read_manifest(path=MANIFEST):
     """Manifest paths, in file order, comments and blanks dropped."""
@@ -79,8 +95,37 @@ def _zip_date(epoch):
     return (t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
 
 
+def bridge_files(directory):
+    """Validate a directory containing every cross-built bridge binary.
+
+    No directory means a local source-only build, which keeps the historical
+    default for tests and developer checkouts. Once CI names one, every target
+    is mandatory: a silently partial portable package is worse than no package.
+    """
+    if directory is None:
+        return []
+    if not directory or not os.path.isdir(directory):
+        raise SystemExit("缺少 --bridge-dir：目录不存在 %s" % directory)
+    missing = []
+    empty = []
+    for rel in BRIDGE_FILES:
+        path = os.path.join(directory, os.path.basename(rel))
+        if not os.path.isfile(path):
+            missing.append(os.path.basename(rel))
+        elif os.path.getsize(path) == 0:
+            empty.append(os.path.basename(rel))
+    if missing or empty:
+        details = []
+        if missing:
+            details.append("缺少 " + ", ".join(missing))
+        if empty:
+            details.append("为空 " + ", ".join(empty))
+        raise SystemExit("Go/uTLS bridge 产物不完整：" + "；".join(details))
+    return list(BRIDGE_FILES)
+
+
 def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
-                   root=PACKAGE_ROOT, epoch=DEFAULT_EPOCH):
+                   root=PACKAGE_ROOT, epoch=DEFAULT_EPOCH, bridge_dir=None):
     """Write the portable ZIP and return (path, [managed files]).
 
     `runtime_dir` is the trimmed CPython the launchers look for under
@@ -99,12 +144,19 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
     missing = [p for p in files if not os.path.isfile(os.path.join(source, p))]
     if missing:
         raise SystemExit("清单里的文件不存在：%s" % ", ".join(missing))
+    bridge_assets = bridge_files(bridge_dir)
+    files.extend(bridge_assets)
+    if len(files) != len(set(files)):
+        raise SystemExit("清单与 bridge 产物存在重复路径")
 
     entries = []
     crlf_bytes = bytes([13, 10])
     lf_bytes = bytes([10])
     for name in files:
-        with open(os.path.join(source, name), "rb") as fh:
+        is_bridge = name in bridge_assets
+        path = (os.path.join(bridge_dir, os.path.basename(name))
+                if is_bridge else os.path.join(source, name))
+        with open(path, "rb") as fh:
             data = fh.read()
         lower = name.lower()
         if lower.endswith((".sh", ".command")):
@@ -114,6 +166,10 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
         elif lower.endswith(".bat"):
             # Windows 批处理脚本保持 CRLF
             data = data.replace(crlf_bytes, lf_bytes).replace(lf_bytes, crlf_bytes)
+            mode = 0o755
+        elif is_bridge:
+            mode = 0o755
+        elif lower.endswith(".exe") or "/wb-tls-bridge" in lower:
             mode = 0o755
         elif lower.endswith((".py", ".json", ".md", ".html", ".txt", "license")):
             data = data.replace(crlf_bytes, lf_bytes)
@@ -146,7 +202,8 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
         # wb_pricing.py's inlined snapshot for good.
         "profiles": {"app": [p for p in files
                               if (p.startswith("wb_") and p.endswith(".py"))
-                              or p == "dashboard.html"]},
+                              or p == "dashboard.html" or p in bridge_assets
+                              or (bridge_assets and p.startswith("tools/wb-tls-bridge/"))]},
         # The runtime is one managed subtree rather than 500 manifest lines.
         "runtime": {
             "prefix": "python/",
@@ -156,6 +213,13 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
         },
         "protected": PROTECTED,
     }
+    if bridge_assets:
+        manifest["bridges"] = {
+            "prefix": BRIDGE_PREFIX,
+            "files": bridge_assets,
+            "targets": ["%s-%s" % (goos, goarch)
+                        for goos, goarch, _suffix in BRIDGE_TARGETS],
+        }
     blob = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
@@ -203,6 +267,7 @@ def download_block(version, zip_name, ipk_name, apk_name):
         "  - 通用便携版（Python 源码 + 看板 + 启动脚本）",
         "  - Windows / macOS / Linux",
         "  - 需要 Python 3.9+",
+        "  - 内置 Windows amd64、macOS 与 Linux amd64 / arm64 的 Go/uTLS bridge",
         "  - 解压后使用对应平台的启动脚本",
         "",
         "- `%s`" % ipk_name,
@@ -231,6 +296,35 @@ def compose_body(existing, block):
     if not above:
         above = "<!-- 版本说明写在这里；下面的「下载说明」由 release 工作流维护 -->"
     return above + "\n\n" + MARKER + "\n" + block
+
+
+def changelog_section(path, version):
+    """Return one version section from docs/CHANGELOG.md, without its heading.
+
+    Release notes used to be typed into the draft by hand. If that step was
+    skipped, the published page kept only the generated download block even
+    though the repository had a complete changelog. The extractor stops at the
+    next level-two heading, so a release can reuse the reviewed text verbatim.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    heading = "## v%s" % version
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == heading:
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for index in range(start, len(lines)):
+        if lines[index].startswith("## "):
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
 
 
 def asset_names(version, release):
@@ -272,6 +366,8 @@ def main(argv=None):
                    help="trimmed CPython tree (release/portable_runtime.py prepare)")
     p.add_argument("--root", default=PACKAGE_ROOT,
                    help="folder every packaged file lives under (default %s)" % PACKAGE_ROOT)
+    p.add_argument("--bridge-dir", default=None,
+                   help="directory with all five wb-tls-bridge-<goos>-<goarch> binaries")
     p.add_argument("--epoch", type=int, default=int(os.environ.get("SOURCE_DATE_EPOCH", DEFAULT_EPOCH)))
 
     c = sub.add_parser("checksums", help="write SHA256SUMS")
@@ -282,6 +378,8 @@ def main(argv=None):
     b.add_argument("--version", required=True)
     b.add_argument("--release", default="1")
     b.add_argument("--existing", default=None, help="file with the current body ('-' for stdin)")
+    b.add_argument("--changelog", default=os.path.join(ROOT, "docs", "CHANGELOG.md"),
+                   help="markdown file containing the reviewed version notes")
     b.add_argument("--out", required=True)
 
     args = ap.parse_args(argv)
@@ -294,9 +392,12 @@ def main(argv=None):
     if args.cmd == "portable":
         path, files = build_portable(args.version, args.tag, args.out,
                                      source=args.source, runtime_dir=args.runtime,
-                                     root=args.root, epoch=args.epoch)
-        print("portable: %s（%d 个受管文件 + python/ 运行时 %s + %s）"
-              % (path, len(files), portable_runtime.RUNTIME_VERSION, MANIFEST_NAME))
+                                     root=args.root, epoch=args.epoch,
+                                     bridge_dir=args.bridge_dir)
+        bridge_count = sum(1 for name in files if name in BRIDGE_FILES)
+        print("portable: %s（%d 个受管文件 + python/ 运行时 %s + %d 个 bridge + %s）"
+              % (path, len(files), portable_runtime.RUNTIME_VERSION,
+                 bridge_count, MANIFEST_NAME))
         print("sha256  : %s" % sha256(path))
         return 0
 
@@ -313,6 +414,11 @@ def main(argv=None):
             with open(args.existing, encoding="utf-8") as fh:
                 existing = fh.read()
         zip_name, ipk_name, apk_name = asset_names(args.version, args.release)
+        notes = changelog_section(args.changelog, args.version)
+        existing_above = existing.split(MARKER, 1)[0].strip() if existing else ""
+        placeholder = "<!-- 版本说明写在这里；下面的「下载说明」由 release 工作流维护 -->"
+        if notes and existing_above in ("", placeholder):
+            existing = notes
         text = compose_body(existing, download_block(args.version, zip_name, ipk_name, apk_name))
         with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
