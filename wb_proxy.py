@@ -78,6 +78,9 @@ import wb_logstore
 import wb_media
 import wb_media_client
 import wb_media_tasks
+import wb_pool_media
+import wb_pool_scope
+import wb_pool_text
 import wb_pricing
 import wb_usage_io
 import wb_settings
@@ -811,10 +814,13 @@ def media_account_by_uid(uid):
     `import wb_proxy` 会把模块代码再跑一遍，拿到一个 `POOL is None` 的影子模块。
     后果是提交成功却立刻 "账号已不可用"。这里读的是本模块自己的 POOL 全局量。
     """
-    pool = POOL
+    _, pool = _ensure_pools()
     if pool is None:
         return None
     try:
+        # Task recovery may only resume on a media-pool account. Moving the
+        # account back to text makes the task fail clearly instead of silently
+        # using a text credential for image/video work.
         return pool.get(uid)
     except Exception:
         return None
@@ -875,6 +881,14 @@ def _pick_media_account_for(realm, model_id, cost_hint, excluded, config=None):
             "上游账号级限制生效中（整池暂停），%d 秒后再试" % (int(hold) + 1))
     pinned = pinned_account()
     if pinned is not None:
+        _, medias = _ensure_pools()
+        if medias is not None:
+            try:
+                medias.require(pinned)
+            except wb_pool_scope.ScopeViolation as exc:
+                raise wb_media.MediaError("AUTH", str(exc))
+            except wb_pool_text.PoolBoundaryBlocked as exc:
+                raise wb_media.MediaError("NO_ROUTE", str(exc))
         if pinned.realm != realm:
             raise wb_media.MediaError(
                 "INVALID_ARGS", "钉住的账号属于 %s 出口，媒体只走 %s" % (pinned.realm, realm))
@@ -885,7 +899,10 @@ def _pick_media_account_for(realm, model_id, cost_hint, excluded, config=None):
         if not ok:
             raise wb_media.MediaError("NO_CREDIT", "钉住的账号付不起这次调用：%s" % reason)
         return pinned
-    account = POOL.pick(realm=realm, exclude=excluded or set(), model=model_id)
+    _, medias = _ensure_pools()
+    account = (medias.pick(realm=realm, exclude=excluded or set(),
+                           model=model_id)
+               if medias is not None else None)
     if account is None:
         return None
     ok, reason = media_budget_ok(account, cost_hint)
@@ -3771,7 +3788,8 @@ def _remaining_payload(now=None, accounts=None):
     """
     now = time.time() if now is None else now
     if accounts is None:
-        accounts = list(POOL.accounts) if POOL else []
+        texts, _ = _ensure_pools()
+        accounts = texts.accounts() if texts else []
     accounts = [a for a in accounts
                 if getattr(a, "enabled", True) and getattr(a, "uid", "")]
     with _remaining_state_lock:
@@ -6759,6 +6777,49 @@ def recent_usage(limit=100, realm=None, page=1):
         "rows": page_rows
     }
 POOL = None
+# Dispatch views over the one shared AccountPool. The pool owns credentials,
+# refresh, proxies and guards; these two views only enforce which kind of
+# traffic each account may serve.
+TEXTS = None
+MEDIAS = None
+
+
+def _pool_views_ready():
+    """Whether both dispatch views are bound to the current POOL."""
+    return (TEXTS is not None and MEDIAS is not None
+            and getattr(TEXTS, "pool", None) is POOL
+            and getattr(MEDIAS, "pool", None) is POOL)
+
+
+def _ensure_pools():
+    """Return the dispatch views, rebinding them if POOL was replaced.
+
+    Production binds once after loading. Tests and embedders assign the
+    module-level POOL directly; without this check they would keep using a
+    stale pool from an earlier test.
+    """
+    if POOL is None:
+        return None, None
+    if not _pool_views_ready():
+        return _bind_pools()
+    return TEXTS, MEDIAS
+
+
+def _bind_pools():
+    """Bind text/media dispatch views to the loaded account pool."""
+    global TEXTS, MEDIAS
+    if POOL is None:
+        TEXTS = None
+        MEDIAS = None
+    else:
+        TEXTS = wb_pool_text.TextPool(POOL, log=log)
+        MEDIAS = wb_pool_media.MediaPool(POOL, log=log)
+    return TEXTS, MEDIAS
+
+
+def _pool_representative(realm=None, scope=None):
+    """``representative_account`` for code that already owns a pool view."""
+    return representative_account(realm=realm, scope=scope)
 
 # Pinned-account routes (/u/<ref>/v1/...): the handler strips the prefix and
 # resolves the ref before dispatching. One thread serves one connection at a
@@ -6969,7 +7030,11 @@ def account_views(realm=None):
     """List view of every account, including a live readiness flag."""
     if not POOL:
         return []
-    return POOL.list_public(realm=realm)
+    rows = POOL.list_public(realm=realm)
+    for row in rows:
+        row["poolScope"] = wb_pool_scope.normalize_scope(
+            row.get("poolScope"))
+    return rows
 
 
 def _finite_number(value):
@@ -11577,7 +11642,26 @@ def runtime_settings_view():
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
-    return POOL.representative() if POOL else None
+    return representative_account(scope=wb_pool_scope.SCOPE_TEXT)
+
+
+def representative_account(realm=None, scope=None):
+    """Pool representative with a legacy-pool compatibility fallback.
+
+    AccountPool accepts ``scope``; test and embedding pools written before
+    pool separation only accept ``realm``. Catalog refresh, health summaries
+    and media catalog reads all need the same seam, so the fallback lives
+    here instead of being repeated at every call site.
+    """
+    if POOL is None:
+        return None
+    if scope is not None:
+        try:
+            return POOL.representative(realm=realm, scope=scope)
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+    return POOL.representative(realm=realm)
 
 def quota_scan_interval_hours():
     """The polling period the quota scanner runs on, for the panel caption."""
@@ -12318,7 +12402,8 @@ def models_available_for(model, realm):
     """
     if POOL is None:
         return True
-    usable = [a for a in POOL.accounts
+    texts, _ = _ensure_pools()
+    usable = [a for a in (texts.accounts() if texts else POOL.accounts)
               if a.realm == realm and a.enabled and a.access_token]
     if not usable:
         return False
@@ -12726,7 +12811,8 @@ def fetch_remote_product_config(realm):
     """
     if realm not in ("intl", "cn") or POOL is None:
         return None
-    account = POOL.representative(realm=realm)
+    account = representative_account(
+        realm=realm, scope=wb_pool_scope.SCOPE_TEXT)
     if account is None or not account.access_token:
         log("remote catalog: no usable %s account, skipping" % realm)
         return None
@@ -12860,7 +12946,8 @@ def catalog_daily_pass(now=None):
     """
     done = []
     for realm in catalog_daily_due(now):
-        if POOL is None or POOL.representative(realm=realm) is None:
+        if POOL is None or representative_account(
+                realm=realm, scope=wb_pool_scope.SCOPE_TEXT) is None:
             continue
         out = refresh_catalog(realm)
         log("catalog daily: %s -> %s" % (realm, out.get("msg")))
@@ -12971,7 +13058,8 @@ def curated_live_sources(realm):
 
 
 def fetch_endpoint_models():
-    account = POOL.pick(realm="intl") if POOL else None
+    texts, _ = _ensure_pools()
+    account = texts.pick(realm="intl") if texts else None
     if account is None:
         log("model discovery skipped: no usable account")
         cached = _models_cache.get("intl", {}).get("data")
@@ -15378,7 +15466,9 @@ def retry_after_seconds(model, realm):
     """Shortest wait until any account of this realm can serve `model` again."""
     if not POOL:
         return 60
-    waits = [a.throttle_wait(model=model) for a in POOL.accounts
+    texts, _ = _ensure_pools()
+    accounts = texts.accounts() if texts else list(POOL.accounts)
+    waits = [a.throttle_wait(model=model) for a in accounts
              if a.realm == realm and a.enabled and a.access_token]
     active = [w for w in waits if w > 0]
     return int(min(active)) if active else 60
@@ -16444,8 +16534,16 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
     realm = target_realm or detect_model_realm(payload.get("model")) or CURRENT_REALM
     requested_model = str(payload.get("model") or "")
     model = intl_model_alias(requested_model, realm)
+    texts, _ = _ensure_pools()
     pinned = pin_account if pin_account is not None else pinned_account()
     if pinned is not None:
+        if texts is not None:
+            try:
+                texts.require(pinned)
+            except wb_pool_scope.ScopeViolation as exc:
+                raise PinnedAccountError(403, str(exc), pinned.uid)
+            except wb_pool_text.PoolBoundaryBlocked as exc:
+                raise PinnedAccountError(503, str(exc), pinned.uid)
         if allowed_accounts is not None and pinned.uid not in allowed_accounts:
             raise PinnedAccountError(
                 403, "pinned account '%s' is not allowed by this API key"
@@ -16496,13 +16594,13 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
     # Only pass `allowed` when the request actually carries a restriction: a
     # stub pool in tests (and any external pool implementation) keeps its old
     # count_ready signature for the unrestricted path.
-    if POOL is None:
+    if texts is None:
         ready_total = 1
     elif allowed_accounts is not None:
-        ready_total = POOL.count_ready(realm, model=model,
-                                       allowed=allowed_accounts)
+        ready_total = texts.count_ready(realm, model=model,
+                                        allowed=allowed_accounts)
     else:
-        ready_total = POOL.count_ready(realm, model=model)
+        ready_total = texts.count_ready(realm, model=model)
     total = 1 if pinned is not None else max(1, ready_total)
     tried = set()
     # 这一轮请求已经记过账的账号：重试轮（transient_hits 后 tried.clear() 整池
@@ -16602,7 +16700,7 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                           exclude=exclude, model=model, page=affinity_page)
             if allowed_accounts is not None:
                 kwargs["allowed"] = allowed_accounts
-            candidate = POOL.pick_for_session(**kwargs) if POOL else None
+            candidate = texts.pick_for_session(**kwargs) if texts else None
             if candidate is None:
                 return None
             if account_slot_acquire(candidate):
@@ -17100,7 +17198,9 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                   "window; the pool resumes in %ds" % (realm, model, wait))
         raise RateLimited(None, "usage exceeds frequency limit", wait=wait,
                           message=reason, reset_at=time.time() + wait)
-    enabled = [a for a in POOL.accounts
+    texts, _ = _ensure_pools()
+    text_accounts = texts.accounts() if texts else (POOL.accounts if POOL else [])
+    enabled = [a for a in text_accounts
                if a.realm == realm and a.enabled and a.access_token] if POOL else []
     if enabled and all(a.daily_limit_blocked() for a in enabled):
         reason = ("every usable account reached today's token limit (%s per "
@@ -17190,10 +17290,11 @@ def realm_fallback_target(realm, model):
         return ""
     if exclusive_realm(model):
         return ""
-    if POOL is None:
+    texts, _ = _ensure_pools()
+    if texts is None:
         return ""
     try:
-        if POOL.count_ready(realm="cn", model=model) <= 0:
+        if texts.count_ready(realm="cn", model=model) <= 0:
             return ""
     except Exception:
         return ""
@@ -17262,9 +17363,10 @@ def pool_unavailable_detail(realm, model=None, allowed_accounts=None):
     看整个区域——真机上就是这样：Key 绑的 2 个号在冷却，报错却列了全区 4 个
     在冷却的号，而 2 个健康的号（没绑这个 Key）一个字都没提（issue #665）。
     """
-    if POOL is None:
+    texts, _ = _ensure_pools()
+    if texts is None:
         return ""
-    accounts = [a for a in POOL.accounts if a.realm == realm]
+    accounts = [a for a in texts.accounts() if a.realm == realm]
     if allowed_accounts is not None:
         accounts = [a for a in accounts if a.uid in allowed_accounts]
     if not accounts:
@@ -21143,6 +21245,30 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+        # 媒体任务/目录/产物与文本模型清单、文本统计各走各的入口。
+        # 媒体入口上的 /v1/models 必须拒绝，否则客户端会以为这个实例也能对话；
+        # 文本入口上的媒体查询同样拒绝，避免把「没有媒体号」误报成媒体功能坏了。
+        is_media_route = (
+            path == "/v1/media/tasks"
+            or path.startswith("/v1/videos/")
+            or path in ("/v1/media/models", "/media/models")
+        )
+        is_text_route = path in (
+            "/v1/models", "/models", "/v1/balance-summary",
+            "/usage", "/v1/usage", "/usage/recent", "/usage/analytics",
+            "/usage/by-account", "/usage/remaining", "/usage/perf",
+            "/usage/timeseries", "/activity/history",
+        )
+        if is_media_route and not wb_pool_scope.entry_allows(
+                wb_pool_scope.SCOPE_MEDIA):
+            return self._error(
+                403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
+                "pool_boundary")
+        if is_text_route and not wb_pool_scope.entry_allows(
+                wb_pool_scope.SCOPE_TEXT):
+            return self._error(
+                503, "这个入口只服务图片 / 视频生成；文本模型请走文本号池的入口",
+                "pool_boundary")
         # The standalone configurator, for clients on machines that do not run
         # the gateway. Served before the panel gate and deliberately without a
         # session: the machines that need it are exactly the ones that cannot
@@ -21561,10 +21687,15 @@ class Handler(BaseHTTPRequestHandler):
         # Fold the usage log before building the view, so the 日限额 badge and
         # the parked count describe right now instead of the last request.
         apply_daily_guards()
+        texts, medias = _ensure_pools()
+        text_ready = texts.count_ready() if texts is not None else 0
+        media_ready = medias.count_ready() if medias is not None else 0
         return self._json_panel(200, {
             "accounts": account_views(realm=query.get('realm', [None])[0] or CURRENT_REALM),
             "storage": ACCOUNTS_DIR,
-            "usable": POOL.count_ready() if POOL else 0,
+            "usable": text_ready,
+            "text_ready": text_ready,
+            "media_ready": media_ready,
         })
 
     def _get_accounts_export(self, query):
@@ -21683,13 +21814,17 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         cn_accounts = POOL.task_accounts("cn") if POOL else []
+        texts, _ = _ensure_pools()
+        cn_accounts = [a for a in cn_accounts
+                       if texts is None or texts.allows(a)]
         if not cn_accounts:
             return self._json_panel(200, {"tasks": [], "summary": {}, "accounts": [], "msg": "未找到参与任务的国内版账号"})
         uid = (query.get("uid") or [None])[0]
         acc = None
         if uid and uid != "all":
             target = POOL.get(uid) if POOL else None
-            if target and target.realm == "cn":
+            if (target and target.realm == "cn"
+                    and (texts is None or texts.allows(target))):
                 acc = target
         if not acc:
             acc = cn_accounts[0]
@@ -22137,9 +22272,13 @@ class Handler(BaseHTTPRequestHandler):
             if payload is not None:
                 _catalog_raw[realm] = payload
         if payload is None:
-            account = POOL.representative(realm=realm) if POOL else None
+            texts, medias = _ensure_pools()
+            account = (medias.pick(realm=realm) if medias is not None
+                       else representative_account(
+                           realm=realm, scope=wb_pool_scope.SCOPE_MEDIA))
             if account is None:
-                raise wb_media.MediaError("NO_ROUTE", "该区没有可用账号，读不到媒体目录")
+                detail = medias.empty_detail(realm) if medias is not None else "该区没有可用账号。"
+                raise wb_media.MediaError("NO_ROUTE", detail)
             payload = wb_media_client._get_json(
                 account, wb_media_client.CONFIG_PATH,
                 wb_media_client.CONFIG_TIMEOUT_SECONDS)
@@ -22168,8 +22307,17 @@ class Handler(BaseHTTPRequestHandler):
                 "RATE_LIMIT",
                 "上游账号级限制生效中（整池暂停），%d 秒后再试" % (int(hold) + 1))
         allowed = self._key_allowed_accounts()
+        _, medias = _ensure_pools()
+        if medias is None:
+            raise wb_media.MediaError("UPSTREAM", "账号池未加载")
         pinned = pinned_account()
         if pinned is not None:
+            try:
+                medias.require(pinned)
+            except wb_pool_scope.ScopeViolation as exc:
+                raise wb_media.MediaError("AUTH", str(exc))
+            except wb_pool_text.PoolBoundaryBlocked as exc:
+                raise wb_media.MediaError("NO_ROUTE", str(exc))
             if allowed is not None and pinned.uid not in allowed:
                 raise wb_media.MediaError("AUTH", "钉住的账号不在本 Key 的绑定范围内")
             if pinned.realm != realm:
@@ -22187,8 +22335,8 @@ class Handler(BaseHTTPRequestHandler):
             return pinned
         skipped = []
         for _ in range(4):
-            account = POOL.pick(realm=realm, exclude=excluded, model=model_id,
-                                allowed=allowed)
+            account = medias.pick(realm=realm, exclude=excluded, model=model_id,
+                                  allowed=allowed)
             if account is None:
                 if skipped:
                     # 有账号、但都被预算刷掉了：说清是谁差多少，别让人以为是池子空了。
@@ -22197,9 +22345,8 @@ class Handler(BaseHTTPRequestHandler):
                         "没有账号付得起这次调用（预估 %g 积分）：%s"
                         % (cost_hint, "；".join(skipped)))
                 raise wb_media.MediaError(
-                    "UPSTREAM",
-                    "没有可用账号跑这次媒体请求%s"
-                    % pool_unavailable_detail(realm, model_id, allowed))
+                    "UPSTREAM", "没有可用账号跑这次媒体请求；"
+                    + medias.empty_detail(realm))
             ok, reason = media_budget_ok(account, cost_hint)
             if ok:
                 return account
@@ -22243,6 +22390,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_media_post(self, path, payload):
         """媒体 POST 的入口：开关 → 参数 → 限流 → 并发槽 → 选号 → 发请求 → 记账。"""
+        if not wb_pool_scope.entry_allows(wb_pool_scope.SCOPE_MEDIA):
+            return self._error(
+                403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
+                "pool_boundary")
         if path in ("/v1/videos", "/videos"):
             # 生视频是异步任务，流程与生图完全不同（提交 / 轮询 / 下载），单独一条。
             return self._media_video_submit(payload)
@@ -22616,6 +22767,10 @@ class Handler(BaseHTTPRequestHandler):
         """`GET /v1/media/tasks`：最近的任务（面板用）。"""
         if not self._authorized():
             return
+        if not wb_pool_scope.entry_allows(wb_pool_scope.SCOPE_MEDIA):
+            return self._error(
+                403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
+                "pool_boundary")
         try:
             limit = int((query.get("limit") or ["50"])[0])
         except (TypeError, ValueError):
@@ -22651,6 +22806,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         if not self._authorized():
             return
+        if not wb_pool_scope.entry_allows(wb_pool_scope.SCOPE_MEDIA):
+            return self._error(
+                403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
+                "pool_boundary")
         config = self._media_config()
         realm = (query.get("realm") or [None])[0] or config["realm"]
         if realm not in wb_settings.MEDIA_REALMS:
@@ -24403,6 +24562,9 @@ class Handler(BaseHTTPRequestHandler):
             targets = [target]
         else:
             targets = POOL.task_accounts("cn")
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if a is not None and (texts is None or texts.allows(a))]
         if not targets:
             return self._json_panel(200, {"ok": False, "msg": "未找到参与任务的国内版账号"})
         from wb_tasks import run_growth_tasks
@@ -24443,6 +24605,9 @@ class Handler(BaseHTTPRequestHandler):
         target = POOL.get(uid)
         if not target or target.realm != "cn":
             return self._json_panel(200, {"ok": False, "msg": "未找到指定的国内版账号"})
+        texts, _ = _ensure_pools()
+        if texts is not None and not texts.allows(target):
+            return self._json_panel(200, {"ok": False, "msg": "该账号属于媒体号池，不执行文本任务"})
         from wb_tasks import claim_task
         res = claim_task(target, code)
         invalidate_tasks_cache()
@@ -24464,6 +24629,9 @@ class Handler(BaseHTTPRequestHandler):
             targets = [target]
         else:
             targets = POOL.task_accounts("cn")
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if a is not None and (texts is None or texts.allows(a))]
         if not targets:
             return self._json_panel(200, {"ok": False, "msg": "未找到参与任务的国内版账号"})
         from wb_tasks import run_streak_bonus
@@ -24490,6 +24658,9 @@ class Handler(BaseHTTPRequestHandler):
             targets = [target]
         else:
             targets = POOL.task_accounts("cn")
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if a is not None and (texts is None or texts.allows(a))]
         if not targets:
             return self._json_panel(200, {"ok": False, "msg": "未找到参与任务的国内版账号"})
         from wb_tasks import do_cat_travel
@@ -24710,6 +24881,9 @@ class Handler(BaseHTTPRequestHandler):
                          if a.realm == "cn"
                          and a.task_active()
                          and not a.uses_enterprise_billing()])
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if a is not None and (texts is None or texts.allows(a))]
         results = []
         for account in targets:
             if account is None:
@@ -24738,6 +24912,9 @@ class Handler(BaseHTTPRequestHandler):
                        if a.realm == "intl" and a.task_active() and str(a.uid) in wanted]
         else:
             targets = POOL.task_accounts("intl")
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if a is not None and (texts is None or texts.allows(a))]
         results = []
         for account in targets:
             if account is None:
@@ -24762,6 +24939,9 @@ class Handler(BaseHTTPRequestHandler):
             targets = [POOL.get(uid)]
         else:
             targets = POOL.task_accounts("intl")
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if a is not None and (texts is None or texts.allows(a))]
         results = []
         for account in targets:
             if account is None:
@@ -24934,6 +25114,13 @@ class Handler(BaseHTTPRequestHandler):
         account = POOL.get(uid)
         if not account:
             return self._error(404, "no such account")
+        texts, _ = _ensure_pools()
+        if texts is not None and not texts.allows(account):
+            return self._error(
+                400,
+                "账号 %s 属于媒体号池，不发起文本模型请求，不能做文本测试"
+                % account.uid[:8],
+                "invalid_request_error")
         model = payload.get("model") or TEST_MODEL_DEFAULT
         row = probe_account(account, model)
         log("account test: uid=%s model=%s wall=%sms ok=%s%s"
@@ -24967,6 +25154,9 @@ class Handler(BaseHTTPRequestHandler):
         model = payload.get("model") or TEST_MODEL_DEFAULT
         targets = [a for a in (POOL.accounts if POOL else [])
                    if a.realm == realm and a.enabled]
+        texts, _ = _ensure_pools()
+        targets = [a for a in targets
+                   if texts is None or texts.allows(a)]
         group = str(payload.get("group") or "").strip()
         if group:
             targets = [a for a in targets if a.group == group]
@@ -25052,15 +25242,51 @@ class Handler(BaseHTTPRequestHandler):
             log("account %s disabled models: %s"
                 % (uid[:8],
                    ",".join(updated.get("disabledModels") or []) or "(none)"))
+        if "poolScope" in payload:
+            scope = payload.get("poolScope")
+            if not wb_pool_scope.is_valid_scope(scope):
+                return self._error(
+                    400, "poolScope must be 'text' or 'media'",
+                    "invalid_request_error")
+            updated = POOL.set_pool_scope(uid, scope)
+            if updated is None:
+                return self._error(404, "no such account")
+            log("account %s pool scope set to %s"
+                % (uid[:8], updated.get("poolScope")))
         if updated is None:
             return self._error(
                 400,
                 "nothing to update: pass 'enabled', 'tasksEnabled', 'proxy', "
-                "'proxySlot', 'weight', 'note' or 'group'"
+                "'proxySlot', 'weight', 'note', 'group', 'disabledModels' "
+                "or 'poolScope'"
             )
         return self._json_panel(200, {"account": updated})
 
     def _route_accounts_set_all(self, payload):
+        if "poolScope" in payload:
+            uids = payload.get("uids")
+            if not isinstance(uids, list) or not uids:
+                return self._error(
+                    400, "uids must be a non-empty list",
+                    "invalid_request_error")
+            scope = payload.get("poolScope")
+            if not wb_pool_scope.is_valid_scope(scope):
+                return self._error(
+                    400, "poolScope must be 'text' or 'media'",
+                    "invalid_request_error")
+            moved = POOL.set_pool_scope_many(
+                [str(uid) for uid in uids if uid], scope)
+            if moved is None:
+                return self._error(
+                    400, "poolScope must be 'text' or 'media'",
+                    "invalid_request_error")
+            log("accounts pool scope set to %s: %d account(s)"
+                % (wb_pool_scope.normalize_scope(scope), len(moved)))
+            return self._json_panel(200, {
+                "moved": len(moved),
+                "uids": moved,
+                "accounts": account_views(),
+            })
         group = str(payload.get("group") or "").strip()
         if group:
             raw_enabled = payload.get("enabled")
@@ -25926,6 +26152,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/v1/videos/") and path.endswith("/cancel"):
             if not self._authorized():
                 return
+            if not wb_pool_scope.entry_allows(wb_pool_scope.SCOPE_MEDIA):
+                return self._error(
+                    403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
+                    "pool_boundary")
             self._handle_expect_continue()
             self._discard_body()
             task_id = path[len("/v1/videos/"):-len("/cancel")].strip("/")
@@ -25958,6 +26188,14 @@ class Handler(BaseHTTPRequestHandler):
                     401, "missing or invalid API key", "authentication_error")
         elif not self._authorized():
             return
+        if is_media_route and not wb_pool_scope.entry_allows(wb_pool_scope.SCOPE_MEDIA):
+            return self._error(
+                403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
+                "pool_boundary")
+        if not is_media_route and not wb_pool_scope.entry_allows(wb_pool_scope.SCOPE_TEXT):
+            return self._error(
+                503, "这个入口只服务图片 / 视频生成；文本模型请走文本号池的入口",
+                "pool_boundary")
         # Fail closed until the Anthropic-to-Chat bridge has verified prompt-cache
         # parity. Reject before forwarding or recording any paid usage.
         if is_messages_route and not _anthropic_messages_enabled():
@@ -25979,14 +26217,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if is_account_route:
             return self._handle_accounts(path, payload)
+        if is_media_route:
+            return self._handle_media_post(path, payload)
         try:
             aliases = wb_settings.model_aliases(ACCOUNTS_DIR)
         except Exception:
             aliases = {}
         _apply_model_aliases(payload, aliases)
         _apply_background_model_alias(payload)
-        if is_media_route:
-            return self._handle_media_post(path, payload)
         # Check per-key concurrency limit (#359)
         key_ok, cur_key_conc, max_key_conc = _acquire_key_slot(self.key_entry)
         if not key_ok:
@@ -26826,11 +27064,12 @@ def _bootstrap_runtime(args):
     POOL = wb_accounts.AccountPool(ACCOUNTS_DIR, log=log)
     POOL.load()
     POOL.apply_proxy_slots()
+    _bind_pools()
     apply_reserve_credits()
     # WB_MAX_CONCURRENT_CHAT=auto: size the chat ceiling from the pool that was
     # just loaded. Runs before the listener exists, so no request can hold a
     # slot yet and the semaphore swap is safe.
-    resize_chat_slots(POOL.count_ready())
+    resize_chat_slots(TEXTS.count_ready() if TEXTS else 0)
     apply_daily_guards()
     load_persisted_realm()
     global SCHEDULER
@@ -26903,7 +27142,14 @@ def _report_first_run(args):
 
 def _log_startup_summary(args, api_key_generated):
     rep = current_account()
-    log("accounts   : %d total, %d usable" % (len(POOL.accounts), POOL.count_ready()))
+    texts, medias = _ensure_pools()
+    text_total = len(texts.accounts()) if texts else 0
+    media_total = len(medias.accounts()) if medias else 0
+    text_ready = texts.count_ready() if texts else 0
+    media_ready = medias.count_ready() if medias else 0
+    log("accounts   : %d total (文本号池 %d/%d, 媒体号池 %d/%d)"
+        % (len(POOL.accounts), text_ready, text_total,
+           media_ready, media_total))
     for account in POOL.accounts:
         log("  - %s  %s  %s  %s" % (account.uid[:8], account.nickname or "(no name)",
                                     account.domain, wb_accounts._human_delta(

@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from wb_fingerprint import derive_id, generate_request_id, session_id
+import wb_pool_scope
 import wb_activity
 import wb_atrest
 import wb_catalog
@@ -986,6 +987,14 @@ class Account(object):
         # 只做精确匹配不做前缀：行为可预期，不会误伤同前缀的其他模型。
         raw_deny = data.get("disabledModels")
         self.disabled_models = normalise_disabled_models(raw_deny)
+        # 号池归属：text=只跑文本模型，media=只跑图片/视频。老账号没有这个
+        # 字段时一律留在文本号池——任意 disabledModels 都不能推断成媒体号，
+        # 否则一次模型黑名单就会把正常对话账号悄悄挪走。
+        ps = data.get("poolScope")
+        if ps in ("text", "media"):
+            self.pool_scope = ps
+        else:
+            self.pool_scope = wb_pool_scope.DEFAULT_SCOPE
         # Live error state, never restored from the credential file: the label
         # describes the last upstream answer, not the credential. It used to be
         # persisted and read back, so a 429 that had long since recovered came
@@ -1186,6 +1195,7 @@ class Account(object):
             "note": self.note,
             "group": self.group,
             "disabledModels": list(self.disabled_models),
+            "poolScope": self.pool_scope,
             "lastError": self.last_error,
             "cooldownUntil": self.cooldown_until,
             # 持久化：上游风控限制按小时到工作日计，重启后仍然成立（见
@@ -1269,6 +1279,7 @@ class Account(object):
             "note": self.note,
             "group": self.group,
             "disabledModels": list(self.disabled_models),
+            "poolScope": self.pool_scope,
             "source": self.source,
             "apiKey": bool(self.is_api_key),
             "credentialMask": self.credential_mask(),
@@ -4792,7 +4803,35 @@ class AccountPool(object):
             return [a for a in self.accounts
                     if (not realm or a.realm == realm) and a.task_active()]
 
-    def count_ready(self, realm=None, model=None, allowed=None, refresh=True):
+    def set_pool_scope(self, uid, scope):
+        """Set one account's dispatch pool and persist it."""
+        scope = wb_pool_scope.normalize_scope(scope, default=None)
+        if scope is None:
+            return None
+        account = self.get(uid)
+        if account is None:
+            return None
+        account.pool_scope = scope
+        account.save(self.dir)
+        return account.public()
+
+    def set_pool_scope_many(self, uids, scope):
+        """Move several accounts between pools; returns the uids actually moved."""
+        scope = wb_pool_scope.normalize_scope(scope, default=None)
+        if scope is None:
+            return None
+        moved = []
+        for uid in uids:
+            account = self.get(uid)
+            if account is None:
+                continue
+            account.pool_scope = scope
+            account.save(self.dir)
+            moved.append(uid)
+        return moved
+
+    def count_ready(self, realm=None, model=None, allowed=None, refresh=True,
+                    scope=None):
         """How many accounts can serve right now.
 
         `refresh=False` keeps the count read-only: `Account.ready()` normally
@@ -4802,13 +4841,15 @@ class AccountPool(object):
         """
         with self._lock:
             snapshot = [a for a in self.accounts if not realm or a.realm == realm]
+        if scope is not None:
+            snapshot = [a for a in snapshot if wb_pool_scope.in_scope(a, scope)]
         return sum(1 for a in snapshot
                    if a.enabled and a.access_token
                    and a.ready(model=model, refresh=refresh)
                    and (allowed is None or a.uid in allowed))
 
     def pick_for_session(self, realm=None, session_key=None, exclude=None, model=None,
-                         page=None, allowed=None):
+                         page=None, allowed=None, scope=None):
         """Pick the account for one turn of a conversation.
 
         Three shapes, in order of preference:
@@ -4834,7 +4875,9 @@ class AccountPool(object):
         if page is not None:
             with self._lock:
                 pool_size = sum(1 for a in self.accounts
-                                if not realm or a.realm == realm)
+                                if (not realm or a.realm == realm)
+                                and (scope is None
+                                     or wb_pool_scope.in_scope(a, scope)))
             try:
                 whole_pool_page = int(page[1]) >= pool_size
             except (TypeError, ValueError, IndexError):
@@ -4849,17 +4892,19 @@ class AccountPool(object):
                 if allowed is not None and uid not in allowed:
                     continue
                 account = self.get(uid)
+                if scope is not None and not wb_pool_scope.in_scope(account, scope):
+                    account = None
                 if account and account.realm == realm and account.ready(model=model):
                     self.affinity.bind(session_key, uid)
                     return account
         account = self.pick(realm=realm, exclude=exclude, model=model,
                             page=None if whole_pool_page else page,
-                            allowed=allowed)
+                            allowed=allowed, scope=scope)
         if account is None and page is not None:
             # The page has nobody usable right now. Serving the conversation
             # from outside it beats not serving it at all.
             account = self.pick(realm=realm, exclude=exclude, model=model,
-                                allowed=allowed)
+                                allowed=allowed, scope=scope)
         # A page conversation is not bound on purpose: its rotation is what keeps
         # every account of the page warm, and a binding would pin it back to one
         # (the state it was released from). The page cursor carries its rotation.
@@ -4867,10 +4912,13 @@ class AccountPool(object):
             self.affinity.bind(session_key, account.uid)
         return account
 
-    def pick(self, realm=None, exclude=None, model=None, page=None, allowed=None):
+    def pick(self, realm=None, exclude=None, model=None, page=None, allowed=None,
+             scope=None):
         exclude = exclude or set()
         with self._lock:
             snapshot = [a for a in self.accounts if not realm or a.realm == realm]
+        if scope is not None:
+            snapshot = [a for a in snapshot if wb_pool_scope.in_scope(a, scope)]
         if allowed is not None:
             snapshot = [a for a in snapshot if a.uid in allowed]
         if page is not None:
@@ -5151,9 +5199,12 @@ class AccountPool(object):
                 return account
         return None
 
-    def representative(self, realm=None):
+    def representative(self, realm=None, scope=None):
         with self._lock:
             candidates = [a for a in self.accounts if not realm or a.realm == realm]
+            if scope is not None:
+                candidates = [a for a in candidates
+                              if wb_pool_scope.in_scope(a, scope)]
             for account in candidates:
                 if account.access_token: return account
             return candidates[0] if candidates else None

@@ -419,6 +419,18 @@ class Scheduler:
             self.log("账号池不可用，跳过本次巡检")
             return
         accounts = list(self.pool.accounts)
+        # 文本任务（国内签到 / 活动上报 / 猫猫旅行 / 国际每日活跃）只能跑
+        # 文本号池的账号；媒体号只参与图片 / 视频。Token 保活仍覆盖所有账号，
+        # 所以这里不把媒体号从循环里删掉，而是在下面各任务分支逐项过滤。
+        try:
+            import wb_pool_scope
+        except Exception:
+            wb_pool_scope = None
+
+        def text_task_account(acc):
+            return (wb_pool_scope is None
+                    or wb_pool_scope.account_scope(acc) == wb_pool_scope.SCOPE_TEXT)
+
         if not accounts and not (
                 self._codearts_checkin_pending(run_checkin)
                 or self._codearts_keepalive_pending(run_keepalive)):
@@ -484,7 +496,7 @@ class Scheduler:
                         self.log(f"! 账号 [{uid8}] Token 保活刷新失败: {acc.last_error}")
 
             # 2. 如果是国内版账号，检查每日签到与猫猫旅行
-            if acc.realm == "cn" and task_active:
+            if acc.realm == "cn" and task_active and text_task_account(acc):
                 if run_checkin:
                     if acc.can_checkin():
                         self.log(f"检测到国内版账号 [{uid8}] 今日尚未签到，执行自动签到...")
@@ -546,7 +558,8 @@ class Scheduler:
                     time.sleep(1.0)
 
             # 3. 如果是国际版账号，检查每日活跃对话 (送 30/50 积分福利)
-            if acc.realm == "intl" and task_active and run_daily_chat:
+            if (acc.realm == "intl" and task_active and run_daily_chat
+                    and text_task_account(acc)):
                 if acc.can_daily_chat():
                     daily_chat_targets.append(acc)
 

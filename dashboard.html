@@ -2022,6 +2022,22 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
   var SKIP = {SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1};
   var DICT = {
     '媒体': 'Media',
+    '全部号池': 'All pools',
+    '文本号池': 'Text pool',
+    '媒体号池': 'Media pool',
+    '未勾选': 'None selected',
+    '勾选移入媒体池': 'Move selected to media pool',
+    '勾选移回文本池': 'Move selected to text pool',
+    '号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换': 'Pool: text accounts serve chat only; media accounts serve image / video only. Click to switch.',
+    '勾选后可批量挪号池': 'Tick to move this account between pools in bulk',
+    '先勾选要挪号池的账号': 'Select the accounts to move first',
+    '已把 ': 'Moved ',
+    ' 个账号移入媒体号池': ' account(s) to the media pool',
+    ' 个账号移入文本号池': ' account(s) to the text pool',
+    '批量挪号池失败: ': 'Failed to move accounts: ',
+    '已移入媒体号池（只跑图片 / 视频）': 'Moved to the media pool (image / video only)',
+    '已移回文本号池': 'Moved back to the text pool',
+    '切换号池失败: ': 'Failed to switch pool: ',
     '媒体生成': 'Media generation',
     '生图 / 生视频的开关在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。': 'The image / video switches live on the Settings page; this page shows model limits and recent tasks. Every generation really spends account credits.',
     '可用媒体模型': 'Available media models',
@@ -3499,6 +3515,23 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '猫猫正在旅行途中，请稍后再来查看！': 'The cat is still travelling; check again later!'
   };
   var HANT_PHRASES = {
+    "全部号池": "全部號池",
+    "文本号池": "文字號池",
+    "媒体号池": "媒體號池",
+    "未勾选": "未勾選",
+    "勾选移入媒体池": "勾選移入媒體池",
+    "勾选移回文本池": "勾選移回文字池",
+    "号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换":
+      "號池：文字號池只跑對話，媒體號池只跑圖片 / 影片。點一下切換",
+    "勾选后可批量挪号池": "勾選後可批次挪號池",
+    "先勾选要挪号池的账号": "先勾選要挪號池的帳號",
+    "已把 ": "已把 ",
+    " 个账号移入媒体号池": " 個帳號移入媒體號池",
+    " 个账号移入文本号池": " 個帳號移入文字號池",
+    "批量挪号池失败: ": "批次挪號池失敗: ",
+    "已移入媒体号池（只跑图片 / 视频）": "已移入媒體號池（只跑圖片 / 影片）",
+    "已移回文本号池": "已移回文字號池",
+    "切换号池失败: ": "切換號池失敗: ",
     "API 等价花费": "API 等價花費",
     "API 等价": "API 等價",
     " · 周期已过": " · 週期已過",
@@ -5682,6 +5715,14 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" onclick="setAll(false, this)">全部停用</button>
     <button class="sec" onclick="setCurrentGroup(true, this)">当前分组启用</button>
     <button class="sec" onclick="setCurrentGroup(false, this)">当前分组停用</button>
+    </div>
+    <div class="tb-group tb-pool">
+    <button class="sec" id="pfAll" onclick="poolFilter('all', this)">全部号池</button>
+    <button class="sec" id="pfText" onclick="poolFilter('text', this)">文本号池</button>
+    <button class="sec" id="pfMedia" onclick="poolFilter('media', this)">媒体号池</button>
+    <span id="batchPoolCount" style="font-size:12px;color:var(--dim);align-self:center">未勾选</span>
+    <button class="sec" id="batchToMedia" onclick="batchPoolScope('media', this)" title="把勾选的账号批量移入媒体号池（只跑图片 / 视频）" disabled>勾选移入媒体池</button>
+    <button class="sec" id="batchToText" onclick="batchPoolScope('text', this)" title="把勾选的账号批量移回文本号池（恢复文本模型）" disabled>勾选移回文本池</button>
     </div>
   </div>
     <div id="accounts"></div>
@@ -10910,6 +10951,14 @@ function accountRow(a){
     + '<td style="text-align:left" data-label="账号">'
     // 账号名（大一号）+ 备注 chip 同一行；备注从独立一行收进账号后面。
     +   '<div class="acct-name-row">'
+    +     '<input type="checkbox" class="acct-sel" data-uid="' + uidAttr + '"'
+    +     ' onchange="updateBatchPoolBar()" onclick="event.stopPropagation()"'
+    +     ' style="vertical-align:middle;margin-right:2px" title="勾选后可批量挪号池">'
+    +     '<span class="badge mini' + ((a.poolScope==='media')?' warn':'') + '"'
+    +     ' style="cursor:pointer;margin-right:4px"'
+    +     ' title="号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换"'
+    +     ' onclick="toggleAccountPoolScope(&quot;' + uidAttr + '&quot;,' + ((a.poolScope==='media')?'false':'true') + ')">'
+    +     ((a.poolScope==='media')?'媒体号池':'文本号池') + '</span>'
     +     '<span class="acct-name" title="' + esc(a.nickname) + '">' + esc(a.nickname) + '</span>'
     // 静态 API Key 账号：没有登录身份，也没有签到/成长体系，标出来省得当成
     // 普通 OAuth 号去点「重新登录」。悬停给出脱敏后的凭证，方便对上是哪一把。
@@ -11353,6 +11402,7 @@ let ACCT_PAGE = 1;
 let ACCT_TOTAL_PAGES = 1;
 let ACCT_PAGE_REALM = null;
 let ACCT_PAGE_FILTER = null;
+let POOL_FILTER = 'all';
 // 账号表上次真正画进 DOM 的内容指纹（同最近请求表的 lastRecentFp）：轮询拿回来
 // 的数据没变就整段跳过，不重拼 HTML、不重排。
 let lastAccountsFp = null;
@@ -11364,7 +11414,8 @@ function accountsRenderFp(){
   // （今日活动列）、视图区域、页码、表头排序、筛选条件、本地日期（「今日」口径）。
   // 筛选也进指纹：不靠「改筛选一定无参调用 renderAccounts()」这条约定兜底。
   return [
-    window.VIEW_REALM || 'intl', ACCT_PAGE, JSON.stringify(SORT_STATE.accounts || null),
+    window.VIEW_REALM || 'intl', ACCT_PAGE, POOL_FILTER,
+    JSON.stringify(SORT_STATE.accounts || null),
     JSON.stringify(ACCOUNT_FILTERS),
     new Date().toDateString(),
     JSON.stringify(window.ACCOUNTS || []), JSON.stringify(USAGE_BY_ACCOUNT || {}),
@@ -11407,10 +11458,13 @@ function renderAccounts(){
   const box = document.getElementById('accounts');
   const currentView = (window.VIEW_REALM || "intl");
   let list = accountsInView();
+  if(POOL_FILTER !== 'all'){
+    list = list.filter(a => String(a.poolScope || 'text') === POOL_FILTER);
+  }
   const skipIfSame = arguments[0] === true;
   if(ACCT_PAGE_REALM !== currentView){ ACCT_PAGE_REALM = currentView; ACCT_PAGE = 1; }
   const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status
-    + '\u0001' + ACCOUNT_FILTERS.group;
+    + '\u0001' + ACCOUNT_FILTERS.group + '\u0001' + POOL_FILTER;
   const groupSelect = document.getElementById('accountGroupFilter');
   if(groupSelect){
     const groups = Array.from(new Set(list.map(a => String(a.group || '')).filter(Boolean))).sort();
@@ -11501,6 +11555,7 @@ function renderAccounts(){
   // 表下不再堆两行说明图例（出站身份解释留在每行身份按钮组的悬停提示里，
   // 轮询/粘性说明挂到「账号列表」标题上），表格底部保持干净。
   applyTableSort('accounts');
+  updateBatchPoolBar();
 }
 
 // 自动补积分快照：每个账号每次页面加载最多补一次，只补缺积分的那几个号。原来
@@ -11582,6 +11637,54 @@ async function toggleAccount(uid, enable, btn){
     toast('操作失败: ' + e.message, 'bad');
   }finally{
     if(btn) btn.disabled = false;
+  }
+}
+function poolFilter(scope, btn){
+  POOL_FILTER = scope === 'media' ? 'media' : (scope === 'text' ? 'text' : 'all');
+  ['pfAll','pfText','pfMedia'].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el) el.classList.toggle('active', el === btn);
+  });
+  ACCT_PAGE = 1;
+  renderAccounts();
+}
+function acctSelUids(){
+  return Array.from(document.querySelectorAll('#accounts .acct-sel:checked'))
+    .map(function(el){ return el.dataset.uid; })
+    .filter(Boolean);
+}
+function updateBatchPoolBar(){
+  const n = acctSelUids().length;
+  const label = document.getElementById('batchPoolCount');
+  if(label) label.textContent = n ? ('已选 ' + n + ' 个') : '未勾选';
+  ['batchToMedia','batchToText'].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el) el.disabled = !n;
+  });
+}
+async function batchPoolScope(scope, btn){
+  const uids = acctSelUids();
+  if(!uids.length){ toast('先勾选要挪号池的账号', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON('/accounts/set-all', {uids: uids, poolScope: scope});
+    toast('已把 ' + (r.moved == null ? uids.length : r.moved)
+          + ' 个账号移入' + (scope === 'media' ? '媒体号池' : '文本号池'), 'ok');
+    await loadAccounts();
+    updateBatchPoolBar();
+  }catch(e){
+    toast('批量挪号池失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+async function toggleAccountPoolScope(uid, toMedia){
+  try{
+    await postJSON('/accounts/set', {uid: uid, poolScope: toMedia ? 'media' : 'text'});
+    await loadAccounts();
+    toast(toMedia ? '已移入媒体号池（只跑图片 / 视频）' : '已移回文本号池', 'ok');
+  }catch(e){
+    toast('切换号池失败: ' + e.message, 'bad');
   }
 }
 async function toggleAccountTasks(uid, enable){
