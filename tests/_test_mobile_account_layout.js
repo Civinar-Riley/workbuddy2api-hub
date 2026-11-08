@@ -53,6 +53,11 @@ assert.ok(/\.acct-mobile-meta\{[^}]*flex-basis:100%/.test(html),
   '.acct-mobile-meta 需要 flex-basis:100%，否则第二行不会真正另起一行');
 assert.ok(/table\.account-cards td:nth-child\(2\) \.acct-name-row\{flex-wrap:wrap\}/.test(html),
   '窄屏账号名那行要允许换行，第二行才能落到下面');
+// 只允许换行还不够：这一格的直接子项默认 min-width:auto（= 内容宽），长昵称
+// 仍会把整格撑到卡片之外（390px 视口实测单元格 271px、名字行 434px，右侧被
+// 裁掉且没有省略号）。必须钉住 min-width:0 + max-width:100%。
+assert.ok(/table\.account-cards td:nth-child\(2\) > \*\{min-width:0;max-width:100%\}/.test(html),
+  '账号名那格的直接子项要钉 min-width:0 + max-width:100%，否则长昵称会撑出卡片');
 
 // 顺序契约：昵称行先渲染（含 + 分组），第二行容器在它之后。
 const nameRowAt = html.indexOf('class="acct-name-row"');
