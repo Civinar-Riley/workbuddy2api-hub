@@ -118,36 +118,38 @@ class AccountDeviceTokenTests(unittest.TestCase):
 
     def test_reload_and_status_are_redacted_diagnostics(self):
         token_file = os.path.join(self.directory, "device-token.txt")
+        old_token = "device-secret-old-8f2c1e"
+        new_token = "device-secret-new-7a4b9d"
         with open(token_file, "w", encoding="utf-8") as fh:
-            fh.write("old")
+            fh.write(old_token)
         wb_settings.set_upstream_config(
             self.directory, {"device_token_file": token_file}
         )
 
         with mock.patch.object(wb_accounts.time, "time", return_value=1000.0):
             self.assertEqual(
-                wb_accounts.resolve_device_token(self.directory), "old"
+                wb_accounts.resolve_device_token(self.directory), old_token
             )
             with open(token_file, "w", encoding="utf-8") as fh:
-                fh.write("new-token")
+                fh.write(new_token)
             status = wb_accounts.device_token_status(self.directory)
         self.assertEqual(status, {
             "source": "file",
             "configured_file": token_file,
             "loaded": True,
-            "length": 3,
+            "length": len(old_token),
             "cached_at": 1000,
         })
-        self.assertNotIn("old", json.dumps(status))
+        self.assertNotIn(old_token, json.dumps(status))
 
         with mock.patch.object(wb_accounts.time, "time", return_value=1001.0):
             self.assertEqual(
-                wb_accounts.reload_device_token(self.directory), "new-token"
+                wb_accounts.reload_device_token(self.directory), new_token
             )
             status = wb_accounts.device_token_status(self.directory)
-        self.assertEqual(status["length"], len("new-token"))
+        self.assertEqual(status["length"], len(new_token))
         self.assertEqual(status["cached_at"], 1001)
-        self.assertNotIn("new-token", json.dumps(status))
+        self.assertNotIn(new_token, json.dumps(status))
 
         wb_settings.set_upstream_config(
             self.directory,
