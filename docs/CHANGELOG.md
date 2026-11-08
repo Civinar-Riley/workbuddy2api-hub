@@ -1,3 +1,15 @@
+## v2.0.2
+
+- **文本号池 / 媒体号池分区**（#841）：账号新增 `poolScope`（`text` / `media`），文本对话只派文本号，图片 / 视频只派媒体号，空媒体池不回落到文本池。老账号默认 `text`，升级后行为不变；面板可按号池筛选、单号切换或勾选批量挪池，`/accounts/set` 与 `/accounts/set-all` 同步支持 `poolScope`。单实例靠字段过滤，双实例可分别设 `WB_POOL_SCOPE=text|media` 做进程级硬隔离；`WB_POOL_SEPARATION=0` 可回退旧的单池行为。文本任务（签到、成长、猫猫、国际每日活跃）只处理文本号，Token 保活仍覆盖全部账号。
+- **历史思考镜像**：模型名以 `kimi`、`glm`、`minimax`、`mimo`、`step` 或 `space-bunny` 开头时，在工具消息合并完成后，把非空 `reasoning_content` 原样镜像到上游读取的 `reasoning`；不写空白占位，也不注入 DeepSeek 的 `thinking`。
+- **空文本段先补位再出站**（#840）：上游对每个 `type:"text"` 段做长度校验，空 `text` 会返回 `400` / `11151` 并使会话退役。`build_upstream_body()` 现在在发出前把真实 parts 列表与被嗅探字符串数组中的空 text 段填成一个空格；未知 type、非数组 JSON、纯文本与非空 parts 保持不变。
+- **Responses 历史推理保真**（#831）：修复连续 `reasoning` 项目只剩最后一段、相邻两轮助手消息被合并、Chat 形状助手历史里的 `reasoning_content` 被丢弃，以及内置 web 工具第二轮请求丢失第一轮推理的问题；推理只关联所属助手消息，不会写入普通文本，也不改写外部加密内容。
+- **订阅桥接**（#830）：把 Clash / Mihomo 订阅、V2Ray URI 或单个 HTTP / SOCKS 代理转换成 mihomo listener，并同步成网关代理槽；direct 代理会正确生成 `proxies` 条目，HTTP 订阅与 HTTP 代理可区分，缺失 PyYAML 时返回明确错误。
+- **一键启动 WorkBuddy 工作台**（#771）：新增 `start-workbuddy-all.bat`，先通过 `--probe-only` 确认端口上是健康的本项目实例，未运行时再拉起代理，随后打开 WorkBuddy 执行器工作台；端口被陌生服务或卡死实例占用时直接报错。
+- **API Key 出口徽章与模型准入覆盖 CodeArts**（#827）：绑定固定 CodeArts 出口的 Key 正确显示出口徽章；模型准入候选清单补上 `?realm=codearts`，按出口分别缓存；长昵称不再顶出账号卡。
+- **一键测试放行 Clash fake-IP**（#828）：`198.18.0.0/15` 不再被误判为本机断网，环回、RFC1918、链路本地与保留段仍拒绝。
+- 全量测试：**282 个套件：213 个 Python + 69 个 JS，`282 passed, 0 failed, 0 skipped`**。
+
 ## v2.0.1
 
 - **国际版 DeepSeek 出站别名**：客户端与 `/v1/models` 继续展示 `deepseek-v4.1-flash`，实际发给国际版上游时使用 `deepseek-v4.1-flash-sg`；显式请求 `-sg` 保持原样，API Key 模型白名单仍按 base 校验，响应与用量记录保留逻辑模型，实际计费模型单独记录。`WB_INTL_MODEL_ALIAS=0` 可关闭映射。
