@@ -474,8 +474,9 @@ jobs:
           OUT=".sdk-cache/${SDK_TARBALL}"
           # 270 MB is large enough that a single slow CDN connection can sit
           # below the job timeout for half an hour. aria2 uses several
-          # connections per mirror, and the speed floor abandons a mirror that
-          # is merely trickling instead of waiting for its absolute timeout.
+          # connections per mirror. Do not apply a per-connection speed floor:
+          # CDN shards legitimately slow down independently while the aggregate
+          # transfer remains healthy, and aria2 treats those shards as fatal.
           if ! command -v aria2c >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y aria2
@@ -489,11 +490,11 @@ jobs:
             echo "== mirror: ${base}"
             rm -f "$OUT" "$OUT.aria2"
             if aria2c --allow-overwrite=true --auto-file-renaming=false \
-                 --max-tries=3 --retry-wait=5 --connect-timeout=20 \
-                 --timeout=60 --lowest-speed-limit=1M \
+                 --max-tries=5 --retry-wait=5 --connect-timeout=20 \
+                 --timeout=120 \
                  --max-connection-per-server=16 --split=16 --min-split-size=1M \
                  --file-allocation=none --console-log-level=warn \
-                 --summary-interval=15 --dir=".sdk-cache" \
+                 --summary-interval=0 --dir=".sdk-cache" \
                  --out="${SDK_TARBALL}" "${base}/${SDK_TARBALL}"; then
               ok=1; break
             fi
