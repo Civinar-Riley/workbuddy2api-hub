@@ -648,6 +648,10 @@ jobs:
         with:
           name: openwrt-packages
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: dist
       - name: Refuse to write a release without the full matrix
         # Belt and braces next to the gate job: the requirement is stated where
         # the mutation happens, so no later reshuffle of `needs` can drop it.
