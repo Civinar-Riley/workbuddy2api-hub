@@ -307,6 +307,22 @@ table.account-cards td[data-label="账号"] .cool-pill{display:block;width:100%;
 @media (min-width:641px){
   table.account-cards{table-layout:fixed;min-width:1262px}
   table.account-cards th:nth-child(2),table.account-cards td:nth-child(2){width:180px}
+  /* 账号表横向滚动时，左侧「版本 / 账号」两列必须跟右侧「操作」列一样钉住。
+     否则滚到最右边后账号名会被推出容器，只剩下一排认不出归属的数据。
+     排除 cool-row：它是 colspan 整行告警，不是普通账号行的第一列。 */
+  table.account-cards th:nth-child(1),
+  table.account-cards tbody tr:not(.cool-row) td:nth-child(1){
+    position:sticky;left:0;z-index:3;background:var(--panel);
+  }
+  table.account-cards th:nth-child(2),
+  table.account-cards tbody tr:not(.cool-row) td:nth-child(2){
+    position:sticky;left:76px;z-index:3;background:var(--panel);
+    box-shadow:1px 0 0 var(--line);
+  }
+  table.account-cards th:nth-child(1),
+  table.account-cards th:nth-child(2){z-index:4;background:var(--panel2)}
+  table.account-cards tbody tr:not(.cool-row):hover td:nth-child(1),
+  table.account-cards tbody tr:not(.cool-row):hover td:nth-child(2){background:var(--panel2)}
   table.account-cards td.acct-actions{white-space:normal;min-width:232px;width:232px;position:sticky;right:0;z-index:2;background:var(--panel);box-shadow:-8px 0 12px -12px rgba(31,30,27,.55)}
   table.account-cards th:last-child{position:sticky;right:0;z-index:3;background:var(--panel2);box-shadow:-8px 0 12px -12px rgba(31,30,27,.55)}
   table.account-cards tbody tr:hover td.acct-actions{background:var(--panel2)}
@@ -316,6 +332,10 @@ table.account-cards td[data-label="账号"] .cool-pill{display:block;width:100%;
 }
 @media (max-width:640px){
   table.account-cards{min-width:0!important;table-layout:auto}
+  table.account-cards th:nth-child(1),
+  table.account-cards th:nth-child(2),
+  table.account-cards td:nth-child(1),
+  table.account-cards td:nth-child(2){position:static;left:auto;z-index:auto;background:transparent;box-shadow:none}
   table.account-cards th:last-child,table.account-cards td.acct-actions{position:static;min-width:0;width:auto;z-index:auto;box-shadow:none}
   table.account-cards td[data-label="积分"]{white-space:normal;align-items:flex-start}
   table.account-cards .credit-stack{width:100%;align-items:flex-start}
