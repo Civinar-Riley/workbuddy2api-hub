@@ -223,6 +223,104 @@ class CheckinRouteTests(unittest.TestCase):
             self.assertEqual(called, ["uid-off"])
 
 
+class TaskPoolScopeTests(unittest.TestCase):
+    """Media-pool labels must not remove an account from welfare tasks."""
+
+    class Handler(wb_proxy.Handler):
+        def __init__(self):
+            self.captured = None
+
+        def _authorized(self):
+            return True
+
+        def _json_panel(self, code, obj):
+            self.captured = (code, obj)
+
+    def _pool(self, directory):
+        with open(os.path.join(directory, "uid-media.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"uid": "uid-media", "accessToken": jwt("uid-media"),
+                       "realm": "cn", "enabled": True, "tasksEnabled": True,
+                       "poolScope": "media"}, fh)
+        pool = wb_accounts.AccountPool(directory)
+        pool.load()
+        return pool
+
+    def test_media_account_stays_in_the_tasks_dropdown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pool = self._pool(directory)
+            handler = self.Handler()
+            with mock.patch.object(wb_proxy, "POOL", pool), \
+                    mock.patch.object(wb_proxy, "growth_snapshot",
+                                      return_value=([], {})):
+                handler._get_tasks({})
+            self.assertEqual(handler.captured[0], 200)
+            self.assertEqual([row["uid"] for row in handler.captured[1]["accounts"]],
+                             ["uid-media"])
+
+    def test_media_account_can_run_growth_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pool = self._pool(directory)
+            called = []
+
+            def fake_run(account, gap=0, claim=True):
+                called.append(account.uid)
+                return {"earned_credit": 0, "logs": []}
+
+            handler = self.Handler()
+            with mock.patch.object(wb_proxy, "POOL", pool), \
+                    mock.patch("wb_tasks.run_growth_tasks", fake_run):
+                handler._route_tasks_run({"uid": "all"})
+            self.assertEqual(called, ["uid-media"])
+
+
+class SchedulerPoolScopeTests(unittest.TestCase):
+    """The background scheduler must use tasksEnabled, not poolScope."""
+
+    def test_media_accounts_run_cn_tasks_in_scheduled_cycle(self):
+        import wb_scheduler
+
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "uid-media.json"), "w",
+                      encoding="utf-8") as fh:
+                json.dump({"uid": "uid-media", "accessToken": jwt("uid-media"),
+                           "realm": "cn", "enabled": True,
+                           "tasksEnabled": True, "poolScope": "media"}, fh)
+            pool = wb_accounts.AccountPool(directory)
+            pool.load()
+            scheduler = wb_scheduler.Scheduler.__new__(wb_scheduler.Scheduler)
+            scheduler.pool = pool
+            scheduler.log = lambda *_args, **_kwargs: None
+            scheduler.checkin_hours = set()
+            scheduler.travel_hours = set()
+            scheduler.keepalive_hours = set()
+            scheduler.cat_hours = set()
+            scheduler.daily_chat_times = []
+            scheduler.last_run_time = ""
+            scheduler._run_lock = mock.MagicMock()
+            scheduler._daily_activity_on = lambda: True
+            scheduler._consume_startup_catchup = lambda: False
+            scheduler._codearts_checkin_pending = lambda _run: False
+            scheduler._codearts_keepalive_pending = lambda _run: False
+            scheduler._run_codearts_checkin = lambda _run: 0
+            scheduler._run_codearts_keepalive = lambda _run: 0
+            called = []
+
+            def fake_checkin(account, trigger="unknown"):
+                called.append(account.uid)
+                return {"ok": True, "code": 0, "msg": "ok"}
+
+            with mock.patch.object(wb_accounts.Account, "can_checkin",
+                                   return_value=True), \
+                    mock.patch.object(wb_accounts.Account, "can_report_activity",
+                                      return_value=False), \
+                    mock.patch.object(wb_accounts.Account, "checkin",
+                                      fake_checkin), \
+                    mock.patch("wb_scheduler.time.sleep"):
+                scheduler._run_cycle(force=True)
+            self.assertEqual(called, ["uid-media"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

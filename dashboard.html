@@ -1782,8 +1782,9 @@ html:not([data-console-layout="on"]) .console-mobile-menu,
 html:not([data-console-layout="on"]) .console-sidebar,
 html:not([data-console-layout="on"]) .console-scrim,
 html:not([data-console-layout="on"]) .console-contextbar,
-html:not([data-console-layout="on"]) .console-insights,
-html:not([data-console-layout="on"]) .console-filterbar {display:none!important}
+html:not([data-console-layout="on"]) .console-insights {display:none!important}
+/* 新导航本身不使用 console-layout；筛选栏仍属于内容区，不能被旧布局规则隐藏。 */
+html:not([data-console-layout="on"]):not([data-ui="next"]) .console-filterbar {display:none!important}
 html:not([data-console-layout="on"]) .header-left .console-nav-group {display:contents}
 html:not([data-console-layout="on"]) .header-left .console-nav-caption,
 html:not([data-console-layout="on"]) .header-left .console-nav-link {display:none!important}
@@ -2025,6 +2026,10 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '全部号池': 'All pools',
     '文本号池': 'Text pool',
     '媒体号池': 'Media pool',
+    '文本 / 媒体号池隔离': 'Text / media pool separation',
+    '启用号池隔离': 'Enable pool separation',
+    '默认关闭：所有账号都能服务文本与图片 / 视频；开启后才按号池标签限制派发。':
+      'Off by default: every account can serve text, image and video. Turn it on to enforce pool labels.',
     '未勾选': 'None selected',
     '勾选移入媒体池': 'Move selected to media pool',
     '勾选移回文本池': 'Move selected to text pool',
@@ -3544,6 +3549,10 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "全部号池": "全部號池",
     "文本号池": "文字號池",
     "媒体号池": "媒體號池",
+    "文本 / 媒体号池隔离": "文字 / 媒體號池隔離",
+    "启用号池隔离": "啟用號池隔離",
+    "默认关闭：所有账号都能服务文本与图片 / 视频；开启后才按号池标签限制派发。":
+      "預設關閉：所有帳號都能服務文字與圖片 / 影片；開啟後才依號池標籤限制派發。",
     "未勾选": "未勾選",
     "勾选移入媒体池": "勾選移入媒體池",
     "勾选移回文本池": "勾選移回文字池",
@@ -5782,7 +5791,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" onclick="setCurrentGroup(true, this)">当前分组启用</button>
     <button class="sec" onclick="setCurrentGroup(false, this)">当前分组停用</button>
     </div>
-    <div class="tb-group tb-pool">
+    <div class="tb-group tb-pool" id="poolToolsGroup" hidden>
     <button class="sec" id="pfAll" onclick="poolFilter('all', this)">全部号池</button>
     <button class="sec" id="pfText" onclick="poolFilter('text', this)">文本号池</button>
     <button class="sec" id="pfMedia" onclick="poolFilter('media', this)">媒体号池</button>
@@ -6722,6 +6731,25 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
               只列可用
             </label>
             <button onclick="saveModelsOnlyAvailable(this)">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section data-cat="models">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">文本 / 媒体号池隔离 <em id="setPoolSeparationState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              默认关闭：所有账号都能服务文本与图片 / 视频；开启后才按号池标签限制派发。
+              福利与签到任务始终只由账号自己的「参与任务」开关决定，不受号池标签影响。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setPoolSeparation" type="checkbox" style="width:16px;height:16px">
+              启用号池隔离
+            </label>
+            <button onclick="savePoolSeparation(this)">保存</button>
           </div>
         </div>
       </section>
@@ -11039,14 +11067,18 @@ function accountRow(a){
     + '<td style="text-align:left" data-label="账号">'
     // 账号名（大一号）+ 备注 chip 同一行；备注从独立一行收进账号后面。
     +   '<div class="acct-name-row">'
-    +     '<input type="checkbox" class="acct-sel" data-uid="' + uidAttr + '"'
+    +     (POOL_SEPARATION_EFFECTIVE
+          ? '<input type="checkbox" class="acct-sel" data-uid="' + uidAttr + '"'
     +     ' onchange="updateBatchPoolBar()" onclick="event.stopPropagation()"'
     +     ' style="vertical-align:middle;margin-right:2px" title="勾选后可批量挪号池">'
-    +     '<span class="badge mini' + ((a.poolScope==='media')?' warn':'') + '"'
+          : '')
+    +     (POOL_SEPARATION_EFFECTIVE
+          ? '<span class="badge mini' + ((a.poolScope==='media')?' warn':'') + '"'
     +     ' style="cursor:pointer;margin-right:4px"'
     +     ' title="号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换"'
     +     ' onclick="toggleAccountPoolScope(&quot;' + uidAttr + '&quot;,' + ((a.poolScope==='media')?'false':'true') + ')">'
     +     ((a.poolScope==='media')?'媒体号池':'文本号池') + '</span>'
+          : '')
     +     '<span class="acct-name" title="' + esc(a.nickname) + '">' + esc(a.nickname) + '</span>'
     // 静态 API Key 账号：没有登录身份，也没有签到/成长体系，标出来省得当成
     // 普通 OAuth 号去点「重新登录」。悬停给出脱敏后的凭证，方便对上是哪一把。
@@ -11491,6 +11523,7 @@ let ACCT_TOTAL_PAGES = 1;
 let ACCT_PAGE_REALM = null;
 let ACCT_PAGE_FILTER = null;
 let POOL_FILTER = 'all';
+let POOL_SEPARATION_EFFECTIVE = false;
 // 账号表上次真正画进 DOM 的内容指纹（同最近请求表的 lastRecentFp）：轮询拿回来
 // 的数据没变就整段跳过，不重拼 HTML、不重排。
 let lastAccountsFp = null;
@@ -11502,7 +11535,8 @@ function accountsRenderFp(){
   // （今日活动列）、视图区域、页码、表头排序、筛选条件、本地日期（「今日」口径）。
   // 筛选也进指纹：不靠「改筛选一定无参调用 renderAccounts()」这条约定兜底。
   return [
-    window.VIEW_REALM || 'intl', ACCT_PAGE, POOL_FILTER,
+    window.VIEW_REALM || 'intl', ACCT_PAGE,
+    POOL_SEPARATION_EFFECTIVE ? POOL_FILTER : 'all',
     JSON.stringify(SORT_STATE.accounts || null),
     JSON.stringify(ACCOUNT_FILTERS),
     new Date().toDateString(),
@@ -11546,13 +11580,14 @@ function renderAccounts(){
   const box = document.getElementById('accounts');
   const currentView = (window.VIEW_REALM || "intl");
   let list = accountsInView();
-  if(POOL_FILTER !== 'all'){
+  if(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'){
     list = list.filter(a => String(a.poolScope || 'text') === POOL_FILTER);
   }
   const skipIfSame = arguments[0] === true;
   if(ACCT_PAGE_REALM !== currentView){ ACCT_PAGE_REALM = currentView; ACCT_PAGE = 1; }
   const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status
-    + '\u0001' + ACCOUNT_FILTERS.group + '\u0001' + POOL_FILTER;
+    + '\u0001' + ACCOUNT_FILTERS.group + '\u0001'
+    + (POOL_SEPARATION_EFFECTIVE ? POOL_FILTER : 'all');
   const groupSelect = document.getElementById('accountGroupFilter');
   if(groupSelect){
     const groups = Array.from(new Set(list.map(a => String(a.group || '')).filter(Boolean))).sort();
@@ -11738,6 +11773,7 @@ async function toggleAccount(uid, enable, btn){
   }
 }
 function poolFilter(scope, btn){
+  if(!POOL_SEPARATION_EFFECTIVE) return;
   POOL_FILTER = scope === 'media' ? 'media' : (scope === 'text' ? 'text' : 'all');
   ['pfAll','pfText','pfMedia'].forEach(function(id){
     const el = document.getElementById(id);
@@ -11746,7 +11782,19 @@ function poolFilter(scope, btn){
   ACCT_PAGE = 1;
   renderAccounts();
 }
+function applyPoolSeparationUi(effective){
+  POOL_SEPARATION_EFFECTIVE = effective === true;
+  if(!POOL_SEPARATION_EFFECTIVE) POOL_FILTER = 'all';
+  const group = document.getElementById('poolToolsGroup');
+  if(group) group.hidden = !POOL_SEPARATION_EFFECTIVE;
+  ['pfAll','pfText','pfMedia'].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el) el.classList.toggle('active', id === 'pfAll' || POOL_FILTER === id.slice(2).toLowerCase());
+  });
+  updateBatchPoolBar();
+}
 function acctSelUids(){
+  if(!POOL_SEPARATION_EFFECTIVE) return [];
   return Array.from(document.querySelectorAll('#accounts .acct-sel:checked'))
     .map(function(el){ return el.dataset.uid; })
     .filter(Boolean);
@@ -11757,10 +11805,14 @@ function updateBatchPoolBar(){
   if(label) label.textContent = n ? ('已选 ' + n + ' 个') : '未勾选';
   ['batchToMedia','batchToText'].forEach(function(id){
     const el = document.getElementById(id);
-    if(el) el.disabled = !n;
+    if(el) el.disabled = !POOL_SEPARATION_EFFECTIVE || !n;
   });
 }
 async function batchPoolScope(scope, btn){
+  if(!POOL_SEPARATION_EFFECTIVE){
+    toast('请先启用「文本 / 媒体号池隔离」', 'warn');
+    return;
+  }
   const uids = acctSelUids();
   if(!uids.length){ toast('先勾选要挪号池的账号', 'warn'); return; }
   if(btn) btn.disabled = true;
@@ -15281,6 +15333,22 @@ async function loadSettings(showToast, opts){
         egressBackoffState.textContent = egressBackoff ? '(已启用)' : '(未启用)';
         egressBackoffState.style.color = egressBackoff ? 'var(--accent2)' : 'var(--dim)';
       }
+      const poolSeparation = data.pool_separation_enabled === true;
+      const poolSeparationEffective = data.pool_separation_effective === true;
+      const poolSeparationInput = document.getElementById('setPoolSeparation');
+      if(poolSeparationInput) poolSeparationInput.checked = poolSeparation;
+      const poolSeparationState = document.getElementById('setPoolSeparationState');
+      if(poolSeparationState){
+        if(poolSeparationEffective && !poolSeparation){
+          poolSeparationState.textContent = '(已由环境变量 / 独立号池入口强制启用)';
+          poolSeparationState.style.color = 'var(--warn)';
+        } else {
+          poolSeparationState.textContent = poolSeparation
+            ? '(已启用)' : '(默认关闭：账号可同时服务文本与媒体)';
+          poolSeparationState.style.color = poolSeparation ? 'var(--accent2)' : 'var(--dim)';
+        }
+      }
+      applyPoolSeparationUi(poolSeparationEffective);
       const holdSec = typeof data.restriction_hold_seconds === 'number' ? data.restriction_hold_seconds : 1800;
       const holdInput = document.getElementById('setRestrictionHoldSeconds');
       if(holdInput) holdInput.value = holdSec;
@@ -16555,6 +16623,24 @@ async function saveEgressBackoff(btn){
     if(btn) btn.disabled = false;
   }
 }
+
+async function savePoolSeparation(btn){
+  const el = document.getElementById('setPoolSeparation');
+  const value = !!(el && el.checked);
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {pool_separation_enabled: value});
+    toast(value ? '已启用：按号池标签限制派发'
+                : '已关闭：所有账号都可服务文本与媒体', 'ok');
+    if(typeof loadSettings === 'function') await loadSettings();
+    else applyPoolSeparationUi(value);
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 async function saveRestrictionHold(btn){
   const el = document.getElementById('setRestrictionHoldSeconds');
   const val = parseInt(el ? el.value : '1800', 10);
@@ -22204,7 +22290,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     model: {
       title: '模型与定价',
       desc: '价格估算、Anthropic 适配、思考档位和模型过滤。',
-      items: ['模型价格估算', '启用 Anthropic Messages', '思考等级挡位映射', '按 API Key 过滤模型列表', '只列出可用模型']
+      items: ['模型价格估算', '启用 Anthropic Messages', '思考等级挡位映射', '按 API Key 过滤模型列表', '只列出可用模型', '文本 / 媒体号池隔离']
     },
     automation: {
       title: '自动化',

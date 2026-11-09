@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """号池分区：文本号池 / 媒体号池。
 
-一个账号只属于其中一个号池，两个号池互不放行：
+分区**默认关闭**：所有账号都能同时服务文本与媒体请求，这与历史单池行为
+一致。只有操作者显式打开 ``pool_separation_enabled``（设置页开关或
+``WB_POOL_SEPARATION=1``）后，才会按账号的 ``poolScope`` 做派发边界：
 
 * **文本号池**（``text``）：只服务文本模型（chat / responses / codearts 等），
   **不参与**图片与视频生成。
@@ -14,9 +16,8 @@
 和熔断，一侧出事不传染另一侧。
 
 账号落在哪个号池由凭证档里的 ``poolScope`` 字段决定（见
-``wb_accounts.Account``）。没有这个字段的老账号一律按 **文本号池** 处理：
-升级后行为与升级前完全一致（所有流量都走文本号池），媒体号池要人明确把账号
-放进去才会开始工作——宁可画图暂时没号，也不悄悄把对话账号派去画图。
+``wb_accounts.Account``）。没有这个字段的老账号按 **文本号池** 记录；只要
+分区没打开，这个字段不限制任何请求。
 
 本模块只提供口径（常量、归一化、判定、异常），不持有状态；选号的实现在
 ``wb_pool_text`` / ``wb_pool_media`` 两个模块里，共用的账号存储、凭据刷新、
@@ -24,6 +25,8 @@
 边界**，不是两份账号文件，否则同一个 token 会被两套刷新器同时刷新。
 """
 import os
+
+_separation_resolver = None
 
 #: 文本号池：只跑文本模型，不参与图片 / 视频生成。
 SCOPE_TEXT = "text"
@@ -38,16 +41,22 @@ SCOPES = (SCOPE_TEXT, SCOPE_MEDIA)
 #: 加入，升级动作本身不该把一个正在对话的号变成画图号。
 DEFAULT_SCOPE = SCOPE_TEXT
 
-#: 关闭分区、回到「一个池子跑全部流量」的开关。默认开启分区；现场排障或
-#: 回滚时设 ``WB_POOL_SEPARATION=0`` 重启即恢复旧行为，不用改代码。
+#: 环境变量覆盖值。未设置时使用设置页的 pool_separation_enabled；两者都没有
+#: 时默认关闭，回到「一个池子跑全部流量」。
 _SEPARATION_OFF = ("0", "off", "false", "no")
 
 
-def separation_enabled():
-    """号池分区是否生效（默认生效，``WB_POOL_SEPARATION=0`` 关闭）。
+def configure_separation_resolver(resolver):
+    """Install the settings-file lookup used when the env var is absent."""
+    global _separation_resolver
+    _separation_resolver = resolver
 
-    每次调用都读环境变量，不缓存：现场改 env 重启即生效，测试也不用 reload。
-    热路径上只是一次 dict 查询。
+
+def separation_enabled():
+    """号池分区是否生效（默认关闭）。
+
+    优先级：进程入口 ``WB_POOL_SCOPE`` > 环境变量 ``WB_POOL_SEPARATION`` >
+    ``settings.json.pool_separation_enabled`` > 默认关闭。
 
     存在两个号池的**独立接入端**（``WB_TEXT_POOL_URL`` / ``WB_MEDIA_POOL_URL``，
     见 wb_pool_scope.boundary）时，分区强制开启且不可关闭：两个入口背后各有
@@ -56,9 +65,15 @@ def separation_enabled():
     if boundary() is not None:
         return True
     raw = os.environ.get("WB_POOL_SEPARATION")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in _SEPARATION_OFF
+    if raw is not None:
+        return str(raw).strip().lower() not in _SEPARATION_OFF
+    if _separation_resolver is not None:
+        try:
+            return bool(_separation_resolver())
+        except Exception:
+            # A broken settings file must not silently turn isolation on.
+            return False
+    return False
 
 
 def boundary():

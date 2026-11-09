@@ -92,6 +92,17 @@ class DailyTokenLimitTests(unittest.TestCase):
         self.assertEqual(P.daily_tokens_by_account(ttl=0),
                     {"acct-A": 2050, "acct-B": 400})
 
+    def test_persist_invalidates_the_cached_daily_fold(self):
+        midnight = P._local_midnight()
+        with io.open(P.USAGE_LOG, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(row(midnight + 60, "acct-A", 999)) + "\n")
+
+        # Prime the normal 15-second cache, then append through the request
+        # path. The next guard evaluation must see the new row immediately.
+        self.assertEqual(P.daily_tokens_by_account(), {"acct-A": 999})
+        P._persist_usage(row(time.time(), "acct-A", 2), "test persist failed")
+        self.assertEqual(P.daily_tokens_by_account(), {"acct-A": 1001})
+
     def test_guard_blocks_at_threshold_and_needs_a_count(self):
         account = wb_accounts.Account({"uid": "uid-a", "accessToken": "t"})
         account.daily_token_limit = 1000
@@ -191,6 +202,58 @@ class DailyTokenLimitTests(unittest.TestCase):
         self.assertIn("token limit", str(caught.exception.message))
         self.assertIn("local midnight", str(caught.exception.message))
         self.assertGreaterEqual(caught.exception.wait, 60)
+
+    def test_key_scope_uses_only_its_candidates_for_the_park_message(self):
+        spent = wb_accounts.Account({"uid": "uid-spent", "accessToken": "t",
+                                     "realm": "intl"})
+        spent.daily_token_limit = 1000
+        spent.daily_tokens_today = 1000
+        healthy = wb_accounts.Account({"uid": "uid-healthy", "accessToken": "t",
+                                       "realm": "intl"})
+        wb_settings.set_daily_token_limit(os.environ["ACCOUNTS_DIR"], 1000)
+
+        class Pool(object):
+            accounts = [spent, healthy]
+
+            def count_ready(self, realm, model=None, allowed=None):
+                return sum(a.ready(model=model)
+                           and (allowed is None or a.uid in allowed)
+                           for a in self.accounts)
+
+            def pick_for_session(self, realm, session_key=None, exclude=(),
+                                 model=None, page=None, allowed=None):
+                return next((a for a in self.accounts
+                             if a.uid not in exclude
+                             and a.realm == realm
+                             and a.ready(model=model)
+                             and (allowed is None or a.uid in allowed)), None)
+
+            def apply_daily_token_limit(self, value=None, usage=None):
+                return value or 0
+
+            def apply_daily_credit_limit(self, value=None, credits=None,
+                                         free_models=None):
+                return value or 0
+
+            def apply_model_daily_token_limit(self, value=None, per_model=None):
+                return value or 0
+
+            def apply_remaining_weights(self, weights=None):
+                return weights or {}
+
+        old_pool = P.POOL
+        P.POOL = Pool()
+        try:
+            with self.assertRaises(P.RateLimited) as caught:
+                P.open_upstream(
+                    {"model": "deepseek-v4.1-flash",
+                     "messages": [{"role": "user", "content": "hi"}]},
+                    target_realm="intl", allowed_accounts={spent.uid})
+        finally:
+            P.POOL = old_pool
+            wb_settings.set_daily_token_limit(os.environ["ACCOUNTS_DIR"], 0)
+        self.assertIn("token limit", str(caught.exception.message))
+        self.assertNotIn("no usable account", str(caught.exception.message))
 
 
 class GuardClearTests(unittest.TestCase):

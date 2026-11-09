@@ -3,13 +3,15 @@
 PR #841 introduced the feature. The original branch also carried unrelated
 reverts, so this suite pins the behaviour of the clean integration:
 
-  * old accounts default to text; ``disabledModels`` never implies media;
-  * text/media picks and counts never cross pools;
-  * a pinned account of the wrong pool is rejected;
-  * API-key ``allowed`` and the pool scope both apply;
+  * separation is off by default, so both views see every account;
+  * when separation is on, old accounts default to text and
+    ``disabledModels`` never implies media;
+  * when separation is on, text/media picks and counts never cross pools;
+  * when separation is on, a pinned account of the wrong pool is rejected;
+  * when separation is on, API-key ``allowed`` and the pool scope both apply;
   * ``WB_POOL_SCOPE`` enforces process-level entry boundaries;
-  * ``WB_POOL_SEPARATION=0`` restores the old single-pool behaviour;
-  * an empty media pool never falls back to text accounts;
+  * ``WB_POOL_SEPARATION`` overrides the persisted setting;
+  * an empty media pool never falls back to text accounts when separation is on;
   * ``poolScope`` persists and supports batch moves;
   * whole-pool pages still bind a long conversation to one account.
 
@@ -44,6 +46,62 @@ def make_pool(accounts):
     return pool
 
 
+class SeparationSettingTests(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("WB_POOL_SCOPE", None)
+        os.environ.pop("WB_POOL_SEPARATION", None)
+
+    def test_default_is_off(self):
+        wb_pool_scope.configure_separation_resolver(None)
+        self.assertFalse(wb_pool_scope.separation_enabled())
+
+    def test_resolver_can_turn_it_on(self):
+        wb_pool_scope.configure_separation_resolver(lambda: True)
+        try:
+            self.assertTrue(wb_pool_scope.separation_enabled())
+        finally:
+            wb_pool_scope.configure_separation_resolver(None)
+
+    def test_env_var_wins_over_resolver(self):
+        wb_pool_scope.configure_separation_resolver(lambda: True)
+        os.environ["WB_POOL_SEPARATION"] = "0"
+        try:
+            self.assertFalse(wb_pool_scope.separation_enabled())
+        finally:
+            wb_pool_scope.configure_separation_resolver(None)
+
+    def test_runtime_settings_expose_persisted_and_effective_state(self):
+        import wb_proxy
+        old_dir = wb_proxy.ACCOUNTS_DIR
+        old_scope = os.environ.pop("WB_POOL_SCOPE", None)
+        old_sep = os.environ.pop("WB_POOL_SEPARATION", None)
+        directory = tempfile.mkdtemp(prefix="pool-scope-settings-")
+        wb_proxy.ACCOUNTS_DIR = directory
+        try:
+            import wb_settings
+            wb_settings.set_pool_separation_enabled(directory, False)
+            view = wb_proxy.runtime_settings_view()
+            self.assertFalse(view["pool_separation_enabled"])
+            self.assertFalse(view["pool_separation_effective"])
+
+            os.environ["WB_POOL_SEPARATION"] = "1"
+            view = wb_proxy.runtime_settings_view()
+            self.assertFalse(view["pool_separation_enabled"])
+            self.assertTrue(view["pool_separation_effective"])
+        finally:
+            wb_proxy.ACCOUNTS_DIR = old_dir
+            if old_scope is None:
+                os.environ.pop("WB_POOL_SCOPE", None)
+            else:
+                os.environ["WB_POOL_SCOPE"] = old_scope
+            if old_sep is None:
+                os.environ.pop("WB_POOL_SEPARATION", None)
+            else:
+                os.environ["WB_POOL_SEPARATION"] = old_sep
+            import shutil
+            shutil.rmtree(directory, ignore_errors=True)
+
+
 class ScopeFieldTests(unittest.TestCase):
     def test_old_account_defaults_to_text(self):
         self.assertEqual(make_account("old").pool_scope,
@@ -65,11 +123,22 @@ class ScopeFieldTests(unittest.TestCase):
 
 class DispatchTests(unittest.TestCase):
     def setUp(self):
+        wb_pool_scope.configure_separation_resolver(lambda: True)
         self.text = make_account("text-a")
         self.media = make_account("media-a", scope="media")
         self.pool = make_pool([self.text, self.media])
         self.texts = wb_pool_text.TextPool(self.pool)
         self.medias = wb_pool_media.MediaPool(self.pool)
+
+    def tearDown(self):
+        wb_pool_scope.configure_separation_resolver(None)
+
+    def test_default_single_pool_allows_text_and_media_accounts(self):
+        wb_pool_scope.configure_separation_resolver(None)
+        self.assertEqual(self.texts.pick(realm="cn").uid, "text-a")
+        self.assertIsNotNone(self.medias.pick(realm="cn"))
+        self.assertTrue(self.texts.allows(self.media))
+        self.assertTrue(self.medias.allows(self.text))
 
     def test_text_pool_never_picks_media(self):
         self.assertEqual(self.texts.pick(realm="cn").uid, "text-a")
@@ -131,6 +200,7 @@ class BoundaryTests(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("WB_POOL_SCOPE", None)
         os.environ.pop("WB_POOL_SEPARATION", None)
+        wb_pool_scope.configure_separation_resolver(None)
 
     def test_media_instance_refuses_text_entry(self):
         os.environ["WB_POOL_SCOPE"] = "media"
@@ -205,12 +275,16 @@ class LegacyPoolTests(unittest.TestCase):
             return len(self.accounts)
 
     def test_legacy_pool_with_scope_fields_is_filtered(self):
+        wb_pool_scope.configure_separation_resolver(lambda: True)
         pool = self.LegacyPool([make_account("text-a"),
                                 make_account("media-a", scope="media")])
-        self.assertEqual(wb_pool_text.TextPool(pool).pick(realm="cn").uid,
-                         "text-a")
-        self.assertEqual(wb_pool_media.MediaPool(pool).pick(realm="cn").uid,
-                         "media-a")
+        try:
+            self.assertEqual(wb_pool_text.TextPool(pool).pick(realm="cn").uid,
+                             "text-a")
+            self.assertEqual(wb_pool_media.MediaPool(pool).pick(realm="cn").uid,
+                             "media-a")
+        finally:
+            wb_pool_scope.configure_separation_resolver(None)
 
     def test_legacy_pool_without_scope_fields_keeps_old_behavior(self):
         class Bare(object):

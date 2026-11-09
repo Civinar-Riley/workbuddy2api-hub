@@ -92,6 +92,9 @@ CATALOG_MIN_INTERVAL = 60.0
 ERR_THRESHOLD = 3
 ERR_COOLDOWN = 600.0
 SOFT_COOLDOWN = 60.0
+#: 积分耗尽不是瞬时错误：账号需要等用户补积分或活动到账，60 秒后重试
+#: 只会把同一个 400 再打一遍。给它一个更长的可恢复冷却，仍会自然解冻。
+CREDIT_COOLDOWN = 600.0
 #: token 提前刷新窗口。
 REFRESH_SKEW = 1800.0
 #: OAuth 会话 TTL。
@@ -402,6 +405,9 @@ class CodeArtsAccount(object):
         self.proxy = ""
         self.disabled = False
         self.disabled_reason = ""
+        # 面板手动停用是独立于上游健康状态的操作员意图。token 刷新、
+        # OAuth 重新登录和 note_error 都不能隐式把它清掉；只有 enable() 可以。
+        self.manual_disabled = False
         self.cool_until = 0.0
         self.err_count = 0
         self.last_error = ""
@@ -469,9 +475,10 @@ class CodeArtsAccount(object):
             "updated_at": int(time.time()),
         })
         self.auth = save_auth(self.pool.accounts_dir, self.auth)
-        self.disabled = False
-        self.disabled_reason = ""
-        self.last_error = ""
+        if not self.manual_disabled:
+            self.disabled = False
+            self.disabled_reason = ""
+            self.last_error = ""
 
     # ---- 状态快照 ----
     def view(self):
@@ -585,6 +592,15 @@ class CodeArtsPool(object):
             acct.disabled = bool(entry.get("disabled"))
             acct.disabled_reason = str(entry.get("reason") or "")
             acct.last_error = str(entry.get("last_error") or "")
+            if "manual_disabled" in entry:
+                acct.manual_disabled = entry.get("manual_disabled") is True
+            else:
+                # 兼容旧 state.json：早期没有 manual_disabled，只能从原因推断。
+                # 认证失败写的是上游错误正文，不会命中下面这些面板文案。
+                reason = (acct.disabled_reason + " " + acct.last_error).lower()
+                acct.manual_disabled = bool(acct.disabled) and any(
+                    marker in reason for marker in
+                    ("manual", "手动", "停用", "disabled by operator"))
             acct.note = str(entry.get("note") or "")[:200]
             acct.tasks_enabled = bool(entry.get("tasks_enabled", True))
             if isinstance(entry.get("checkin"), dict):
@@ -619,6 +635,7 @@ class CodeArtsPool(object):
                 "err_count": acct.err_count,
                 "cool_until": acct.cool_until,
                 "disabled": acct.disabled,
+                "manual_disabled": bool(acct.manual_disabled),
                 "reason": acct.disabled_reason,
                 "last_error": acct.last_error,
                 "checkin": acct.checkin,
@@ -693,11 +710,12 @@ class CodeArtsPool(object):
                     existing.auth = acct.auth
                     existing.proxy_slot = acct.proxy_slot
                     existing.nickname = acct.nickname
-                    existing.disabled = False
-                    existing.disabled_reason = ""
-                    existing.last_error = ""
-                    existing.err_count = 0
-                    existing.cool_until = 0
+                    if not existing.manual_disabled:
+                        existing.disabled = False
+                        existing.disabled_reason = ""
+                        existing.last_error = ""
+                        existing.err_count = 0
+                        existing.cool_until = 0
                     existing.models_fetched_at = 0
                     self.accounts[index] = existing
                     self.save_state()
@@ -724,6 +742,7 @@ class CodeArtsPool(object):
             return False
         acct.disabled = False
         acct.disabled_reason = ""
+        acct.manual_disabled = False
         acct.last_error = ""
         acct.err_count = 0
         acct.cool_until = 0
@@ -736,6 +755,7 @@ class CodeArtsPool(object):
             return False
         acct.disabled = True
         acct.disabled_reason = reason
+        acct.manual_disabled = True
         acct.last_error = reason
         self.save_state()
         return True
@@ -821,13 +841,15 @@ class CodeArtsPool(object):
             acct.last_error = ""
             self.save_state()
 
-    def note_error(self, acct, message, soft=False, terminal=False):
+    def note_error(self, acct, message, soft=False, terminal=False,
+                   cooldown=None):
         acct.last_error = str(message or "")[:200]
         if terminal:
             acct.disabled = True
             acct.disabled_reason = acct.last_error
         elif soft:
-            acct.cool_until = time.time() + SOFT_COOLDOWN
+            delay = SOFT_COOLDOWN if cooldown is None else max(0.0, float(cooldown))
+            acct.cool_until = time.time() + delay
         else:
             acct.err_count += 1
             if acct.err_count >= ERR_THRESHOLD:
@@ -1770,6 +1792,9 @@ class CodeArtsStream(object):
             message = str(payload.get("error_msg") or payload.get("message")
                           or text)[:300]
             lowered = message.lower()
+            if _is_credit_exhausted_message(message):
+                raise CodeArtsUpstreamError(
+                    message, status=429, code="CREDIT_EXHAUSTED")
             if ("request param is invalid" in lowered
                     or "request model is not multimodal" in lowered
                     or "tool function cannot empty" in lowered):
@@ -1921,6 +1946,22 @@ def _is_concurrency_message(message):
             in text)
 
 
+def _is_credit_exhausted_message(message):
+    """Whether a 400 means the account's credit package is empty.
+
+    This is a recoverable account-level condition, not a malformed client
+    request. Treat it like a soft 429 so the router cools the account and
+    rotates instead of retrying the same zero-credit account forever.
+    """
+    text = str(message or "").lower()
+    return ("积分已耗尽" in text
+            or "积分不足" in text
+            or "credit exhausted" in text
+            or "credits exhausted" in text
+            or "insufficient credit" in text
+            or "insufficient credits" in text)
+
+
 def _model_output_limit(acct, model):
     """Advertised output limit for the canonical CodeArts model."""
     key = str(model or "").strip().lower()
@@ -2020,6 +2061,9 @@ def _client_chat(acct, body, session_key):
                     continue
                 raise last_error
             if exc.code == 400:
+                if _is_credit_exhausted_message(message):
+                    raise CodeArtsUpstreamError(
+                        message, status=429, code="CREDIT_EXHAUSTED")
                 raise CodeArtsBadRequest(message, status=exc.code)
             if exc.code == 429:
                 raise CodeArtsUpstreamError(message, status=exc.code, code="429")
@@ -2088,7 +2132,8 @@ def open_chat(config, body, session_key=None, allowed_accounts=None):
             last_error = exc
         except CodeArtsUpstreamError as exc:
             soft = (exc.status == 429 or "429" in str(exc.code or ""))
-            pool.note_error(acct, str(exc), soft=soft)
+            cooldown = CREDIT_COOLDOWN if exc.code == "CREDIT_EXHAUSTED" else None
+            pool.note_error(acct, str(exc), soft=soft, cooldown=cooldown)
             pool.release(acct)
             exclude.add(acct.uid)
             last_error = exc

@@ -1793,6 +1793,11 @@ def _persist_usage(row, fail_label):
         os.makedirs(USAGE_DIR, exist_ok=True)
         with open(USAGE_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        # The daily guard is evaluated on the next request. Let its cached fold
+        # observe this row immediately instead of handing the same account a
+        # request for up to _STATS_TTL seconds after it crossed the limit.
+        with _daily_usage_lock:
+            _daily_usage["at"] = 0.0
     except Exception as exc:
         log("%s: %s" % (fail_label, exc))
 
@@ -6974,6 +6979,8 @@ def _credits_sweep(targets, paced=True):
 # Release discovery only - the checker never downloads or installs anything.
 UPDATES = None
 ACCOUNTS_DIR = os.environ.get("ACCOUNTS_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'accounts')
+wb_pool_scope.configure_separation_resolver(
+    lambda: wb_settings.pool_separation_enabled(ACCOUNTS_DIR))
 try:
     # Panel-set version overrides ride on top of the verified defaults; the
     # identity module only changes the version strings it sends.
@@ -11687,6 +11694,12 @@ def runtime_settings_view():
             wb_settings.remaining_priority_enabled(ACCOUNTS_DIR),
         "egress_backoff_enabled":
             wb_settings.egress_backoff_enabled(ACCOUNTS_DIR),
+        "pool_separation_enabled":
+            wb_settings.pool_separation_enabled(ACCOUNTS_DIR),
+        # The checkbox reflects the persisted preference; this reflects what
+        # dispatch actually enforces (env vars and standalone pool entries win).
+        "pool_separation_effective":
+            wb_pool_scope.separation_enabled(),
         "restriction_hold_seconds":
             int(wb_settings.restriction_hold_seconds(ACCOUNTS_DIR)),
         "restriction_holds":
@@ -11745,7 +11758,14 @@ def runtime_settings_view():
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
-    return representative_account(scope=wb_pool_scope.SCOPE_TEXT)
+    return representative_account(scope=_representative_text_scope())
+
+
+def _representative_text_scope():
+    """Keep the old text-only display when pool separation is enabled."""
+    if wb_pool_scope.separation_enabled():
+        return wb_pool_scope.SCOPE_TEXT
+    return None
 
 
 def representative_account(realm=None, scope=None):
@@ -12915,7 +12935,7 @@ def fetch_remote_product_config(realm):
     if realm not in ("intl", "cn") or POOL is None:
         return None
     account = representative_account(
-        realm=realm, scope=wb_pool_scope.SCOPE_TEXT)
+        realm=realm, scope=_representative_text_scope())
     if account is None or not account.access_token:
         log("remote catalog: no usable %s account, skipping" % realm)
         return None
@@ -13050,7 +13070,7 @@ def catalog_daily_pass(now=None):
     done = []
     for realm in catalog_daily_due(now):
         if POOL is None or representative_account(
-                realm=realm, scope=wb_pool_scope.SCOPE_TEXT) is None:
+                realm=realm, scope=_representative_text_scope()) is None:
             continue
         out = refresh_catalog(realm)
         log("catalog daily: %s -> %s" % (realm, out.get("msg")))
@@ -17650,14 +17670,17 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
     text_accounts = texts.accounts() if texts else (POOL.accounts if POOL else [])
     enabled = [a for a in text_accounts
                if a.realm == realm and a.enabled and a.access_token] if POOL else []
-    if enabled and all(a.daily_limit_blocked() for a in enabled):
+    candidates = [a for a in enabled
+                  if allowed_accounts is None or a.uid in allowed_accounts]
+    if candidates and all(a.daily_limit_blocked() for a in candidates):
         reason = ("every usable account reached today's token limit (%s per "
                   "account); the pool resumes after local midnight"
                   % wb_settings.daily_token_limit(ACCOUNTS_DIR, realm))
         midnight = seconds_until_local_midnight()
         raise RateLimited(None, reason, wait=midnight, message=reason,
                           reset_at=time.time() + midnight)
-    if enabled and model and all(a.credit_limit_blocked(model) for a in enabled):
+    if (candidates and model
+            and all(a.credit_limit_blocked(model) for a in candidates)):
         reason = ("every usable account reached today's credit limit (%s per "
                   "account); paid models resume after local midnight, free "
                   "models keep working"
@@ -17665,7 +17688,8 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
         midnight = seconds_until_local_midnight()
         raise RateLimited(None, reason, wait=midnight, message=reason,
                           reset_at=time.time() + midnight)
-    if enabled and model and all(a.model_token_limit_blocked(model) for a in enabled):
+    if (candidates and model
+            and all(a.model_token_limit_blocked(model) for a in candidates)):
         reason = ("every usable account reached today's token limit for %s "
                   "(%s per account); the model resumes after local midnight"
                   % (model, wb_settings.model_daily_token_limit(ACCOUNTS_DIR, realm)))
@@ -17682,8 +17706,6 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                   "raise the cap" % (limit, limit))
         raise RateLimited(None, reason, wait=1, message=reason,
                           reset_at=time.time() + 1)
-    candidates = [a for a in enabled
-                  if allowed_accounts is None or a.uid in allowed_accounts]
     if (model and candidates
             and all(a.blocked_by_model_cooldown(model) for a in candidates)):
         # 全部候选都只差"这个模型的上游窗口恢复"：这是**等待**，不是故障。
@@ -22262,17 +22284,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         cn_accounts = POOL.task_accounts("cn") if POOL else []
-        texts, _ = _ensure_pools()
-        cn_accounts = [a for a in cn_accounts
-                       if texts is None or texts.allows(a)]
         if not cn_accounts:
             return self._json_panel(200, {"tasks": [], "summary": {}, "accounts": [], "msg": "未找到参与任务的国内版账号"})
         uid = (query.get("uid") or [None])[0]
         acc = None
         if uid and uid != "all":
             target = POOL.get(uid) if POOL else None
-            if (target and target.realm == "cn"
-                    and (texts is None or texts.allows(target))):
+            if target and target.realm == "cn":
                 acc = target
         if not acc:
             acc = cn_accounts[0]
@@ -23841,6 +23859,14 @@ class Handler(BaseHTTPRequestHandler):
                 # 由下一个请求照常推（此刻就算推也要先折一次剩余估算，没必要
                 # 为一个开关多付这一趟）。
                 POOL.apply_remaining_weights(None)
+        if "pool_separation_enabled" in payload:
+            raw = payload.get("pool_separation_enabled")
+            if not isinstance(raw, bool):
+                return self._error(
+                    400, "pool_separation_enabled must be true or false",
+                    "invalid_request_error")
+            wb_settings.set_pool_separation_enabled(ACCOUNTS_DIR, raw)
+            reply["pool_separation_enabled"] = raw
         if "realm_fallback_enabled" in payload:
             # 跨出口回退（默认关）：与 remaining_priority_enabled 同一形状——
             # 严格 JSON 布尔，字符串 "false" 会是真值。
@@ -25017,9 +25043,7 @@ class Handler(BaseHTTPRequestHandler):
             targets = [target]
         else:
             targets = POOL.task_accounts("cn")
-        texts, _ = _ensure_pools()
-        targets = [a for a in targets
-                   if a is not None and (texts is None or texts.allows(a))]
+        targets = [a for a in targets if a is not None]
         if not targets:
             return self._json_panel(200, {"ok": False, "msg": "未找到参与任务的国内版账号"})
         from wb_tasks import run_growth_tasks
@@ -25060,9 +25084,6 @@ class Handler(BaseHTTPRequestHandler):
         target = POOL.get(uid)
         if not target or target.realm != "cn":
             return self._json_panel(200, {"ok": False, "msg": "未找到指定的国内版账号"})
-        texts, _ = _ensure_pools()
-        if texts is not None and not texts.allows(target):
-            return self._json_panel(200, {"ok": False, "msg": "该账号属于媒体号池，不执行文本任务"})
         from wb_tasks import claim_task
         res = claim_task(target, code)
         invalidate_tasks_cache()
@@ -25084,9 +25105,7 @@ class Handler(BaseHTTPRequestHandler):
             targets = [target]
         else:
             targets = POOL.task_accounts("cn")
-        texts, _ = _ensure_pools()
-        targets = [a for a in targets
-                   if a is not None and (texts is None or texts.allows(a))]
+        targets = [a for a in targets if a is not None]
         if not targets:
             return self._json_panel(200, {"ok": False, "msg": "未找到参与任务的国内版账号"})
         from wb_tasks import run_streak_bonus
@@ -25113,9 +25132,7 @@ class Handler(BaseHTTPRequestHandler):
             targets = [target]
         else:
             targets = POOL.task_accounts("cn")
-        texts, _ = _ensure_pools()
-        targets = [a for a in targets
-                   if a is not None and (texts is None or texts.allows(a))]
+        targets = [a for a in targets if a is not None]
         if not targets:
             return self._json_panel(200, {"ok": False, "msg": "未找到参与任务的国内版账号"})
         from wb_tasks import do_cat_travel
@@ -25336,9 +25353,7 @@ class Handler(BaseHTTPRequestHandler):
                          if a.realm == "cn"
                          and a.task_active()
                          and not a.uses_enterprise_billing()])
-        texts, _ = _ensure_pools()
-        targets = [a for a in targets
-                   if a is not None and (texts is None or texts.allows(a))]
+        targets = [a for a in targets if a is not None]
         results = []
         for account in targets:
             if account is None:
@@ -25367,9 +25382,7 @@ class Handler(BaseHTTPRequestHandler):
                        if a.realm == "intl" and a.task_active() and str(a.uid) in wanted]
         else:
             targets = POOL.task_accounts("intl")
-        texts, _ = _ensure_pools()
-        targets = [a for a in targets
-                   if a is not None and (texts is None or texts.allows(a))]
+        targets = [a for a in targets if a is not None]
         results = []
         for account in targets:
             if account is None:
@@ -25394,9 +25407,7 @@ class Handler(BaseHTTPRequestHandler):
             targets = [POOL.get(uid)]
         else:
             targets = POOL.task_accounts("intl")
-        texts, _ = _ensure_pools()
-        targets = [a for a in targets
-                   if a is not None and (texts is None or texts.allows(a))]
+        targets = [a for a in targets if a is not None]
         results = []
         for account in targets:
             if account is None:

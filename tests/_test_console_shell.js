@@ -140,6 +140,26 @@ check(/function clearRecentFilters\(\)/.test(script), '缺少最近请求筛选�
  'modelCatalogFilter'].forEach(id => {
   check(html.includes('id="' + id + '"'), '缺少筛选控件 #' + id);
 });
+// 新导航没有 data-console-layout=on；旧布局的隐藏规则不能连带藏掉筛选栏，
+// 否则控件不可见但 ACCOUNT_FILTERS 等状态仍会把列表筛空（issue #850）。
+check(/html:not\(\[data-console-layout="on"\]\):not\(\[data-ui="next"\]\) \.console-filterbar/.test(html),
+  '新导航下筛选栏必须保持可见');
+check(!/html:not\(\[data-console-layout="on"\]\) \.console-filterbar\s*\{display:none!important\}/.test(html),
+  '旧布局的筛选栏隐藏规则不应误伤新导航');
+
+// 号池控件只在隔离实际生效时出现；关闭时既不能露按钮，也不能让隐藏的
+// POOL_FILTER 继续过滤账号（与 #850 同一类问题）。
+check(/id="poolToolsGroup"[^>]*\bhidden\b/.test(html),
+  '号池工具组默认应隐藏');
+check(/function applyPoolSeparationUi\(effective\)/.test(script),
+  '缺少号池工具组显隐与状态重置');
+check(/if\(!POOL_SEPARATION_EFFECTIVE\) POOL_FILTER = 'all'/.test(script),
+  '关闭隔离时应清空号池筛选');
+check(/if\(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'\)/.test(script),
+  '关闭隔离时 renderAccounts 不应按 poolScope 过滤');
+check(/POOL_SEPARATION_EFFECTIVE[\s\S]{0,180}acct-sel/.test(script)
+      && /POOL_SEPARATION_EFFECTIVE[\s\S]{0,260}媒体号池/.test(script),
+  '关闭隔离时不应渲染批量勾选框和号池徽章');
 
 // ---- 3. 概览：用已有数据，不发新请求，也不冒充时间序列 ---------------
 

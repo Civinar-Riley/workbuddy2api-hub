@@ -127,6 +127,11 @@ REMAINING_PRIORITY_ENABLED_KEY = "remaining_priority_enabled"
 # 派发路径上的失败归账与退避尺度，老安装保持原样（传输错误仍喂账号熔断）。
 EGRESS_BACKOFF_ENABLED_KEY = "egress_backoff_enabled"
 
+# 文本 / 媒体号池隔离：默认关闭，所有账号都可同时服务文本与媒体请求。
+# 只有显式打开后才按账号的 poolScope 过滤；独立入口 WB_POOL_SCOPE 仍强制
+# 隔离（见 wb_pool_scope），因为那种部署本来就各带一套账号目录。
+POOL_SEPARATION_ENABLED_KEY = "pool_separation_enabled"
+
 # 跨出口回退（国际版 → 国内版）：国际版出口把某个模型限流 / 当日额度用满 /
 # 整池冷却时，允许拿同名的国内版出口再试一次。缺失键读作关 —— 两个出口是两套
 # 上游、两套额度、两套积分口径，混用会让「这个 Key 只花国际额度」的部署失去
@@ -2150,6 +2155,22 @@ def set_egress_backoff_enabled(accounts_dir, enabled):
     with _lock:
         data = load(accounts_dir)
         data[EGRESS_BACKOFF_ENABLED_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
+def pool_separation_enabled(accounts_dir):
+    """Whether text/media pool separation is enforced (default: off)."""
+    return load(accounts_dir).get(POOL_SEPARATION_ENABLED_KEY) is True
+
+
+def set_pool_separation_enabled(accounts_dir, enabled):
+    """Persist the text/media pool separation switch."""
+    if not isinstance(enabled, bool):
+        raise ValueError("pool_separation_enabled must be true or false")
+    with _lock:
+        data = load(accounts_dir)
+        data[POOL_SEPARATION_ENABLED_KEY] = enabled
         save(accounts_dir, data)
     return enabled
 

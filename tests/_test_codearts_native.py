@@ -89,8 +89,20 @@ try:
     check("release", acct.active_concurrent == 0)
     pool.disable("u1", "manual")
     check("disabled", acct.disabled is True and pool.stats()["disabled"] == 1)
+    check("manual disable marked", acct.manual_disabled is True)
+    acct.auth["expiration"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 10))
+    C._ensure_token(acct)
+    check("token refresh keeps manual disable",
+          acct.disabled is True and acct.manual_disabled is True,
+          (acct.disabled, acct.manual_disabled))
+    pool.add(C.load_auths(ACCOUNTS)[0])
+    check("relogin keeps manual disable",
+          acct.disabled is True and acct.manual_disabled is True,
+          (acct.disabled, acct.manual_disabled))
     pool.enable("u1")
-    check("enabled again", acct.disabled is False)
+    check("enabled again", acct.disabled is False
+          and acct.manual_disabled is False)
     print("== task opt-out ==")
     with mock.patch.object(C, '_maybe_auto_checkin') as auto:
         C.set_tasks_enabled(C.load_config(ACCOUNTS), 'u1', False)
@@ -118,6 +130,24 @@ try:
     check("cooldown after threshold", acct.cool_until > time.time())
     pool.clear_cooldown("u1")
     check("cooldown cleared", acct.cool_until == 0)
+
+    print("== manual disable persistence ==")
+    pool.disable("u1", "manual disable")
+    pool.save_state()
+    reloaded_disabled = C.CodeArtsPool(ACCOUNTS, C.load_config(ACCOUNTS))
+    persisted = reloaded_disabled.get("u1")
+    check("manual disable persisted",
+          persisted.disabled is True and persisted.manual_disabled is True,
+          (persisted.disabled, persisted.manual_disabled))
+    persisted.auth["expiration"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 10))
+    C._ensure_token(persisted)
+    check("refresh after reload keeps manual disable",
+          persisted.disabled is True, persisted.disabled)
+    reloaded_disabled.enable("u1")
+    check("explicit enable clears manual disable",
+          persisted.disabled is False and persisted.manual_disabled is False)
+    pool.enable("u1")
 
     print("== model id identity ==")
     acct.models = [
@@ -442,6 +472,43 @@ try:
           raw[:200])
     state.chat_error = None
     state.chat_error_remaining = -1
+
+    print("== credit exhausted cooldown ==")
+    credit_message = (
+        "您的积分已耗尽，请关注活动积分领取活动或者[升级套餐]"
+        "(https://console.huaweicloud.com/example).")
+    state.chat_error = (400, {"message": credit_message, "code": 400})
+    state.chat_error_remaining = -1
+    body = C.build_chat_body({"model": "GLM-5.2",
+                              "messages": [{"role": "user", "content": "hi"}],
+                              "stream": False}, "sess-credit")
+    before = time.time()
+    try:
+        C.open_chat(C.load_config(ACCOUNTS), body, "sess-credit")
+        check("credit exhausted rotates out", False)
+    except C.CodeArtsUpstreamError as exc:
+        check("credit exhausted is recoverable 429",
+              exc.status == 429 and exc.code == "CREDIT_EXHAUSTED",
+              (exc.status, exc.code))
+    check("credit exhausted cools account",
+          acct.cool_until >= before + C.CREDIT_COOLDOWN - 2,
+          (acct.cool_until, before))
+    check("credit exhausted does not disable account", acct.disabled is False)
+    state.chat_error = None
+    state.chat_error_remaining = -1
+    pool.clear_cooldown("u1")
+
+    embedded_credit = C.CodeArtsStream(
+        io.BytesIO(b'data: {"error_code":"CREDIT_EXHAUSTED",'
+                   b'"error_msg":"\\u60a8\\u7684\\u79ef\\u5206\\u5df2\\u8017\\u5c3d"}\n\n'),
+        "GLM-5.2", acct, acct.pool)
+    try:
+        embedded_credit.preflight()
+        check("embedded credit exhaustion is a 429", False)
+    except C.CodeArtsUpstreamError as exc:
+        check("embedded credit exhaustion is a 429",
+              exc.status == 429 and exc.code == "CREDIT_EXHAUSTED",
+              (exc.status, exc.code))
 
     print("== session header ==")
 
