@@ -230,9 +230,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ## 七、版本更新记录 (Changelog)
 
-本版更新请查看 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
-
-完整历史版本与详细变更日志请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+本版更新与完整历史版本请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
 ---
 
