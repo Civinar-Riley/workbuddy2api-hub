@@ -261,10 +261,13 @@ def fetch_account_profile(account, timeout=15):
         data = json.loads(resp.read().decode("utf-8"))
     if not isinstance(data, dict):
         raise RuntimeError("profile response is not an object")
-    uid = str(data.get("uid") or "")
+    # The console endpoint used to return uid/nickname at the top level and
+    # now wraps the profile in {"code": 0, "data": {...}}. Accept both shapes.
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    uid = str(payload.get("uid") or "")
     if uid and account.uid and uid != account.uid:
         raise RuntimeError("profile uid mismatch")
-    nickname = data.get("nickname")
+    nickname = payload.get("nickname")
     return uid, nickname.strip() if isinstance(nickname, str) else ""
 
 
@@ -2162,6 +2165,8 @@ class Account(object):
         balance scheduler - and persists the new nickname immediately.
         """
         _uid, nickname = fetch_account_profile(self)
+        if not nickname:
+            raise RuntimeError("profile response has no nickname")
         if nickname and nickname != self.nickname:
             self.nickname = nickname
             directory = getattr(self, "accounts_dir", "")

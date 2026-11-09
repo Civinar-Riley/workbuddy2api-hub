@@ -67,6 +67,29 @@ class FetchProfileTests(unittest.TestCase):
         self.assertEqual(captured["headers"].get("x-client-platform"), "web")
         self.assertEqual(captured["headers"].get("authorization"), "Bearer tok")
 
+    def test_fetch_supports_code_data_wrapper(self):
+        def fake_urlopen(req, timeout=30, proxy=""):
+            return FakeResponse({
+                "code": 0,
+                "msg": "ok",
+                "requestId": "req-1",
+                "data": {
+                    "uid": "uid-1",
+                    "nickname": "  Wrapped Nick  ",
+                    "phoneNumber": "+86-13800000000",
+                },
+            })
+
+        account = wb_accounts.Account(
+            {"uid": "uid-1", "accessToken": "tok", "realm": "cn"})
+        old = wb_accounts.urlopen
+        wb_accounts.urlopen = fake_urlopen
+        try:
+            uid, nickname = wb_accounts.fetch_account_profile(account)
+        finally:
+            wb_accounts.urlopen = old
+        self.assertEqual((uid, nickname), ("uid-1", "Wrapped Nick"))
+
     def test_uid_mismatch_is_rejected(self):
         def fake_urlopen(req, timeout=30, proxy=""):
             return FakeResponse({"uid": "uid-other", "nickname": "X"})
@@ -111,6 +134,18 @@ class SyncNicknameTests(unittest.TestCase):
             with open(os.path.join(directory, "uid-1.json"), encoding="utf-8") as fh:
                 stored = json.load(fh)
             self.assertEqual(stored.get("nickname"), "New Nick")
+
+    def test_empty_nickname_is_reported_as_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            account = wb_accounts.Account(
+                {"uid": "uid-1", "accessToken": "tok", "realm": "cn",
+                 "nickname": "Old"},
+                os.path.join(directory, "uid-1.json"))
+            with mock.patch.object(wb_accounts, "fetch_account_profile",
+                                   return_value=("uid-1", "")):
+                with self.assertRaisesRegex(RuntimeError, "no nickname"):
+                    account.sync_nickname()
+            self.assertEqual(account.nickname, "Old")
 
 
 class SyncProfileRouteTests(unittest.TestCase):
@@ -173,6 +208,31 @@ class SyncProfileRouteTests(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertEqual(obj["updated"], [])
             self.assertEqual(obj["failed"][0]["uid"], "uid-1")
+
+    def test_route_does_not_report_empty_nickname_as_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            account = wb_accounts.Account(
+                {"uid": "uid-1", "accessToken": "tok", "realm": "cn"},
+                os.path.join(directory, "uid-1.json"))
+            old_pool = wb_proxy.POOL
+            wb_proxy.POOL = self.make_pool(account)
+            try:
+                with mock.patch.object(wb_accounts, "fetch_account_profile",
+                                       return_value=("uid-1", "")):
+                    with mock.patch.object(wb_proxy, "log") as logged:
+                        handler = self.make_handler()
+                        handler._route_accounts_sync_profile({"uid": "uid-1"})
+            finally:
+                wb_proxy.POOL = old_pool
+            code, obj = handler.captured
+            self.assertEqual(code, 200)
+            self.assertEqual(obj["updated"], [])
+            self.assertEqual(obj["failed"][0]["uid"], "uid-1")
+            self.assertIn("no nickname", obj["failed"][0]["error"])
+            messages = [str(call.args[0]) for call in logged.call_args_list
+                        if call.args]
+            self.assertFalse([m for m in messages
+                              if "nickname synced" in m], messages)
 
 
 if __name__ == "__main__":

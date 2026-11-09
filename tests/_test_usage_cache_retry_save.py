@@ -195,6 +195,69 @@ check("三次跳过只记一条",
 os.environ["WB_USAGE_CACHE_RETRY_MIN_SECONDS"] = "0.05"
 clear_all()
 
+print("[5b] 不可序列化的跳过被节流后不抛 UnboundLocalError")
+os.environ["WB_USAGE_CACHE_RETRY_MIN_SECONDS"] = "60"
+del LOGS[:]
+reset_state()
+P._usage_cache_clear_retry("remaining")
+crashed = None
+try:
+    for _ in range(3):
+        P._usage_cache_note_skip(
+            "remaining", why=P._USAGE_CACHE_UNSERIALISABLE)
+except UnboundLocalError as exc:
+    crashed = exc
+check("不可序列化跳过被节流时不抛 UnboundLocalError",
+      crashed is None, crashed)
+check("节流仍只记一条日志",
+      len([m for m in LOGS if "skipped" in m]) == 1, LOGS)
+check("跳过计数仍完整累加",
+      P._usage_cache_skip_counts.get("remaining") == 3,
+      P._usage_cache_skip_counts)
+os.environ["WB_USAGE_CACHE_RETRY_MIN_SECONDS"] = "0.05"
+clear_all()
+
+print("[5c] 定价关闭是显式状态：不告警、不登记无效补写")
+del LOGS[:]
+P._usage_cache_clear_retry("snapshot")
+P._usage_cache_clear_retry("analytics")
+with P._usage_snap_state_lock:
+    P._usage_snap_state.clear()
+    P._usage_snap_state["intl"] = {
+        "snap": {"requests": 1}, "offset": OFFSET, "key": P._usage_log_key(),
+        "pricing": None, "realm": None, "tail": b"abc",
+    }
+with P._analytics_state_lock:
+    P._analytics_state.clear()
+    P._analytics_state["intl"] = {
+        "maps": {}, "offset": OFFSET, "key": P._usage_log_key(),
+        "pricing": None, "realm": None, "tail": b"abc",
+    }
+_real_pricing_enabled = P.wb_pricing.pricing_enabled
+P.wb_pricing.pricing_enabled = lambda: False
+try:
+    for kind in ("snapshot", "analytics"):
+        collected = P._usage_cache_collect_kind(kind)
+        reason = P._usage_cache_collect_reason.get(kind)
+        check("%s 收集结果为空" % kind, collected is None, collected)
+        check("%s 上报定价关闭而非状态损坏" % kind,
+              reason == P._USAGE_CACHE_PRICING_OFF, reason)
+        P._usage_cache_note_skip(kind, why=reason)
+        with P._usage_cache_retry_lock:
+            scheduled = kind in P._usage_cache_retry_due
+        check("%s 不登记无效补写" % kind, not scheduled,
+              P._usage_cache_retry_due)
+finally:
+    P.wb_pricing.pricing_enabled = _real_pricing_enabled
+    with P._usage_snap_state_lock:
+        P._usage_snap_state.clear()
+    with P._analytics_state_lock:
+        P._analytics_state.clear()
+check("定价关闭不产生 WARN 日志",
+      not [m for m in LOGS if "skipped" in m], LOGS)
+P._usage_cache_clear_retry("snapshot")
+P._usage_cache_clear_retry("analytics")
+
 print("[6] 冷启动不误报「日志被替换/截断」，续读失败才报")
 del LOGS[:]
 cold_state = {"events": [], "usage": {}, "keys": set(), "day": "",

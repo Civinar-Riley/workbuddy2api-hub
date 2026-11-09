@@ -10045,6 +10045,9 @@ def _usage_cache_schedule_retry(kind):
 # 放手），会把瞬时的锁竞争误判成「状态不可序列化」。
 _USAGE_CACHE_BUSY = "state lock busy"
 _USAGE_CACHE_UNSERIALISABLE = "state not serialisable (kind state has no checkpointable shape)"
+# 定价总开关关着时，折叠不会读取任何价格，state["pricing"] 必然为 None。
+# 这是操作者的显式选择，不是状态损坏；单独标记，避免 WARN 和无效补写。
+_USAGE_CACHE_PRICING_OFF = "pricing disabled (cost estimation off)"
 _usage_cache_collect_reason = {}
 
 
@@ -10071,11 +10074,17 @@ def _usage_cache_note_skip(kind, why=None):
     now = time.time()
     with _usage_cache_retry_lock:
         _usage_cache_skip_counts[kind] = _usage_cache_skip_counts.get(kind, 0) + 1
+        # count 必须在节流判断外取：下面的「不可序列化到 3 次就停手」分支
+        # 在 should_log 为 False 时同样要读它。
+        count = _usage_cache_skip_counts[kind]
+        # 定价关闭时本来就没有可写的价记录：不占日志节流窗口，也不登记
+        # 永远无法成功的补写。跳过计数仍然保留，便于现场确认确实发生过。
+        if why and why.startswith(_USAGE_CACHE_PRICING_OFF[:30]):
+            return
         last = _usage_cache_skip_logged.get(kind)
         should_log = last is None or (now - last) >= _USAGE_CACHE_SKIP_LOG_SECONDS
         if should_log:
             _usage_cache_skip_logged[kind] = now
-            count = _usage_cache_skip_counts[kind]
     if should_log:
         # WARN 而不是默认的 INFO：这是「某类即将不落盘」的唯一信号，面板按
         # WARN 筛问题时要能看到它。
@@ -11345,16 +11354,27 @@ def _usage_cache_collect_kind(kind):
     if kind == "snapshot":
         entries = []
         done = 0
+        pricing_off = False
+        pricing_disabled = not wb_pricing.pricing_enabled()
         with _lock_if_free(_usage_snap_state_lock) as held:
             if not held:
                 return _usage_cache_mark_reason(kind, _USAGE_CACHE_BUSY)
             for realm, state in _usage_snap_state.items():
+                # 总开关关着时这份折叠没有价记录，写出去也不会被采纳端采用。
+                # 只跳过确实因开关关闭而缺少 pricing 的状态；价表读取失败等
+                # 其他原因仍按不可序列化上报。
+                if pricing_disabled and state.get("pricing") is None:
+                    pricing_off = True
+                    continue
                 entry = _usage_cache_snapshot_entry(realm, state)
                 if entry is not None:
                     entries.append(entry)
                     done = max(done, state["offset"])
-        return (entries, done) if entries else _usage_cache_mark_reason(
-            kind, _USAGE_CACHE_UNSERIALISABLE)
+        if entries:
+            return entries, done
+        return _usage_cache_mark_reason(
+            kind, _USAGE_CACHE_PRICING_OFF if pricing_off
+            else _USAGE_CACHE_UNSERIALISABLE)
     if kind == "by_account":
         with _lock_if_free(_byacct_state_lock) as held:
             if not held:
@@ -11366,16 +11386,24 @@ def _usage_cache_collect_kind(kind):
     if kind == "analytics":
         entries = []
         done = 0
+        pricing_off = False
+        pricing_disabled = not wb_pricing.pricing_enabled()
         with _lock_if_free(_analytics_state_lock) as held:
             if not held:
                 return _usage_cache_mark_reason(kind, _USAGE_CACHE_BUSY)
             for realm, state in _analytics_state.items():
+                if pricing_disabled and state.get("pricing") is None:
+                    pricing_off = True
+                    continue
                 entry = _usage_cache_analytics_entry(realm, state)
                 if entry is not None:
                     entries.append(entry)
                     done = max(done, state["offset"])
-        return (entries, done) if entries else _usage_cache_mark_reason(
-            kind, _USAGE_CACHE_UNSERIALISABLE)
+        if entries:
+            return entries, done
+        return _usage_cache_mark_reason(
+            kind, _USAGE_CACHE_PRICING_OFF if pricing_off
+            else _USAGE_CACHE_UNSERIALISABLE)
     if kind == "series":
         entries = []
         done = 0
