@@ -37,6 +37,10 @@ This project is for protocol research and personal use only. Prefer the official
 - **可视化管理看板**：提供 Web 仪表盘，支持实时请求日志、Token/积分透视、多 API Key 权限分发（模型/账号白名单）与额度护栏。
 - **一键工作台启动**：`start-workbuddy-all.bat` 先用 `--probe-only` 检查端口上的实例是否健康，未运行才拉起网关并打开 WorkBuddy 工作台，避免重复启动或误连陌生服务。
 
+### 社区 Rust 版本
+
+[YTjungle666/workbuddy2api-hub](https://github.com/YTjungle666/workbuddy2api-hub) 是社区独立维护的 Rust 重写分支。网关后端与启动器均使用 Rust 实现，提供单文件静态二进制，不依赖 Python 运行时；功能以上游 `v2.0.1` 为对齐基线。它不是本仓库的官方发布物，问题反馈与版本更新请前往对应仓库。
+
 > ⚡ **Vibe Coding 产物**：本项目为 100% Vibe Coding 协同产物——人类开发者提出架构与业务意图，AI 助手端到端完成逆向分析、链路调度、WAF 指纹脱敏与界面编写。
 
 > 📌 **提交代码贡献前**：请先查看并**严格遵循**贡献手册 [`CONTRIBUTING.md`](CONTRIBUTING.md)——提交格式、测试门禁与端到端冒烟要求都在那里（AI / 智能体请特别注意其中的硬性规则节）。
