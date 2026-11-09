@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
 <title>WorkBuddy 控制台</title>
 <!-- 首帧判定：必须留在 <head>、在任何页面内容之前同步执行。
      没有面板会话令牌（无痕 / 首次访问 / 已登出）→ 不动 markup 上的 display:flex，
@@ -7326,7 +7327,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
           <div>
             <h2 style="margin:0">更稳的会话粘滞键 <span class="help-mark" role="button" tabindex="0" aria-label="功能说明" onclick="toggleHelpDetail('affinityStableKeyHelp', event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleHelpDetail('affinityStableKeyHelp', event);}">!</span> <em id="setAffinityStableKeyState"></em></h2>
             <div class="help-detail" id="affinityStableKeyHelp" hidden>
-              会话粘滞（同一段对话每轮回到同一个账号）默认只用「system 提示 + 首条提问」算会话键。两个开场白相同的会话会算出同一个键、共享同一个绑定槽，于是每轮互相覆盖、轮流换账号，缓存每轮归零。开启后把「首条 assistant 回复」也算进键里，两个会话从第 2 轮起各走各的账号。默认关闭，关着时与上游逻辑一字不差。
+              会话粘滞（同一段对话每轮回到同一个账号）默认把「system 提示 + 首条提问 + 首条 assistant 回复」算进会话键。两个开场白相同的会话从第 2 轮起会各走各的账号，避免共享绑定槽后互相覆盖、轮流换账号，导致缓存每轮归零。可关闭此开关恢复旧的两条消息会话键。
               <br><br>
               代价：前缀真的完全相同的会话仍会共用一个账号（那本来就是最优的缓存共享）；开启后前两条消息的哈希变成前三条，正在进行的对话会一次性重新绑定账号（那一轮缓存掉一次）。
             </div>

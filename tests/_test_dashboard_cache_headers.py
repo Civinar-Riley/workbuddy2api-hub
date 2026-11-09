@@ -153,6 +153,11 @@ try:
     check("ETag 是带引号的强校验符",
           etag.startswith('"') and etag.endswith('"') and not etag.startswith("W/"),
           etag)
+    check("面板禁止搜索引擎索引",
+          (headers.get("X-Robots-Tag") or "").strip() == "noindex, nofollow",
+          headers.get("X-Robots-Tag"))
+    check("HTML 也带 noindex 兜底",
+          b'<meta name="robots" content="noindex,nofollow">' in body)
     check("不发布 Last-Modified（日期无法表达语言变化）",
           headers.get("Last-Modified") is None, headers.get("Last-Modified"))
 
@@ -169,6 +174,9 @@ try:
     check("Cache-Control 在 304 上重发",
           (headers.get("Cache-Control") or "").strip() == "no-cache",
           headers.get("Cache-Control"))
+    check("X-Robots-Tag 在 304 上重发",
+          (headers.get("X-Robots-Tag") or "").strip() == "noindex, nofollow",
+          headers.get("X-Robots-Tag"))
 
     print("[3] 弱比较：W/<etag> 同样命中（RFC 7232 §3.2）")
     status, _, _ = get("/", {"If-None-Match": "W/" + etag})

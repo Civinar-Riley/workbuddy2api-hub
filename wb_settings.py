@@ -207,14 +207,15 @@ def set_account_max_concurrent(accounts_dir, value):
 # （见 affinity_route）。把第 2 轮才出现的内容算进去之后，两个会话从第 2 轮起
 # 各走各的账号；前缀真的完全相同的会话仍会共用账号——那本来就是最优的缓存共享。
 #
-# 默认关：改的是派发路径上的会话识别，老安装必须保持原逻辑。关着时
-# affinity_route 与上游一字不差，可随时回退。
+# 默认开启：这是派发路径上的会话识别修复，避免同开场白的并发会话每轮
+# 互相抢账号。仍可在面板关闭，关闭后 affinity_route 与旧逻辑一致。
 AFFINITY_STABLE_KEY_ENABLED_KEY = "affinity_stable_key_enabled"
 
 
 def affinity_stable_key_enabled(accounts_dir):
     """Whether the conversation key also covers the first assistant turn."""
-    return load(accounts_dir).get(AFFINITY_STABLE_KEY_ENABLED_KEY) is True
+    value = load(accounts_dir).get(AFFINITY_STABLE_KEY_ENABLED_KEY)
+    return value is not False if isinstance(value, bool) else value is None
 
 
 def set_affinity_stable_key_enabled(accounts_dir, enabled):

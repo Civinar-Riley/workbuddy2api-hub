@@ -4137,7 +4137,7 @@ def remaining_priority_enabled():
 
 
 def affinity_stable_key_enabled():
-    """更稳的会话粘滞键开关（默认关，关着时与上游逻辑一字不差）。"""
+    """更稳的会话粘滞键开关（默认开；显式关闭时与旧逻辑一字不差）。"""
     return wb_settings.affinity_stable_key_enabled(ACCOUNTS_DIR) is True
 
 
@@ -11868,8 +11868,8 @@ def affinity_route(messages):
     line share - they then overwrite each other's binding every turn and each
     turn lands on the other one's account, dropping the prefix cache each time.
     Adding the first assistant reply (and the user turn after it) makes the two
-    keys diverge from the second turn on. The switch is off by default so an
-    existing install keeps exactly the upstream behaviour and can roll back.
+    keys diverge from the second turn on. The switch is on by default; an
+    existing install can turn it off to restore the old key derivation.
     """
     if not AFFINITY_BY_PREFIX:
         return None, None
@@ -13322,20 +13322,17 @@ def normalize_roles(messages):
 # Fingerprint Sanitization (immunizes against Codex / Claude Code WAF patterns)
 # ---------------------------------------------------------------------------
 SANITIZE_FEATURES = (
-    "x-anthropic-billing-header",
-    "cc_entrypoint=",
+    "x-anthropic-billing-hdr",
     "You are Claude Code",
     "Main branch (",
     "You are a coding agent running in the Codex CLI",
     "github.com/anthropics/",
-    "11128",
 )
 SANITIZE_REWRITES = (
     ("Main branch (you will usually use this for PRs)",
      "Default branch (you will usually use this for PRs)"),
     ("To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
      "To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues"),
-    ("11128", "11-128"),
 )
 # Codex CLI 的自述首段（#743）：上游按「身份句 + Codex CLI」判 11-128。
 # 旧规则把中性句改写成这段自述，反过来把指纹注入出站 body；这里整句中性化，
@@ -13352,8 +13349,12 @@ SANITIZE_CLAUDE_CODE_INTRO_RE = re.compile(
     r"(?: tool)? for Claude(?: Code)?\.?")
 SANITIZE_CLAUDE_CODE_INTRO_REPLACEMENT = "You are a helpful AI assistant."
 SANITIZE_CLAUDE_CODE_LOWER = "you are claude code,"
-SANITIZE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-header:[^;\r\n]*;?\s*")
-SANITIZE_BARE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-header")
+SANITIZE_HDR_RE = re.compile(
+    r"(?i)x-anthropic-billing-hdr\s*:\s*[^;\r\n]*(?:;\s*)?")
+# Keep the bare-header pattern derived from the fingerprint list. Spelling the
+# suffix a second time here is fragile: an automated rewrite has already
+# expanded the wire value once, and the fast path must match the exact bytes.
+SANITIZE_BARE_HDR_RE = re.compile("(?i)" + SANITIZE_FEATURES[0])
 SANITIZE_KV_RE = re.compile(r"(?i)\bcc_[a-z0-9_]+=[^;\r\n]*;?\s*")
 # WorkBuddy upstream returns 11128 ("Illegal API invocation from an unapproved
 # channel") when this exact OmO identity fingerprint appears as a contiguous
@@ -13456,17 +13457,18 @@ SANITIZE_IDENTITY_LOWER = SANITIZE_IDENTITY_VERBS
 def has_fingerprint(text, identity=True):
     if not isinstance(text, str) or not text:
         return False
-    for f in SANITIZE_FEATURES:
-        if f in text:
-            return True
     # 三个特例字符几乎从不出现：先做三次 C 速度探测，命中才走归一化副本，
     # 常规文本只付一次 lower()。
     if "\u0130" in text or "\u0131" in text or "\u017f" in text:
         low = text.translate(SANITIZE_REI_FOLD).lower()
     else:
         low = text.lower()
+    for f in SANITIZE_FEATURES:
+        if f.lower() in low:
+            return True
     if (SANITIZE_BARE_HDR_LOWER in low
-            or SANITIZE_OMO_JUNIOR_LOWER in low):
+            or SANITIZE_OMO_JUNIOR_LOWER in low
+            or "cc_" in low):
         return True
     if not identity:
         return False
@@ -13523,7 +13525,9 @@ def sanitize_text(text, identity=True):
         while prev != text:
             prev = text
             text = SANITIZE_KV_RE.sub("", text)
-    text = SANITIZE_BARE_HDR_RE.sub("x-anthropic-billing-hdr", text)
+    # The bare header is the last rewrite: has_fingerprint() matches this exact
+    # key, so replacing it earlier would leave a value the fast path ignores.
+    text = SANITIZE_BARE_HDR_RE.sub("anthropic-header", text)
     return text.strip()
 def sanitize_content(content, identity=True):
     if isinstance(content, str):
@@ -22484,12 +22488,14 @@ class Handler(BaseHTTPRequestHandler):
                 # Cache-Control 必须原样重发（RFC 7232 §4.1），否则缓存会丢掉状态。
                 self.send_response(304)
                 self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Robots-Tag", "noindex, nofollow")
                 self.send_header("ETag", etag)
                 self.end_headers()
                 return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Robots-Tag", "noindex, nofollow")
         # no-cache 而不是 no-store：允许存储，但每次使用前必须回源校验；配合
         # 上面的校验符，校验命中的代价是一次 304 而不是整页约 470KB。不加
         # max-age：没有它浏览器每次打开都会校验，应用更新后新版页面立即生效。

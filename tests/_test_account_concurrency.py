@@ -435,6 +435,7 @@ class TestWithStableAffinityKey(_SettingsDirMixin, unittest.TestCase):
                 {"role": "user", "content": "继续"}]
 
     def test_both_off_keeps_upstream_behaviour(self):
+        wb_settings.set_affinity_stable_key_enabled(self.dir, False)
         pool = self._pool()
         key = wb_proxy.affinity_route(self._turn("回复 A"))[0]
         self.assertEqual(key, wb_proxy.affinity_route(self._turn("回复 B"))[0])

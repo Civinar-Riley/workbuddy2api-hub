@@ -515,6 +515,32 @@ class ClaudeCodeIntroFingerprintTests(unittest.TestCase):
         self.assertEqual(body["messages"][1]["content"], "hi")
 
 
+class AnthropicHeaderFingerprintTests(unittest.TestCase):
+    """#733：消息正文里的 Anthropic 头键值与 cc_* 尾部参数。"""
+
+    def test_header_pair_removed(self):
+        self.assertEqual(
+            P.sanitize_text("x-anthropic-billing-hdr: 1.0.0"), "")
+        self.assertEqual(
+            P.sanitize_text("before x-anthropic-billing-hdr: 1.0.0; after"),
+            "before after")
+
+    def test_header_key_is_case_insensitive(self):
+        self.assertEqual(
+            P.sanitize_text("X-ANTHROPIC-BILLING-HDR: abc;"), "")
+
+    def test_cc_parameter_removed(self):
+        self.assertEqual(P.sanitize_text("cc_system_prompt=1;"), "")
+        self.assertEqual(
+            P.sanitize_text("prompt cc_temperature=0.7; tail"),
+            "prompt tail")
+
+    def test_bare_header_is_reduced(self):
+        out = P.sanitize_text("`x-anthropic-billing-hdr`")
+        self.assertEqual(out, "`anthropic-header`")
+        self.assertFalse(P.has_fingerprint(out))
+
+
 if __name__ == "__main__":
     unittest.main()
 

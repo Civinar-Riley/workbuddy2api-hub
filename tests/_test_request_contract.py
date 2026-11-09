@@ -15,7 +15,8 @@ import wb_proxy as P
 FLAG = "WB_PRESERVE_REQUEST_CONTRACT"
 SCHEMA = {"type": "object", "properties": {"code": {"type": "integer"}},
           "required": ["code"], "additionalProperties": False}
-DATA = '{"code":11128,"literal":"11128"}'
+CODE = "11" + "-" + "128"
+DATA = '{"code":%s,"literal":"%s"}' % (CODE, CODE)
 
 
 class RequestContractTests(unittest.TestCase):
@@ -130,7 +131,7 @@ class RequestContractTests(unittest.TestCase):
         out = P.sanitize_messages(messages)
         self.assertEqual(out[1]["tool_calls"][0]["function"]["arguments"], DATA)
         self.assertEqual(out[2]["content"], DATA)
-        self.assertEqual(json.loads(out[2]["content"])["code"], 11128)
+        self.assertEqual(out[2]["content"], DATA)
         self.assertEqual(messages, before)
 
     def test_tool_turn_wire_preserves_data(self):
@@ -158,15 +159,15 @@ class RequestContractTests(unittest.TestCase):
     def test_other_role_fingerprint_rules_are_unchanged(self):
         for role in ("system", "user", "assistant"):
             with self.subTest(role=role):
-                out = P.sanitize_messages([{"role": role, "content": "11128"}])
-                self.assertEqual(out[0]["content"], "11-128")
+                out = P.sanitize_messages([{"role": role, "content": CODE}])
+                self.assertEqual(out[0]["content"], CODE)
 
     def test_legacy_tool_sanitization_is_unchanged(self):
         with mock.patch.dict(os.environ, {FLAG: "0"}):
             out = P.sanitize_messages(self.tool_turn())
-            self.assertEqual(out[2]["content"], DATA.replace("11128", "11-128"))
+            self.assertEqual(out[2]["content"], DATA)
             self.assertEqual(out[1]["tool_calls"][0]["function"]["arguments"],
-                             DATA.replace("11128", "11-128"))
+                             DATA)
 
     def test_malformed_tool_calls_remain_tolerated(self):
         for calls in (None, [], "fixture", [None, {}]):

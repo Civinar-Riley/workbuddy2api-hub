@@ -122,7 +122,7 @@ class FingerprintFastPathTests(unittest.TestCase):
                 while prev != text:
                     prev = text
                     text = P.SANITIZE_KV_RE.sub("", text)
-            text = P.SANITIZE_BARE_HDR_RE.sub("x-anthropic-billing-hdr", text)
+            text = P.SANITIZE_BARE_HDR_RE.sub("anthropic-header", text)
             return text.strip()
 
         for t in fingerprint_cases():
