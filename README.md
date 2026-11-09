@@ -217,7 +217,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 286 个套件：217 个 Python + 69 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 287 个套件：217 个 Python + 70 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -227,6 +227,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ### Unreleased
 
+- **账号 JSON 批量导入**：账号工具栏的「导入」现在可以一次选择多个 JSON 文件。面板会先按选择顺序解析并校验全部文件，再合并成一个文档做一次 dry-run 预览；任一文件不是合法 JSON、没有账号或账号列表为空时整体中止，不会只导入一部分。单文件导入与原有覆盖 / 分组选项保持不变。
 - **媒体能力始终开启**：`/v1/images/*` 与 `/v1/videos/*` 不再依赖总开关，设置页只保留「每分钟生图上限」「视频时长上限」「生视频并发」「每 Key 每日积分上限」四项。请求优先使用 API Key 绑定的出口，未绑定时自动选择当前有可用媒体账号的出口；旧 `settings.json` 中的 `enabled` / `realm` / `identity` 会被忽略并在下次保存时清除。没有可用媒体账号时返回 502（上游暂不可用），不再用 404 让客户端误以为部署没有媒体能力。
 - **可选 Go/uTLS 传输桥**：新增本地 Go/uTLS CONNECT 桥接器，可按目标平台启用 Node/OpenSSL 兼容的 ClientHello（18 个 Cipher、10 个 Extension、无 ALPN），Python 仍负责 HTTP 构造、连接复用与 SSE 读取。默认继续使用 Python/OpenSSL，只有设置 `WB_TLS_FINGERPRINT=node` 才启用；支持自动发现便携包内的 Windows / macOS / Linux amd64、arm64 桥接器，OpenWrt 额外支持 armv7。桥接器仅监听回环地址，使用启动时随机认证密钥，并继续验证上游证书。
 - **设备 Token 与桌面 chat 兼容**：账号支持独立 `deviceToken`，也可从设置页配置 `device_token_file` 并在不暴露 token 本体的前提下热重载；优先级为账号 token > settings 字面值 > 文件。新增可选桌面 chat 兼容头（`X-Agent-Runtime`、`baggage` 与会话字段），默认关闭。

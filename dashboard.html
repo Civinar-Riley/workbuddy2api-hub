@@ -2569,6 +2569,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '把全部账号（含另一个版本）的出站身份切到下一个：WB → VSC → CLI': 'Switch every account (both versions) to the next outbound identity: WB → VSC → CLI',
     '将跳过': 'Will skip',
     '尚未选择文件。': 'No file selected yet.',
+    '正在校验 ': 'Validating ',
     '就绪': 'Ready',
     '就绪 ·': 'Ready ·',
     '展开本页导航': 'Expand section navigation',
@@ -2762,6 +2763,8 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '文件不是合法 JSON': 'The file is not valid JSON',
     '文件里没有找到账号（既没有 accounts 数组，也不是单个账号）': 'No account found in the file: it is neither an accounts array nor a single account',
     '文件：': 'File:',
+    '个文件': 'files',
+    '个文件…': 'files...',
     '文本': 'Text',
     '新增': 'Added',
     '新增的行还没有填写 Key': 'The new row has no key yet',
@@ -3356,6 +3359,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '账号余额低于该值时不再接单，避免余额被用尽后触发上游的短信提醒。填 0 表示关闭。': 'An account stops taking orders once its balance drops below this, so the balance is never drained enough to trigger the upstream SMS alert. 0 turns it off.',
     '账号凭证刷新成功': 'Account credentials refreshed',
     '账号列表是空的': 'The account list is empty',
+    '无法读取文件': 'could not be read',
     '账号加载失败:': 'Loading accounts failed:',
     '账号在单个模型上当日消耗的 token 达到该值后，该模型自动切到其他账号（同一账号的其他模型不受影响）；本地时间 0 点后自动恢复。填 0 表示不限（默认）。': 'Once the token use of an account on a single model reaches this today, that model switches to another account (the other models of the same account are unaffected); it recovers after local midnight. 0 means no limit (default).',
     '账号存储目录': 'Account directory',
@@ -3415,7 +3419,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '连接中断:': 'Connection lost:',
     '连续打卡天数': 'Check-in streak',
     '退出面板登录': 'Sign out of the dashboard',
-    '选择一个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象， 以及桌面客户端的': 'Pick an account JSON file. It accepts files exported by this gateway, an account array, a single account object, and the one of the desktop client',
+    '选择一个或多个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象， 以及桌面客户端的': 'Pick one or more account JSON files. It accepts files exported by this gateway, account arrays, single account objects, and the one of the desktop client',
     '选择要登录的版本：': 'Choose the version to sign in to:',
     '选择颜色主题': 'Choose a color theme',
     '速度': 'Speed',
@@ -4044,6 +4048,10 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。": "請確認已安裝並登入 WorkBuddy 客戶端後點「重新掃描」。",
     "读取设置失败:": "讀取設定失敗:",
     "读取设置失败: ": "讀取設定失敗: ",
+    "正在校验 ": "正在校驗 ",
+    "个文件": "個檔案",
+    "个文件…": "個檔案…",
+    "无法读取文件": "無法讀取檔案",
     "调度器": "排程器",
     "调度器未初始化": "排程器未初始化",
     "调用的模型分布": "呼叫的模型分佈",
@@ -4114,7 +4122,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "连接中断:": "連線中斷:",
     "连接中断: ": "連線中斷: ",
     "退出面板登录": "退出面板登入",
-    "选择一个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象， 以及桌面客户端的": "選擇一個帳號 JSON 檔案。支援本閘道匯出的檔案、帳號陣列、單個帳號物件， 以及桌面客戶端的",
+    "选择一个或多个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象， 以及桌面客户端的": "選擇一個或多個帳號 JSON 檔案。支援本閘道匯出的檔案、帳號陣列、單個帳號物件， 以及桌面客戶端的",
     "选择要登录的版本：": "選擇要登入的版本：",
     "逐个刷新所有账号的上游访问凭证（相当于对每个账号点一次「刷新凭证」）": "逐個重新整理所有帳號的上游訪問憑證（相當於對每個帳號點一次「重新整理憑證」）",
     "部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而上游没有对应的执行器：声明送上去，模型看到工具却没有执行器，客户端最后只拿到一句 unsupported call。开启后由本网关代跑——把声明换成自己的同名函数，在本地执行（搜索按 DuckDuckGo → Bing → Wikipedia → Stack Overflow → Google News 的顺序自动轮换，抓页面抓这个 URL）再把结果喂回模型。默认关闭，关闭时声明原样透传，客户端自己声明的搜索工具照常拿到调用。": "部分客戶端（如 Codex App）會宣告 web_search / web_fetch 這類服務端工具，而上游沒有對應的執行器：宣告送上去，模型看到工具卻沒有執行器，客戶端最後只拿到一句 unsupported call。開啟後由本閘道代跑——把宣告換成自己的同名函式，在本地執行（搜尋按 DuckDuckGo → Bing → Wikipedia → Stack Overflow → Google News 的順序自動輪換，抓頁面抓這個 URL）再把結果喂回模型。預設關閉，關閉時宣告原樣透傳，客戶端自己宣告的搜尋工具照常拿到呼叫。",
@@ -7732,8 +7740,9 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     </div>
     <div class="modal-bd">
       <p class="hint" style="margin-top:0">
-        选择一个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象，
+        选择一个或多个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象，
         以及桌面客户端的 <code>{"account":…,"auth":…}</code> 格式。
+        批量选择时会先校验全部文件，全部通过后再统一预览和导入。
       </p>
       <div class="field" style="margin-bottom:12px">
         <label for="importGroup">导入到分组（可选）</label>
@@ -12218,9 +12227,11 @@ async function exportOne(uid){
 }
 
 let importRows = null;   // 已解析、待导入的账号行
+let importFileCount = 0; // 批量选择时已读取的文件数
 
 function openImport(){
   importRows = null;
+  importFileCount = 0;
   const m = document.getElementById('importModal');
   const body = document.getElementById('importBody');
   const ow = document.getElementById('importOverwrite');
@@ -12230,13 +12241,16 @@ function openImport(){
   if(body) body.innerHTML = '<p class="hint">正在打开文件…</p>';
   if(m) m.classList.add('show');
   // The picker is created per call so choosing the same file twice still fires.
+  // `multiple` lets one picker pass every exported JSON at once; all files are
+  // parsed and dry-run together before anything is written.
   const picker = document.createElement('input');
   picker.type = 'file';
+  picker.multiple = true;
   picker.accept = '.json,application/json';
   picker.onchange = () => {
-    const f = picker.files && picker.files[0];
-    if(!f){ closeImport(); return; }
-    readImportFile(f);
+    const files = picker.files ? Array.from(picker.files) : [];
+    if(!files.length){ closeImport(); return; }
+    readImportFiles(files);
   };
   picker.click();
 }
@@ -12303,36 +12317,61 @@ function closeImport(){
   const m = document.getElementById('importModal');
   if(m) m.classList.remove('show');
   importRows = null;
+  importFileCount = 0;
   const btn = document.getElementById('btnImportCommit');
   if(btn) btn.disabled = true;
 }
 
-async function readImportFile(file){
+function importRowsFromDocument(doc, label){
+  // Accept the export document, a bare array, or a single account object.
+  let rows;
+  if(Array.isArray(doc)) rows = doc;
+  else if(doc && Array.isArray(doc.accounts)) rows = doc.accounts;
+  else if(doc && (doc.accessToken || doc.auth)) rows = [doc];
+  else throw new Error((label ? label + '：' : '') + '文件里没有找到账号（既没有 accounts 数组，也不是单个账号）');
+  if(!rows.length) throw new Error((label ? label + '：' : '') + '账号列表是空的');
+  return rows;
+}
+
+async function parseImportFile(file){
+  let text;
+  try{ text = await file.text(); }
+  catch(e){ throw new Error(file.name + '：无法读取文件'); }
+  let doc;
+  try{ doc = JSON.parse(text); }
+  catch(e){ throw new Error(file.name + '：文件不是合法 JSON'); }
+  return {file: file, doc: doc, rows: importRowsFromDocument(doc, file.name)};
+}
+
+async function readImportFiles(files){
   const body = document.getElementById('importBody');
+  const btn = document.getElementById('btnImportCommit');
   try{
-    const text = await file.text();
-    let doc;
-    try{ doc = JSON.parse(text); }
-    catch(e){ throw new Error('文件不是合法 JSON'); }
-
-    // Accept the export document, a bare array, or a single account object.
-    let rows;
-    if(Array.isArray(doc)) rows = doc;
-    else if(doc && Array.isArray(doc.accounts)) rows = doc.accounts;
-    else if(doc && (doc.accessToken || doc.auth)) rows = [doc];
-    else throw new Error('文件里没有找到账号（既没有 accounts 数组，也不是单个账号）');
-
+    importRows = null;
+    importFileCount = files.length;
+    if(btn){ btn.disabled = true; btn.textContent = '校验中...'; }
+    if(body){
+      body.innerHTML = '<p class="hint">正在校验 ' + files.length + ' 个文件…</p>';
+    }
+    // Read and parse every file before the dry run. Sequential reads preserve
+    // picker order, and a rejected file aborts the whole batch so a later
+    // click cannot import only half of what the user selected.
+    const parsed = [];
+    for(const file of files) parsed.push(await parseImportFile(file));
+    const rows = [];
+    for(const item of parsed) rows.push(...item.rows);
     if(!rows.length) throw new Error('账号列表是空的');
     importRows = rows;
-
-    // Dry-run first so the user sees exactly what will happen.
+    // The dry run takes the same shape as the real import. A bare array is
+    // accepted by /accounts/import and keeps rows from different files in one
+    // document, so duplicate UIDs are reported once across the whole batch.
     const group = String((document.getElementById('importGroup') || {}).value || '').trim();
     const r = await postJSON('/accounts/import',
-      {data: doc, dryRun: true, group: group});
-    renderImportPreview(file.name, r.result || {}, rows.length);
+      {data: rows, dryRun: true, group: group});
+    const label = files.length === 1 ? files[0].name : files.length + ' 个文件';
+    renderImportPreview(label, r.result || {}, rows.length);
   }catch(e){
     importRows = null;
-    const btn = document.getElementById('btnImportCommit');
     if(btn) btn.disabled = true;
     if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">读取失败: ' + esc(e.message) + '</p>';
   }
@@ -12395,7 +12434,7 @@ async function commitImport(btn){
           + '，跳过 ' + (res.skipped || []).length
           + '，无效 ' + (res.invalid || []).length);
     if(n > 0){ closeImport(); await loadAccounts(); }
-    else { renderImportPreview('（已导入）', res, importRows.length); }
+    else { renderImportPreview(importFileCount > 1 ? importFileCount + ' 个文件' : '（已导入）', res, importRows.length); }
   }catch(e){
     toast('导入失败: ' + e.message, 'err');
     if(btn){ btn.disabled = false; btn.textContent = '确认导入'; }
