@@ -11,6 +11,8 @@ assert.ok(/\.acct-actions-row\{flex-wrap:nowrap;max-width:none\}/.test(html), '�
 assert.ok(/table\.account-cards\{table-layout:fixed;min-width:1262px\}/.test(html), '桌面账号表应使用固定布局');
 assert.ok(/td\.acct-actions\{white-space:normal;min-width:232px;width:232px;position:sticky/.test(html), '操作列应固定在可视区域右侧');
 assert.ok(/@media \(max-width:640px\)[\s\S]*?td\.acct-actions\{position:static/.test(html), '移动端应取消操作列 sticky');
+assert.ok(/\.acct-name-row\{[^}]*flex-wrap:wrap/.test(html), '账号名行应允许徽章换行，不能把昵称挤成 0 宽');
+assert.ok(/\.acct-name\{[^}]*flex:1 1 80px;[^}]*min-width:72px/.test(html), '昵称应保留最小可见宽度，不能被备注/分组徽章压没');
 
 assert.ok(html.includes('class="credit-stack"'), '积分应使用分层容器');
 assert.ok(html.includes('class="credit-main"'), '积分主值应单独一行');
