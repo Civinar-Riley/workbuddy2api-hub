@@ -1,5 +1,8 @@
 # WorkBuddy2API-Hub — 国际版、国内版多账号网关中枢
 
+> [!NOTE]
+> **Rust 版本**：社区维护的 [YTjungle666/workbuddy2api-hub](https://github.com/YTjungle666/workbuddy2api-hub) 是基于本项目的 Rust 重写分支。网关后端与启动器均使用 Rust 实现，提供单文件静态二进制，不依赖 Python 运行时；功能以上游 `v2.0.1` 为对齐基线，由该仓库独立维护。它不是本仓库的官方发布物，问题反馈与版本更新请前往对应仓库。
+
 > [!IMPORTANT]
 > **官方群聊**：[https://t.me/wb2apihub](https://t.me/wb2apihub)
 >
@@ -296,6 +299,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ### 工程化与生态基础
 - **[aodianjun/workbuddy2api-hub](https://github.com/aodianjun/workbuddy2api-hub)**：OpenWrt 路由器打包配方（`.ipk` / `.apk`）与系统服务支持；
+- **[YTjungle666/workbuddy2api-hub](https://github.com/YTjungle666/workbuddy2api-hub)**：社区维护的 Rust 后端与启动器重写分支，提供无 Python 运行时依赖的单文件静态二进制；
 - **[astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone)**：Windows 便携版免安装精简独立 Python 运行时构建基石；
 - **[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)**：DSH 客户端协议与提示词指纹清洗规避参考。
 
