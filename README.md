@@ -1,8 +1,5 @@
 # WorkBuddy2API-Hub — 国际版、国内版多账号网关中枢
 
-> [!NOTE]
-> **Rust 版本**：社区维护的 [YTjungle666/workbuddy2api-hub](https://github.com/YTjungle666/workbuddy2api-hub) 是基于本项目的 Rust 重写分支。网关后端与启动器均使用 Rust 实现，提供单文件静态二进制，不依赖 Python 运行时；功能以上游 `v2.0.1` 为对齐基线，由该仓库独立维护。它不是本仓库的官方发布物，问题反馈与版本更新请前往对应仓库。
-
 > [!IMPORTANT]
 > **官方群聊**：[https://t.me/wb2apihub](https://t.me/wb2apihub)
 >
