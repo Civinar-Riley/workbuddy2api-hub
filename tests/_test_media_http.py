@@ -3,10 +3,9 @@
 前面几套用 `Handler` 替身跑流程，绕过了 `do_POST` / `do_GET` 的真实分发——
 白名单漏一条就是 404、体上限写错就是 413，而替身测试照样全绿。这一套补上：
 
-    起两个真实实例（8799 一类的空闲端口，隔离 accounts / usage / catalog）
-      A：媒体默认关
-      B：WB_MEDIA_ENABLED=1
-    然后打真实 HTTP，逐条断言状态码与错误信封。
+    起一个真实实例（8799 一类的空闲端口，隔离 accounts / usage / catalog），
+    然后打真实 HTTP，逐条断言状态码与错误信封。媒体路由默认始终可用，
+    不再需要环境变量或设置开关。
 
 **一个字节不出网、一次积分不花**：下面所有用例要么在分发层被拦（404/401/413），
 要么在参数校验层被拦（400），要么因为隔离环境里没有账号而停在"选号"（5xx）。
@@ -65,7 +64,7 @@ CATALOG = {"code": 0, "data": {"models": [
 class _Instance(object):
     """一个隔离的网关实例：自己的 accounts / usage / catalog / media 目录。"""
 
-    def __init__(self, root, media_enabled):
+    def __init__(self, root):
         self.port = free_port()
         self.base = "http://127.0.0.1:%d" % self.port
         self.root = root
@@ -78,9 +77,6 @@ class _Instance(object):
             "WB_PROXY_LOGS_DIR": os.path.join(root, "logs"),
             "PYTHONIOENCODING": "utf-8",
         })
-        self.env.pop("WB_MEDIA_ENABLED", None)
-        if media_enabled:
-            self.env["WB_MEDIA_ENABLED"] = "1"
         for name in ("accounts", "usage", "catalog", "media", "logs"):
             os.makedirs(os.path.join(root, name), exist_ok=True)
         with open(os.path.join(root, "catalog", "product-config-cn.json"),
@@ -141,20 +137,17 @@ def subprocess_devnull():
 
 
 _TMP = tempfile.TemporaryDirectory(prefix="wb-media-http-")
-_OFF = None
 _ON = None
 
 
 def setUpModule():
-    global _OFF, _ON
-    _OFF = _Instance(os.path.join(_TMP.name, "off"), media_enabled=False)
-    _OFF.start()
-    _ON = _Instance(os.path.join(_TMP.name, "on"), media_enabled=True)
+    global _ON
+    _ON = _Instance(os.path.join(_TMP.name, "on"))
     _ON.start()
 
 
 def tearDownModule():
-    for instance in (_ON, _OFF):
+    for instance in (_ON,):
         if instance is not None:
             try:
                 instance.stop()
@@ -164,15 +157,9 @@ def tearDownModule():
 
 
 class GateTests(unittest.TestCase):
-    """开关与鉴权：决定"这个路由存不存在"。"""
+    """鉴权与默认可用性。"""
 
-    def test_disabled_route_is_404(self):
-        status, body, _ = _OFF.json("POST", "/v1/images/generations",
-                                    {"prompt": "一只猫"})
-        self.assertEqual(status, 404)
-
-    def test_enabled_route_reaches_the_parameter_gate(self):
-        """同为 404 的两种情形要分开：开关开着时不该再是"没这条路由"。"""
+    def test_route_is_available_without_a_switch(self):
         status, body, _ = _ON.json("POST", "/v1/images/generations", {"prompt": "一只猫"})
         self.assertNotEqual(status, 404)
 
@@ -185,10 +172,6 @@ class GateTests(unittest.TestCase):
     def test_media_models_needs_a_key(self):
         status, _, _ = _ON.json("GET", "/v1/media/models", key=None)
         self.assertEqual(status, 401)
-
-    def test_video_route_disabled_is_404(self):
-        status, _, _ = _OFF.json("POST", "/v1/videos", {"prompt": "海边"})
-        self.assertEqual(status, 404)
 
     def test_get_on_a_post_route_is_404(self):
         """方法不匹配不该走进媒体层（那会白跑一次参数校验）。"""
@@ -377,7 +360,7 @@ class ReadEndpointsTests(unittest.TestCase):
         没观测过的那档**不出现**——拿别档的价冒充比不报更坏。
         """
         with tempfile.TemporaryDirectory() as root:
-            inst = _Instance(os.path.join(root, "per-res"), media_enabled=True)
+            inst = _Instance(os.path.join(root, "per-res"))
             prices = os.path.join(root, "per-res", "media", "video-prices.json")
             with open(prices, "w", encoding="utf-8") as handle:
                 json.dump({"kling-video-v3|720P": 25.714,
@@ -416,9 +399,10 @@ class ReadEndpointsTests(unittest.TestCase):
         self.assertIn("slots", body["media"])
         self.assertIn("inflight", body["media"])
 
-    def test_health_off_instance_reports_disabled(self):
-        status, body, _ = _OFF.json("GET", "/health", key=None)
-        self.assertFalse(body["media"]["enabled"])
+    def test_health_reports_always_enabled(self):
+        status, body, _ = _ON.json("GET", "/health", key=None)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["media"]["enabled"])
 
     def test_media_tasks_endpoint(self):
         status, body, _ = _ON.json("GET", "/v1/media/tasks")

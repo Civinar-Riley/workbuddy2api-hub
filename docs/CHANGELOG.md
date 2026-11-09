@@ -1,3 +1,11 @@
+## v2.0.4
+
+- **媒体能力始终开启**：`/v1/images/*` 与 `/v1/videos/*` 不再受总开关控制，设置页删除「开启媒体路由」「媒体出口」「出站身份」三项，只保留每分钟生图上限、视频时长上限、生视频并发与每 Key 每日积分上限。
+- **媒体出口自动选择**：请求优先使用 API Key 绑定的出口；未绑定时自动选择当前有可用媒体账号的出口，面板当前出口仅在同为可用候选时作为优先项。旧 `settings.json.media` 中的 `enabled` / `realm` / `identity` 会被忽略，并在下一次保存时清理。
+- **错误语义修正**：媒体路由始终存在；没有可用媒体账号时返回 `502 UPSTREAM`，不再返回会误导客户端的 `404 NO_ROUTE`。`/v1/media/models` 的 `enabled` 固定为 `true`，不再暴露已移除的出站身份字段。
+- **测试**：新增媒体设置默认值、旧字段兼容清理与部分保存回归；更新真实 HTTP 路由测试，覆盖无开关启动、Key 绑定出口优先与自动选择唯一媒体出口。
+- 全量测试：**286 个套件：217 个 Python + 69 个 JS，`286 passed, 0 failed, 0 skipped`**。
+
 ## v2.0.3
 
 - **可选 Go/uTLS 传输桥**：新增本地 Go/uTLS CONNECT 桥接器，启用后使用 Node/OpenSSL 兼容的 ClientHello（18 个 Cipher、10 个 Extension、无 ALPN），Python 继续负责 HTTP 构造、keep-alive 复用与 SSE 读取。默认仍为 Python/OpenSSL，仅 `WB_TLS_FINGERPRINT=node` 时启用；支持自动发现便携包内的 Windows / macOS / Linux amd64、arm64 桥接器，OpenWrt 额外支持 armv7。桥接器只监听回环地址，使用启动时随机认证密钥，继续验证上游证书，并在 `WB_CA_BUNDLE` 或不受支持的代理路径下拒绝静默降级。

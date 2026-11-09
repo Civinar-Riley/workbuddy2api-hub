@@ -1,4 +1,4 @@
-"""媒体路由的单元测试：开关、参数闸门、选号与换号、记账、预算预检、429。
+"""媒体路由的单元测试：参数闸门、选号与换号、记账、预算预检、429。
 
 这里**不启动网关进程**，而是给 `Handler` 造一个不碰 socket 的替身：路由方法
 只用到 `_json` / `_error` / `_authorized` / `_key_id` / `_key_realm` /
@@ -7,7 +7,7 @@
 
 钉住的是「钱」与「错」的边界：
 
-  - 开关关着 → 404（不是 403：少一个探测面）
+  - 旧配置写着 enabled=false 时，媒体路由仍然可用
   - 参数不对 / 模型不在组里 / n>1 / 尺寸超限 → 400，且**上游零调用**
   - 上游 401 → 换号；三次都失败 → 502
   - 上游 429 → 429 且带 Retry-After
@@ -80,16 +80,25 @@ class FakePool(object):
         self.accounts = list(accounts)
         self.picks = []
 
-    def pick(self, realm=None, exclude=None, model=None, page=None, allowed=None):
+    def pick(self, realm=None, exclude=None, model=None, page=None, allowed=None,
+             scope=None):
         exclude = exclude or set()
         for account in self.accounts:
             if account.uid in exclude:
+                continue
+            if realm and account.realm != realm:
                 continue
             if allowed is not None and account.uid not in allowed:
                 continue
             self.picks.append(account.uid)
             return account
         return None
+
+    def count_ready(self, realm=None, model=None, allowed=None, refresh=True,
+                    scope=None):
+        return sum(1 for account in self.accounts
+                   if (not realm or account.realm == realm)
+                   and (allowed is None or account.uid in allowed))
 
     def get(self, uid):
         for account in self.accounts:
@@ -187,8 +196,7 @@ class MediaRouteCases(unittest.TestCase):
         self.account = FakeAccount("u-1")
         self.pool = FakePool([self.account])
         P.POOL = self.pool
-        self.set_media({"enabled": True, "realm": "cn", "identity": "desktop",
-                        "image_max_per_minute": 60, "video_max_seconds": 15,
+        self.set_media({"image_max_per_minute": 60, "video_max_seconds": 15,
                         "daily_credits_per_key": 200})
         # 派发前的护栏与连坐：这两条在真实环境里读磁盘/内存状态，测试里给常数
         self.patches = [
@@ -232,11 +240,12 @@ class MediaRouteCases(unittest.TestCase):
 # ---------------------------------------------------------------- 开关与参数
 
 class GateTests(MediaRouteCases):
-    def test_disabled_is_404(self):
+    def test_obsolete_disabled_flag_is_ignored(self):
         self.set_media({"enabled": False})
-        handler = self.post()
-        self.assertEqual(handler.sent_kind, "error")
-        self.assertEqual(handler.sent[0], 404)
+        with mock.patch.object(wb_media_client, "generate_image",
+                               return_value={"url": "https://cos/x.png"}):
+            handler = self.post()
+        self.assertEqual(handler.sent[0], 200)
 
     def test_missing_prompt_is_400(self):
         handler = self.post(payload={"prompt": "   "})
@@ -263,10 +272,15 @@ class GateTests(MediaRouteCases):
         self.assertIn("419", handler.sent[1].replace("4.19", "419"))
         generate.assert_not_called()
 
-    def test_key_realm_mismatch_is_explained(self):
-        handler = self.post(handler=FakeHandler(key_realm="intl"))
-        self.assertEqual(handler.sent[0], 400)
-        self.assertIn("出口", handler.sent[1])
+    def test_key_realm_takes_priority(self):
+        P._catalog_raw["intl"] = catalog_payload()
+        intl_account = FakeAccount("u-intl", realm="intl")
+        P.POOL = FakePool([self.account, intl_account])
+        with mock.patch.object(wb_media_client, "generate_image",
+                               return_value={"url": "https://cos/x.png"}) as generate:
+            handler = self.post(handler=FakeHandler(key_realm="intl"))
+        self.assertEqual(handler.sent[0], 200)
+        self.assertEqual(generate.call_args[0][0].realm, "intl")
 
     def test_rate_limit_answers_429(self):
         self.set_media({"image_max_per_minute": 1})
@@ -498,13 +512,31 @@ class MediaModelsEndpointTests(MediaRouteCases):
         handler._get_media_models({"realm": ["mars"]})
         self.assertEqual(handler.sent[0], 400)
 
-    def test_works_while_disabled(self):
-        """配置之前先看看有什么——这正是这个端点存在的理由之一。"""
+    def test_old_disabled_flag_does_not_hide_models(self):
+        """旧配置残留 enabled=false 时，媒体目录仍要正常返回。"""
         self.set_media({"enabled": False})
         handler = FakeHandler()
         handler._get_media_models({})
         self.assertEqual(handler.sent[0], 200)
-        self.assertFalse(handler.sent[1]["enabled"])
+        self.assertTrue(handler.sent[1]["enabled"])
+
+    def test_auto_realm_uses_the_only_populated_exit(self):
+        intl_account = FakeAccount("u-intl", realm="intl")
+        P.POOL = FakePool([intl_account])
+        P._catalog_raw["intl"] = catalog_payload()
+        handler = FakeHandler()
+        handler._get_media_models({})
+        self.assertEqual(handler.sent[0], 200)
+        self.assertEqual(handler.sent[1]["realm"], "intl")
+
+    def test_bound_key_wins_over_auto_realm(self):
+        intl_account = FakeAccount("u-intl", realm="intl")
+        P.POOL = FakePool([intl_account])
+        P._catalog_raw["intl"] = catalog_payload()
+        handler = FakeHandler(key_realm="intl")
+        handler._get_media_models({})
+        self.assertEqual(handler.sent[0], 200)
+        self.assertEqual(handler.sent[1]["realm"], "intl")
 
 
 # ---------------------------------------------------------------- 错误映射
@@ -851,19 +883,6 @@ class KeySpendTests(MediaRouteCases):
                                 return_value={"url": "u", "credit": 5.71}):
             self.post()
         self.assertAlmostEqual(P.media_key_spend("k-1"), 5.71, places=2)
-
-
-class IdentityWiringTests(unittest.TestCase):
-    def test_identity_reaches_the_wire(self):
-        """`media_identity` 配置必须真的传到出站头——曾经只是存了、没人读。"""
-        saved = wb_media_client.current_identity()
-        try:
-            wb_media_client.set_identity("cli")
-            self.assertEqual(wb_media_client.current_identity(), "cli")
-            wb_media_client.set_identity("nonsense")      # 未知值收敛成 None
-            self.assertIsNone(wb_media_client.current_identity())
-        finally:
-            wb_media_client.set_identity(saved)
 
 
 class ReferenceValidationOrderTests(MediaRouteCases):

@@ -2039,27 +2039,23 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '已移回文本号池': 'Moved back to the text pool',
     '切换号池失败: ': 'Failed to switch pool: ',
     '媒体生成': 'Media generation',
-    '生图 / 生视频的开关在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。': 'The image / video switches live on the Settings page; this page shows model limits and recent tasks. Every generation really spends account credits.',
+    '生图 / 生视频的限额在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。': 'Image / video limits live on the Settings page; this page shows model limits and recent tasks. Every generation really spends account credits.',
     '可用媒体模型': 'Available media models',
     '该区目录里带媒体标签的模型，以及各自的时长与分辨率约束。只读，不发上游。': 'Media-tagged models in this realm\'s catalogue, with their duration and resolution limits. Read-only; no upstream request.',
     '最近任务': 'Recent tasks',
     '生视频是异步任务：提交后在这里看进度、失败原因与产物。每个 API Key 只看得到自己提交的任务。': 'Video generation is asynchronous: submission returns immediately, progress, failure reasons and artifacts show up here. Each API key only sees its own tasks.',
     '媒体能力（生图 / 生视频）': 'Media (image / video generation)',
-    '默认关闭。开启后网关才提供': 'Off by default. Only when enabled does the gateway serve',
-    '；关闭时这些路由': '; when disabled these routes',
-    '根本不存在': 'do not exist at all',
-    '每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。': 'About 5.71 credits per image and 57-129 per 5-second video, deducted from account credits directly — not billed per token.',
-    '开启生图 / 生视频路由': 'Enable image / video routes',
-    '媒体出口': 'Media exit',
-    '出站身份': 'Outbound identity',
-    '桌面身份': 'Desktop',
-    'CLI 身份': 'CLI',
+    '网关始终提供': 'The gateway always serves',
+    '。请求优先使用 API Key 绑定的出口；': '. Requests prefer the exit bound to the API key;',
+    '未绑定时自动选择当前有可用媒体账号的出口。': 'when unbound, it automatically chooses an exit with available media accounts.',
+    '每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣。': 'About 5.71 credits per image and 57-129 per 5-second video, deducted directly from account credits.',
+    '(始终开启)': '(always on)',
     '每分钟生图上限': 'Images per minute',
     '视频时长上限（秒）': 'Video length cap (seconds)',
     '每 Key 每日积分上限': 'Daily credits per key',
     '生视频并发': 'Concurrent videos',
     '生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。': 'When the concurrent-video cap is reached, new tasks queue locally (not submitted upstream, no credits spent). Parallel tasks are spread across different accounts.',
-    '每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。': 'A daily credit cap of 0 means unlimited. The video length cap is combined with each model\'s own limit, whichever is smaller. The outbound identity decides which client the request imitates; desktop accounts usually need no change.',
+    '每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。': 'A daily credit cap of 0 means unlimited. The video length cap is combined with each model\'s own limit, whichever is smaller.',
     '能力': 'Capability',
     '比例': 'Aspect',
     'prompt 上限': 'Prompt limit',
@@ -2077,8 +2073,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '提交时间': 'Submitted',
     '下载': 'Download',
     '取消': 'Cancel',
-    '已开启：媒体路由可用': 'Enabled: media routes are live',
-    '已关闭：媒体路由不再存在': 'Disabled: media routes no longer exist',
+    '媒体设置已保存': 'Media settings saved',
     '已取消（本地轮询已停止）': 'Cancelled (local polling stopped)',
     '取消请求已发送': 'Cancel request sent',
     '取消失败: ': 'Cancel failed: ',
@@ -2089,8 +2084,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     ' 条 · 进行中 ': ' · in progress ',
     ' 条 · 共持有 ': ' · held ',
     '失败的任务请展开看原因：「invalid_request」没扣积分可以改参数重试，「upstream_error / task_lost」可能已经扣过费。': 'Hover a failed task for its reason: "invalid_request" spent nothing and can be retried with fixed parameters; "upstream_error / task_lost" may already have been charged.',
-    '媒体路由可用': 'media routes are live',
-    '媒体路由不再存在': 'media routes no longer exist',
+    '媒体设置已保存': 'Media settings saved',
     '添加 API Key 账号': 'Add an API Key account',
     '粘贴 CodeBuddy API 管理页签发的静态 Key': 'Paste the static key issued by the CodeBuddy API console',
     '前缀。': 'prefix.',
@@ -4168,6 +4162,14 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "未活跃打卡一键打卡": "未活躍打卡一鍵打卡",
     "今日未打卡账号": "今日未打卡帳號",
     "国际版账号今天都已打卡": "國際版帳號今天都已打卡",
+    "生图 / 生视频的限额在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。": "生圖 / 生影片的限額在「設定」頁；這裡看模型約束和最近任務。每次生成都會真實扣帳號積分。",
+    "网关始终提供": "閘道始終提供",
+    "。请求优先使用 API Key 绑定的出口；": "。請求優先使用 API Key 綁定的出口；",
+    "未绑定时自动选择当前有可用媒体账号的出口。": "未綁定時自動選擇目前有可用媒體帳號的出口。",
+    "每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣。": "每張圖約 5.71 積分、每條 5 秒影片約 57–129 積分，直接從帳號積分扣。",
+    "(始终开启)": "(始終開啟)",
+    "每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。": "每 Key 每日積分上限填 0 表示不限。影片時長會與模型目錄裡的上限取小值。",
+    "媒体设置已保存": "媒體設定已儲存",
     "设备 Token 文件": "裝置 Token 檔案",
     "国内版桌面身份会随请求发送 X-Device-Token。这里只配置文件路径；面板只显示脱敏后的来源、长度与加载状态，token 本体不会返回浏览器。留空表示不读取文件。": "國內版桌面身分會隨請求傳送 X-Device-Token。這裡只設定檔案路徑；面板只顯示去識別化後的來源、長度與載入狀態，token 本體不會回傳瀏覽器。留空表示不讀取檔案。",
     "Token 文件路径": "Token 檔案路徑",
@@ -5952,7 +5954,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
   <div id="pageMedia" class="main-page">
     <div style="margin-bottom:16px">
       <h2 style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">媒体生成</h2>
-      <div style="font-size:12px;color:var(--dim);margin-top:4px">生图 / 生视频的开关在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。</div>
+      <div style="font-size:12px;color:var(--dim);margin-top:4px">生图 / 生视频的限额在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。</div>
     </div>
 
     <section>
@@ -5978,31 +5980,13 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     </section>
     <section>
       <div style="margin-bottom:14px">
-        <h2 style="margin:0">媒体能力（生图 / 生视频） <em id="setMediaState"></em></h2>
+        <h2 style="margin:0">媒体能力（生图 / 生视频） <em id="setMediaState">(始终开启)</em></h2>
         <div style="font-size:12px;color:var(--dim);margin-top:4px">
-          默认关闭。开启后网关才提供 <code>/v1/images/*</code> 与 <code>/v1/videos/*</code>；关闭时这些路由<b>根本不存在</b>（404）。
-          每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。
+          网关始终提供 <code>/v1/images/*</code> 与 <code>/v1/videos/*</code>。请求优先使用 API Key 绑定的出口；
+          未绑定时自动选择当前有可用媒体账号的出口。每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣。
         </div>
       </div>
       <div id="mediaSettingsRow" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:58px">
-          <input id="setMediaEnabled" type="checkbox" style="width:16px;height:16px">
-          开启生图 / 生视频路由
-        </label>
-        <div style="min-width:150px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">媒体出口</div>
-          <select id="setMediaRealm" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            <option value="cn">国内版</option>
-            <option value="intl">国际版</option>
-          </select>
-        </div>
-        <div style="min-width:150px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">出站身份</div>
-          <select id="setMediaIdentity" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            <option value="desktop">桌面身份</option>
-            <option value="cli">CLI 身份</option>
-          </select>
-        </div>
         <div style="min-width:130px">
           <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每分钟生图上限</div>
           <input id="setMediaImageRate" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
@@ -6022,7 +6006,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         <button onclick="saveMediaConfig(this)" style="height:38px;margin-top:20px">保存</button>
       </div>
       <div style="font-size:12px;color:var(--dim);margin-top:10px">
-        每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。
+        每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。
         生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
       </div>
     </section>
@@ -14475,12 +14459,6 @@ const MEDIA_STATUS_BADGE = {
 
 function applyMediaSettings(media){
   const cfg = media || {};
-  const enabled = document.getElementById('setMediaEnabled');
-  if(enabled) enabled.checked = cfg.enabled === true;
-  const realm = document.getElementById('setMediaRealm');
-  if(realm && cfg.realm) realm.value = cfg.realm;
-  const identity = document.getElementById('setMediaIdentity');
-  if(identity && cfg.identity) identity.value = cfg.identity;
   const rate = document.getElementById('setMediaImageRate');
   if(rate && cfg.image_max_per_minute != null) rate.value = cfg.image_max_per_minute;
   const seconds = document.getElementById('setMediaVideoSeconds');
@@ -14491,8 +14469,8 @@ function applyMediaSettings(media){
   if(conc && cfg.video_concurrency != null) conc.value = cfg.video_concurrency;
   const state = document.getElementById('setMediaState');
   if(state){
-    state.textContent = cfg.enabled === true ? '(已开启)' : '(已关闭)';
-    state.style.color = cfg.enabled === true ? 'var(--accent2)' : 'var(--dim)';
+    state.textContent = '(始终开启)';
+    state.style.color = 'var(--accent2)';
   }
 }
 
@@ -14504,9 +14482,6 @@ async function saveMediaConfig(btn){
   };
   const payload = {
     media: {
-      enabled: !!(document.getElementById('setMediaEnabled') || {}).checked,
-      realm: (document.getElementById('setMediaRealm') || {}).value || 'cn',
-      identity: (document.getElementById('setMediaIdentity') || {}).value || 'desktop',
       image_max_per_minute: num('setMediaImageRate', 6),
       video_max_seconds: num('setMediaVideoSeconds', 15),
       daily_credits_per_key: num('setMediaDailyCredits', 0),
@@ -14517,7 +14492,7 @@ async function saveMediaConfig(btn){
   try{
     const res = await postJSON('/settings/save', payload);
     if(res && res.media) applyMediaSettings(res.media);
-    toast(payload.media.enabled ? '已开启：媒体路由可用' : '已关闭：媒体路由不再存在');
+    toast('媒体设置已保存');
     loadSettings();
   }catch(e){
     toast('保存失败: ' + e.message, 'bad');

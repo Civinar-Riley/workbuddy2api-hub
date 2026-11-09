@@ -867,7 +867,7 @@ def resolve_reference_uploads(body, realm, model_id, account=None):
     return body
 
 
-def _pick_media_account_for(realm, model_id, cost_hint, excluded, config=None):
+def _pick_media_account_for(realm, model_id, cost_hint, excluded):
     """选账号的**模块级**实现（后台提交线程也能用）。
 
     `Handler._pick_media_account` 只是薄薄一层：它把 self 上的 Key 白名单/钉账号
@@ -910,6 +910,57 @@ def _pick_media_account_for(realm, model_id, cost_hint, excluded, config=None):
     if not ok:
         raise wb_media.MediaError("NO_CREDIT", "%s 付不起这次调用：%s" % (account.uid[:8], reason))
     return account
+
+
+def _media_realm_for_key(handler=None, requested=None):
+    """Choose the media exit without a persisted media-realm setting.
+
+    Priority:
+      1. the API key's bound realm,
+      2. an explicitly requested realm (only for the catalogue endpoint),
+      3. the only realm that currently has usable media accounts,
+      4. the panel's active realm when it has media accounts, otherwise any
+         realm with media accounts, and finally the active realm for a fresh
+         install.
+    """
+    # /health is also served without an API key and is exercised by lightweight
+    # request doubles that only implement the health-facing surface. Treat a
+    # missing key context as an unbound request instead of assuming every
+    # handler carries the full authentication helpers.
+    allowed = None
+    bound = ""
+    if handler is not None:
+        allowed_getter = getattr(handler, "_key_allowed_accounts", None)
+        realm_getter = getattr(handler, "_key_realm", None)
+        if callable(allowed_getter):
+            allowed = allowed_getter()
+        if callable(realm_getter):
+            bound = realm_getter() or ""
+    if bound:
+        return bound
+    if requested:
+        # Let the caller's validation turn an unknown explicit realm into 400.
+        return requested
+
+    _, medias = _ensure_pools()
+    realms = [realm for realm in wb_settings.MEDIA_REALMS
+              if medias is not None
+              and medias.count_ready(realm=realm, allowed=allowed, refresh=False) > 0]
+    if len(realms) == 1:
+        return realms[0]
+    if CURRENT_REALM in realms:
+        return CURRENT_REALM
+    if realms:
+        return realms[0]
+    # 没有可用账号时，仍要能从留档目录提供模型清单。否则一次冷启动会
+    # 把“暂时没有账号”误报成“媒体路由不存在”，客户端会以为功能未开启。
+    catalog_realms = [realm for realm in wb_settings.MEDIA_REALMS
+                      if read_catalog_dump(realm) is not None]
+    if CURRENT_REALM in catalog_realms:
+        return CURRENT_REALM
+    if catalog_realms:
+        return catalog_realms[0]
+    return CURRENT_REALM if CURRENT_REALM in wb_settings.MEDIA_REALMS else "cn"
 
 
 def media_tasks():
@@ -957,14 +1008,13 @@ def submit_queued_video_task(task):
     excluded = set(store.busy_accounts() or ())
 
     def pick(avoid):
-        config = wb_settings.media_config(ACCOUNTS_DIR)
         try:
             cost_hint = media_cost_hint(task.get("model"),
                                         task.get("seconds") or 5,
                                         task.get("resolution"))
         except Exception:
             cost_hint = 0
-        return _pick_media_account_for(realm, model_id, cost_hint, avoid, config)
+        return _pick_media_account_for(realm, model_id, cost_hint, avoid)
 
     account = pick(excluded)
     if account is None:
@@ -11622,12 +11672,11 @@ def runtime_settings_view():
         "account_inflight": account_inflight_snapshot(),
         "affinity_stable_key_enabled":
             wb_settings.affinity_stable_key_enabled(ACCOUNTS_DIR),
-        # 媒体能力（生图 / 生视频）。默认关；面板把它读回去，才知道开关该画在哪一格。
+        # 媒体能力（生图 / 生视频）限额。路由始终开启，面板只画这四项。
         "media": wb_settings.media_config(ACCOUNTS_DIR),
         "media_limits": dict(wb_settings.MEDIA_LIMITS),
         "media_minimums": dict(wb_settings.MEDIA_MINIMUMS),
         "media_realms": list(wb_settings.MEDIA_REALMS),
-        "media_identities": list(wb_settings.MEDIA_IDENTITIES),
         "log_db_enabled": wb_settings.log_db_enabled(ACCOUNTS_DIR),
         "log_db_max_rows": wb_settings.log_db_max_rows(ACCOUNTS_DIR),
         "log_db_max_days": wb_settings.log_db_max_days(ACCOUNTS_DIR),
@@ -11664,7 +11713,7 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
-        "version": "2.0.3",
+        "version": "2.0.4",
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
@@ -20912,7 +20961,7 @@ class Handler(BaseHTTPRequestHandler):
             super().finish()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
-    server_version = "wb-proxy/2.0.3"
+    server_version = "wb-proxy/2.0.4"
     def log_message(self, fmt, *args):
         # 静默过滤前端看板高频定时心跳的正常 200 GET 请求（/logs、/usage、/accounts 轮询等）
         # 避免自增死循环刷屏与日志污染。遇 4xx/5xx 异常或所有非 GET 业务操作依然如实记录。
@@ -21819,13 +21868,12 @@ class Handler(BaseHTTPRequestHandler):
             # CodeArts 只是子字段：它掉线不能把整体 /health 变红。
             info["codearts"] = {"configured": False, "ok": False,
                                 "error": str(exc)[:200]}
-        # 媒体能力：`/health` 是运维第一眼看的地方，早给比晚给好。队列深度等视频
-        # 任务表落地后再补（生图是同步请求，没有队列可报）。
+        # 媒体能力：`/health` 是运维第一眼看的地方，早给比晚给好。媒体路由始终
+        # 可用；`realm` 只是当前自动选择的结果，调用方仍可按 Key 绑定走另一个出口。
         media_cfg = wb_settings.media_config(ACCOUNTS_DIR)
         info["media"] = {
-            "enabled": media_cfg["enabled"],
-            "realm": media_cfg["realm"],
-            "identity": media_cfg["identity"],
+            "enabled": True,
+            "realm": _media_realm_for_key(self),
             "slots": MEDIA_SLOTS,
             "inflight": media_inflight(),
             # 生视频并发：超过就排队，不提交上游、不扣费。
@@ -22565,33 +22613,18 @@ class Handler(BaseHTTPRequestHandler):
         return self._error(status, message, err_type)
 
     def _media_config(self):
-        config = wb_settings.media_config(ACCOUNTS_DIR)
-        # 出站身份形状同步给 client（后台 worker 轮询时用的也是这个值）。
-        wb_media_client.set_identity(config.get("identity"))
-        return config
+        return wb_settings.media_config(ACCOUNTS_DIR)
 
     def _media_realm(self, config):
-        """这次媒体请求走哪个出口：Key 绑定的出口优先，其次面板配置。"""
-        bound = self._key_realm()
-        if bound:
-            if bound != config["realm"]:
-                raise wb_media.MediaError(
-                    "INVALID_ARGS",
-                    "本 Key 绑定在 %s 出口，而媒体能力配置在 %s 出口；"
-                    "请换对应出口的 Key，或在设置页把媒体出口改成 %s"
-                    % (bound, config["realm"], bound))
-            return bound
-        return config["realm"]
+        """这次媒体请求走哪个出口：Key 绑定优先，否则自动选择可用出口。"""
+        return _media_realm_for_key(self)
 
     def _media_prepare(self, path, payload, config):
-        """校验开关、挑出模型、拼好请求体。**一个字节都不发**。
+        """挑出模型、拼好请求体。**一个字节都不发**。
 
         放在这里而不是散在路由里，是因为「参数不对」和「上游拒绝」必须能分开：
         前者一分钱没花、不进冷却，后者可能已经扣过积分。
         """
-        if not config["enabled"]:
-            # 关着就是不存在：404 而不是 403，少一个探测面。
-            raise wb_media.MediaError("NO_ROUTE", "not found")
         realm = self._media_realm(config)
         kind = "edit" if path in ("/v1/images/edits", "/images/edits") else "generate"
         prompt = payload.get("prompt")
@@ -22650,7 +22683,9 @@ class Handler(BaseHTTPRequestHandler):
                            realm=realm, scope=wb_pool_scope.SCOPE_MEDIA))
             if account is None:
                 detail = medias.empty_detail(realm) if medias is not None else "该区没有可用账号。"
-                raise wb_media.MediaError("NO_ROUTE", detail)
+                # 没有账号是上游暂时不可用，不是媒体路由不存在。404 会让
+                # 客户端把“稍后重试”误判成“这个部署没有媒体能力”。
+                raise wb_media.MediaError("UPSTREAM", detail)
             payload = wb_media_client._get_json(
                 account, wb_media_client.CONFIG_PATH,
                 wb_media_client.CONFIG_TIMEOUT_SECONDS)
@@ -22875,8 +22910,6 @@ class Handler(BaseHTTPRequestHandler):
         4xx 一律 REJECTED，可以立刻重试。
         """
         config = self._media_config()
-        if not config["enabled"]:
-            return self._media_error(wb_media.MediaError("NO_ROUTE", "not found"))
         store = media_tasks()
         if store.pending_count() >= store.max_pending:
             # 还没花钱：让客户端看到 429，比让它排队几十分钟好。
@@ -23173,8 +23206,8 @@ class Handler(BaseHTTPRequestHandler):
 
         与 `/v1/models` 分开是刻意的：那个清单是给聊天客户端用的，把生图模型塞进去
         客户端会拿它去对话。这里返回**未经投影**的媒体条目，`videoGeneration` 原样
-        带走，调用方据此知道自己能要几秒、哪些分辨率。开关关着也能查——配置之前
-        先看看有什么，正是这个接口存在的理由之一。
+        带走，调用方据此知道自己能要几秒、哪些分辨率。未传 `realm` 时自动选择
+        当前有可用媒体账号的出口。
         """
         if not self._authorized():
             return
@@ -23182,8 +23215,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(
                 403, "这个入口只服务文本模型；图片 / 视频请走媒体号池的入口",
                 "pool_boundary")
-        config = self._media_config()
-        realm = (query.get("realm") or [None])[0] or config["realm"]
+        requested = (query.get("realm") or [None])[0]
+        realm = _media_realm_for_key(self, requested)
         if realm not in wb_settings.MEDIA_REALMS:
             return self._error(400, "realm must be one of %s"
                                % ", ".join(wb_settings.MEDIA_REALMS),
@@ -23240,8 +23273,7 @@ class Handler(BaseHTTPRequestHandler):
                 model["creditPerSecondCeiling"] = wb_media.COST_VIDEO_PER_SECOND_CEILING
         return self._json(200, {
             "realm": realm,
-            "enabled": config["enabled"],
-            "identity": config["identity"],
+            "enabled": True,
             "models": models,
         })
 
