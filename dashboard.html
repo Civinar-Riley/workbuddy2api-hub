@@ -11673,14 +11673,17 @@ function autoFetchMissingCredits(){
 // poll=true 只给定时轮询 / 切页签 / 回到前台用：数据没变时不重画表格。操作之后
 // 的回读一律不带参数，整表重画。/accounts 始终 no-store：响应里有带凭据的代理
 // 地址，不能落浏览器磁盘缓存。
-async function loadAccounts(poll){
+async function loadAccounts(poll, opts){
   try{
+    // 今日活动来自 /activity/history，可能比账号列表和用量慢；启动首屏
+    // 先用核心数据把账号区画出来，活动记录回来后再补一次重绘。默认仍等待，
+    // 保持设置页、操作回读和既有调用方的完整性语义。
+    const activityPromise = loadActivityToday();
     const [acct, byAcct] = await Promise.all([
       getJSON('/accounts?realm=all'),
       getJSON('/usage/by-account', POLL_READ),
-      // 今日活动与账号列表并行取；它自己吞掉失败，读不到历史不该让账号区跟着坏。
-      loadActivityToday(),
     ]);
+    if(!(opts && opts.deferActivity)) await activityPromise;
     window.ACCOUNTS = acct.accounts || [];
     USAGE_BY_ACCOUNT = {};
     (byAcct.accounts || []).forEach(a => { USAGE_BY_ACCOUNT[a.account] = a; });
@@ -11691,6 +11694,13 @@ async function loadAccounts(poll){
     // 昵称刚到位，补画一次积分扣减历史：它和本请求是并行的，先渲染的那次只有 uid。
     if(LAST_CREDIT_DATA) renderCreditHistory();
     autoFetchMissingCredits();
+    if(opts && opts.deferActivity){
+      activityPromise.then(() => {
+        // 活动记录是账号表的输入之一；它回来时必须重画，否则「今日活动」列
+        // 会一直停在中性态，直到下一次 15 秒轮询。
+        renderAccounts(true);
+      });
+    }
   }catch(e){ toast('账号加载失败: ' + e.message); }
 }
 
@@ -13771,7 +13781,7 @@ async function startDashboard(){
   resetAccountFilters();
   // 前两步决定下面各自查什么（VIEW_REALM / 面板可见性），必须先行；之后就并行，
   // 别让国内版那条约 2 秒的成长任务接口把首屏的用量卡片拖在后面。
-  await loadSettings();
+  await loadSettings(false, {deferSecondary: true});
   // 新面板把账号固定成独立页：服务端仍保留 accounts_separate_tab 字段给旧壳，
   // 但新壳每次都按拆分布局渲染，避免账号区被搬回总览。
   if(window.__NEXT_UI__) applyAccountsTabLayout(true);
@@ -13781,8 +13791,20 @@ async function startDashboard(){
   // 页签时，KPI 要等这两秒过去才开始发 /usage/analytics。这里只把它摘出来让它
   // 并行跑，其余照旧等待；异常自己收，别变成未处理的拒绝。
   loadGrowthTasks().catch(() => {});
-  await Promise.all([loadAccounts(), loadModels(), loadAgentModelSelection(),
-                     loadSchedulerStatus(), refresh(), loadAgentsAvailability()]);
+  // 总览首屏只需要账号与用量：先把这两项等到可画，模型清单、模型勾选、
+  // 调度器与智能体可用性在后台补齐。它们原先一起把 switchMainTab 押后，
+  // 其中 /v1/models 还可能走上游目录，正是「总览加载太慢」的主要来源。
+  const secondary = Promise.all([
+    loadModels(),
+    loadAgentModelSelection(),
+    loadSchedulerStatus(),
+    loadAgentsAvailability(),
+  ]).catch(() => {});
+  await Promise.all([
+    loadAccounts(false, {deferActivity: true}),
+    refresh(),
+  ]);
+  secondary.catch(() => {});
   updateRecentLimitButtons();
   // The head script already resolved this before first paint; re-apply it
   // here so the data loaders for the active page actually run.
@@ -14963,7 +14985,7 @@ async function saveWinMaxHeight(btn){
 }
 // ==== 面板窗口限高结束 ====
 
-async function loadSettings(showToast){
+async function loadSettings(showToast, opts){
   try {
     const data = await getJSON('/settings');
     const pwdState = document.getElementById('setPwdState');
@@ -15306,7 +15328,13 @@ async function loadSettings(showToast){
       }
       SAVED_QUOTA_SCAN_MODELS = Array.isArray(data.quota_scan_models) ? data.quota_scan_models.slice() : [];
       QUOTA_SCAN_SELECTED = SAVED_QUOTA_SCAN_MODELS.slice();
-      await loadQuotaScanCatalog();
+      // 定时额度查询的模型目录只服务设置页，启动时不该挡住总览首屏。
+      // 设置页自己的刷新保持等待，启动链传 deferSecondary 在后台补。
+      if(opts && opts.deferSecondary){
+        loadQuotaScanCatalog().then(renderQuotaScanModels).catch(() => {});
+      } else {
+        await loadQuotaScanCatalog();
+      }
       renderQuotaScanModels();
       renderQuotaScanState(data);
       const maxPayload = document.getElementById('setMaxPayloadMB');
