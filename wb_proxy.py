@@ -13321,8 +13321,15 @@ def normalize_roles(messages):
 # ---------------------------------------------------------------------------
 # Fingerprint Sanitization (immunizes against Codex / Claude Code WAF patterns)
 # ---------------------------------------------------------------------------
-SANITIZE_FEATURES = (
+# Claude Code 2.1.37+ 会把计费归因头作为 system 的第一个文本块发出来（#853）：
+#   x-anthropic-billing-header: cc_version=...; cc_entrypoint=...; cch=...; ...
+# 上游把 `x-anthropic-billing-header` 当保留关键字，出现即 400 / 11128。
+# v2.0.7 只登记了缩写 `...-hdr`，完整键名漏网，于是 2.0.3 可用、2.0.7 被拦截（#854）。
+SANITIZE_BILLING_HDR_NAMES = (
+    "x-anthropic-billing-header",
     "x-anthropic-billing-hdr",
+)
+SANITIZE_FEATURES = SANITIZE_BILLING_HDR_NAMES + (
     "You are Claude Code",
     "Main branch (",
     "You are a coding agent running in the Codex CLI",
@@ -13349,12 +13356,15 @@ SANITIZE_CLAUDE_CODE_INTRO_RE = re.compile(
     r"(?: tool)? for Claude(?: Code)?\.?")
 SANITIZE_CLAUDE_CODE_INTRO_REPLACEMENT = "You are a helpful AI assistant."
 SANITIZE_CLAUDE_CODE_LOWER = "you are claude code,"
+# 真实形态是一整行，尾部还有 `cch=` 这类不以前缀 `cc_` 开头的参数；按行删除，
+# 避免只删到第一个分号后把 `x-anthropic-billing-header:` 留在出站文本里。
+SANITIZE_HDR_LINE_RE = re.compile(
+    r"(?im)^[ \t]*x-anthropic-billing-(?:header|hdr)[ \t]*:[^\r\n]*(?:\r?\n|$)")
+# 行首之外的嵌入形态（旧客户端 / 日志回放）仍按「键 + 首个值」删除，
+# 后续 `cc_*` 参数由 SANITIZE_KV_RE 清理。
 SANITIZE_HDR_RE = re.compile(
-    r"(?i)x-anthropic-billing-hdr\s*:\s*[^;\r\n]*(?:;\s*)?")
-# Keep the bare-header pattern derived from the fingerprint list. Spelling the
-# suffix a second time here is fragile: an automated rewrite has already
-# expanded the wire value once, and the fast path must match the exact bytes.
-SANITIZE_BARE_HDR_RE = re.compile("(?i)" + SANITIZE_FEATURES[0])
+    r"(?i)x-anthropic-billing-(?:header|hdr)\s*:\s*[^;\r\n]*(?:;\s*)?")
+SANITIZE_BARE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-(?:header|hdr)")
 SANITIZE_KV_RE = re.compile(r"(?i)\bcc_[a-z0-9_]+=[^;\r\n]*;?\s*")
 # WorkBuddy upstream returns 11128 ("Illegal API invocation from an unapproved
 # channel") when this exact OmO identity fingerprint appears as a contiguous
@@ -13446,12 +13456,9 @@ SANITIZE_BRAND_LOWER = "harness"
 # 归一化成基字母、再小写，副本上的 `in` 与 (?i) search 完全等价（多字符模式
 # 同样成立；全码点替换 + 定向用例 + 随机串对拍零差异，见 tests/_test_hotpath_savings.py）。
 SANITIZE_REI_FOLD = str.maketrans({0x130: "i", 0x131: "i", 0x17F: "s"})
-# 两个小写字面量直接从正则派生，保证与正则永远同源：手抄第二份迟早漂移，
-# 派生出来的值不存在这个问题。pattern 里的 (?i) 是内联旗标，剥掉后就是
-# 字面量本体。
-SANITIZE_BARE_HDR_LOWER = SANITIZE_BARE_HDR_RE.pattern
-if SANITIZE_BARE_HDR_LOWER.startswith("(?i)"):
-    SANITIZE_BARE_HDR_LOWER = SANITIZE_BARE_HDR_LOWER[4:]
+# 计费头有两个合法拼写（header / hdr），字面量快路径直接用登记表；
+# OMO 短语仍是单一字面量，继续从正则派生，保证与正则同源。
+SANITIZE_BARE_HDR_LOWER = SANITIZE_BILLING_HDR_NAMES[0]
 SANITIZE_OMO_JUNIOR_LOWER = SANITIZE_OMO_JUNIOR_RE.pattern.lower()
 SANITIZE_IDENTITY_LOWER = SANITIZE_IDENTITY_VERBS
 def has_fingerprint(text, identity=True):
@@ -13519,6 +13526,8 @@ def sanitize_text(text, identity=True):
         text = SANITIZE_BRAND_RE.sub(SANITIZE_BRAND_REPLACEMENT, text)
     for old, new in SANITIZE_REWRITES:
         text = text.replace(old, new)
+    # 计费归因头通常独占 system 首行；先整行删掉，`cch=` 等尾部参数不会残留。
+    text = SANITIZE_HDR_LINE_RE.sub("", text)
     text = SANITIZE_HDR_RE.sub("", text)
     if "cc_" in text:
         prev = ""
@@ -13618,8 +13627,15 @@ def sanitize_messages(messages):
             # 仍是用户数据，不改写。
             identity = item.get("role") in ("system", "developer", "assistant")
             if "content" in item and not preserve_tool_result:
+                before = item.get("content")
                 item["content"] = sanitize_content(item["content"],
                                                    identity=identity)
+                # 整条 system 文本可能只有一个计费归因头；清洗后为空就直接
+                # 丢掉，避免把空 system 消息发给上游（空文本段会 400 / 11151）。
+                if (item.get("role") in ("system", "developer")
+                        and isinstance(before, str) and before.strip()
+                        and item["content"] == ""):
+                    continue
             if isinstance(item.get("reasoning_content"), str):
                 item["reasoning_content"] = sanitize_text(
                     item["reasoning_content"], identity=False)
