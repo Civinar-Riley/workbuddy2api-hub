@@ -20,7 +20,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v2.0.8-2496ED?style=flat-square" alt="Version 2.0.8"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v2.0.9-2496ED?style=flat-square" alt="Version 2.0.9"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -111,6 +111,10 @@ services:
 
 更新镜像：`docker compose pull && docker compose up -d`。
 
+Docker 镜像在构建阶段已经编译好当前架构的 Go/uTLS 桥，容器内不需要 Go。
+未设置 `WB_TLS_FINGERPRINT` 时默认 `auto`；如需彻底关闭桥，可加
+`- WB_TLS_FINGERPRINT=python`，卷中的账号、设置和用量不会因此改变。
+
 ### 3. 启动入口：优先用 `-m`
 
 同一份代码、同一个账号池，`python3 wb_proxy.py` 与 `python3 -m wb_proxy` 的常驻内存差 **47-54 MB**
@@ -126,7 +130,29 @@ python3 -m wb_proxy --port 8788
 仓库内的资源路径都基于 `__file__` 解析，不受影响。Docker 镜像和 OpenWrt 包已改用 `-m`；
 Windows / macOS 的 `start-wb-proxy.*` 启动脚本暂未改动。
 
-### 4. CodeArts 原生第三出口
+### 4. TLS 出站桥（默认 `auto`）
+
+从本版本起，未显式配置 TLS 模式的安装默认使用 `WB_TLS_FINGERPRINT=auto`：
+网关会先尝试随包 Go/uTLS 桥；桥二进制缺失、架构不支持、启动失败、桥进程运行中
+退出，或当前请求使用自定义 CA / 不兼容代理时，自动回退 Python/OpenSSL。
+回退只发生在当前进程内，不会反复拉起失败的桥，也不会改变原来的代理出口和证书
+校验。便捷版、Docker 和 OpenWrt 的受支持架构包都自带对应桥，用户不需要安装 Go。
+
+需要强制指定时：
+
+```sh
+WB_TLS_FINGERPRINT=python   # 强制 Python/OpenSSL
+WB_TLS_FINGERPRINT=node     # 强制桥；桥不可用时报明确错误
+```
+
+`node` 模式下不要设置 `WB_TLS_BRIDGE=off`，否则会按显式关闭桥处理而走 Python。
+OpenWrt 使用 `uci set workbuddy2api.main.tls_mode='auto'`、`'node'` 或 `'python'`。
+实际模式、最近路线和回退原因可在 `/health`、`/settings` 及面板网络设置中查看。
+降级到不识别 `auto` 的旧版本前，请临时设置 `WB_TLS_FINGERPRINT=python`。
+逐路径头顺序、代理/桥头隔离和未修改项见
+[`docs/OUTBOUND-HEADER-AUDIT.md`](docs/OUTBOUND-HEADER-AUDIT.md)。
+
+### 5. CodeArts 原生第三出口
 
 网关内置进程内直连华为云 CodeArts，支持聊天 SSE 协议转换与自动签到，无需单独运行第三方桥接服务：
 1. 打开看板 →「设置 → CodeArts 接入」，勾选「启用 CodeArts 出口」并保存；

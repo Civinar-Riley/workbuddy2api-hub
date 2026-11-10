@@ -35,8 +35,10 @@ config workbuddy2api 'main'
 	# 0 = 关闭（面板仍可用，只是缓存过期后第一次打开要等十几秒）。
 	option warm '1'
 
-	# 可选 Go/uTLS TLS 指纹桥。默认 0，继续使用 Python/OpenSSL，行为与没有
-	# 二进制文件时完全一致。只有 x86_64 / aarch64 / armv7l 且安装包确实带有
-	# 对应 linux/Go 二进制的构建才会启用；其他架构会记录告警并保持 Python。
-	# 1 = 自动拉起随包桥（WB_TLS_FINGERPRINT=node、WB_TLS_BRIDGE=auto）。
-	option tls_bridge '0'
+	# TLS 传输模式：
+	# auto   = 默认。先尝试随包 Go/uTLS 桥；二进制缺失、架构不支持、启动失败
+	#          或桥运行中退出时，本进程后续请求一次性回退 Python/OpenSSL。
+	# node   = 强制桥。没有可用桥时请求返回明确错误，不会假装桥已生效。
+	# python = 强制 Python/OpenSSL，不启动桥。
+	# 支持桥的架构为 x86_64 / aarch64 / armv7l；其他架构在 auto 下自动回退。
+	option tls_mode 'auto'

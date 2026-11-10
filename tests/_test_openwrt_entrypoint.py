@@ -1,4 +1,4 @@
-"""OpenWrt packaging must keep Python as the default and make uTLS opt-in.
+"""OpenWrt packaging must default to auto, with Python as the safe fallback.
 
 `python3 wb_proxy.py` runs the file as `__main__`; measured idle RSS is
 47-54 MB higher than `python3 -m wb_proxy` on every platform sampled so far
@@ -18,6 +18,10 @@ Run with: python tests/_test_openwrt_entrypoint.py
 """
 import io
 import os
+import shutil
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,6 +49,126 @@ def read(path):
         return fh.read()
 
 
+def posix_sh():
+    found = shutil.which("sh")
+    if found:
+        return found
+    if os.name == "nt":
+        for path in (r"C:\Program Files\Git\bin\sh.exe",
+                     r"C:\Program Files\Git\usr\bin\sh.exe"):
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+SH_DRIVER = textwrap.dedent(r"""
+    set -eu
+    INIT=$1
+    UCI_LOG=$2
+    PROCD_LOG=$3
+    LOGGER_LOG=$4
+    CFG_TLS_MODE=$5
+    CFG_TLS_BRIDGE=$6
+    CFG_MACHINE=$7
+
+    config_load() { :; }
+    config_get() {
+        _target=$1
+        _section=$2
+        _option=$3
+        _default=$4
+        case "$_option" in
+            tls_mode) _value=$CFG_TLS_MODE ;;
+            tls_bridge) _value=$CFG_TLS_BRIDGE ;;
+            host) _value=127.0.0.1 ;;
+            port) _value=8788 ;;
+            accounts_dir) _value=/tmp/workbuddy2api-test-accounts ;;
+            usage_dir) _value=/tmp/workbuddy2api-test-usage ;;
+            stats_ttl) _value=900 ;;
+            *) _value=$_default ;;
+        esac
+        eval "$_target=\$_value"
+    }
+    uci() { printf '%s\n' "$*" >> "$UCI_LOG"; }
+    logger() { printf '%s\n' "$*" >> "$LOGGER_LOG"; }
+    uname() { printf '%s\n' "$CFG_MACHINE"; }
+    mkdir() { :; }
+    chmod() { :; }
+    procd_open_instance() { :; }
+    procd_close_instance() { :; }
+    procd_set_param() {
+        printf 'CALL'
+        for _arg in "$@"; do printf '|%s' "$_arg"; done
+        printf '\n'
+    } >> "$PROCD_LOG"
+    procd_append_param() {
+        printf 'APPEND'
+        for _arg in "$@"; do printf '|%s' "$_arg"; done
+        printf '\n'
+    } >> "$PROCD_LOG"
+
+    . "$INIT"
+    start_service
+""")
+
+
+def simulate_start(tls_mode="", tls_bridge="", machine="x86_64"):
+    sh = posix_sh()
+    if not sh:
+        raise unittest.SkipTest("POSIX sh unavailable")
+    with tempfile.TemporaryDirectory(prefix="wb-openwrt-sh-") as tmp:
+        harness = os.path.join(tmp, "harness.sh")
+        uci_log = os.path.join(tmp, "uci.log")
+        procd_log = os.path.join(tmp, "procd.log")
+        logger_log = os.path.join(tmp, "logger.log")
+        with io.open(harness, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(SH_DRIVER)
+        for path in (uci_log, procd_log, logger_log):
+            with io.open(path, "w", encoding="utf-8"):
+                pass
+
+        def shell_path(path):
+            return path.replace("\\", "/")
+
+        argv = [
+            sh,
+            shell_path(harness),
+            shell_path(INIT),
+            shell_path(uci_log),
+            shell_path(procd_log),
+            shell_path(logger_log),
+            tls_mode,
+            tls_bridge,
+            machine,
+        ]
+        proc = subprocess.run(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=20)
+        if proc.returncode:
+            raise AssertionError(
+                "OpenWrt init simulation failed (%d): %s\n%s"
+                % (proc.returncode,
+                   proc.stdout.decode("utf-8", "replace"),
+                   proc.stderr.decode("utf-8", "replace")))
+        return {
+            "uci": read(uci_log).splitlines(),
+            "procd": read(procd_log).splitlines(),
+            "logger": read(logger_log).splitlines(),
+        }
+
+
+def env_from_procd(lines):
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) >= 2 and parts[0] == "CALL" and parts[1] == "env":
+            env = {}
+            for item in parts[2:]:
+                name, _sep, value = item.partition("=")
+                env[name] = value
+            return env
+    raise AssertionError("procd env call not found: %r" % (lines,))
+
+
 class OpenWrtEntrypointTests(unittest.TestCase):
     def setUp(self):
         self.text = read(INIT)
@@ -65,11 +189,23 @@ class OpenWrtEntrypointTests(unittest.TestCase):
         self.assertIn('WB_TLS_BRIDGE="$tls_bridge"', env_lines[0])
 
     def test_bridge_switch_only_changes_an_explicit_setting(self):
-        self.assertIn("config_get tls_bridge_setting main tls_bridge '0'", self.text)
-        self.assertIn("case \"$tls_bridge_setting\" in", self.text)
+        self.assertIn("config_get tls_mode_setting main tls_mode ''", self.text)
+        self.assertIn("config_get tls_bridge_setting main tls_bridge ''", self.text)
+        self.assertIn("case \"$tls_mode_setting\" in", self.text)
         self.assertIn("1|on|true|yes|enabled|node", self.text)
+        self.assertIn("tls_mode_setting=auto", self.text)
+        self.assertIn("tls_fingerprint=auto", self.text)
         self.assertIn("tls_fingerprint=python", self.text)
         self.assertIn("tls_bridge=off", self.text)
+        self.assertIn('uci -q set workbuddy2api.main.tls_mode="$tls_mode_setting"',
+                      self.text)
+
+    def test_legacy_tls_bridge_migrates_without_touching_data(self):
+        self.assertIn("tls_mode_setting=node", self.text)
+        self.assertIn("旧 tls_bridge 已启用", self.text)
+        self.assertIn("tls_mode=python", self.text)
+        self.assertNotIn("uci set workbuddy2api.main.tls_bridge", self.text)
+        self.assertNotIn("uci commit workbuddy2api.main", self.text)
 
     def test_supported_cpu_names_select_the_exact_bundled_binaries(self):
         self.assertIn("x86_64|amd64) bridge_binary=\"$PROG_DIR/bin/wb-tls-bridge-linux-amd64\"", self.text)
@@ -77,17 +213,79 @@ class OpenWrtEntrypointTests(unittest.TestCase):
         self.assertIn("armv7l) bridge_binary=\"$PROG_DIR/bin/wb-tls-bridge-linux-arm\"", self.text)
 
     def test_unsupported_cpu_falls_back_with_a_visible_notice(self):
-        self.assertIn('[ -n "$bridge_binary" ] && [ -x "$bridge_binary" ]', self.text)
+        self.assertIn('[ -z "$bridge_binary" ] || [ ! -x "$bridge_binary" ]',
+                      self.text)
         self.assertIn("logger -t workbuddy2api", self.text)
-        self.assertIn("继续使用 Python/OpenSSL", self.text)
+        self.assertIn("回退 Python/OpenSSL", self.text)
+
+    def test_init_passes_posix_sh_syntax(self):
+        sh = posix_sh()
+        if not sh:
+            self.skipTest("POSIX sh unavailable")
+        proc = subprocess.run(
+            [sh, "-n", INIT.replace("\\", "/")],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+        self.assertEqual(proc.returncode, 0,
+                         proc.stderr.decode("utf-8", "replace"))
+
+    def test_new_install_uses_auto_without_migration(self):
+        result = simulate_start(tls_mode="auto")
+        env = env_from_procd(result["procd"])
+        self.assertEqual(env["WB_TLS_FINGERPRINT"], "auto")
+        self.assertEqual(env["WB_TLS_BRIDGE"], "auto")
+        self.assertEqual(result["uci"], [])
+
+    def test_legacy_bridge_off_migrates_to_auto(self):
+        result = simulate_start(tls_mode="", tls_bridge="0")
+        env = env_from_procd(result["procd"])
+        self.assertEqual(env["WB_TLS_FINGERPRINT"], "auto")
+        self.assertEqual(env["WB_TLS_BRIDGE"], "auto")
+        self.assertEqual(result["uci"], [
+            "-q set workbuddy2api.main.tls_mode=auto",
+            "-q commit workbuddy2api",
+        ])
+
+    def test_legacy_bridge_on_migrates_to_node(self):
+        result = simulate_start(tls_mode="", tls_bridge="1")
+        env = env_from_procd(result["procd"])
+        self.assertEqual(env["WB_TLS_FINGERPRINT"], "node")
+        self.assertEqual(env["WB_TLS_BRIDGE"], "auto")
+        self.assertEqual(result["uci"], [
+            "-q set workbuddy2api.main.tls_mode=node",
+            "-q commit workbuddy2api",
+        ])
+
+    def test_existing_mode_is_not_overwritten(self):
+        result = simulate_start(tls_mode="python", tls_bridge="1")
+        env = env_from_procd(result["procd"])
+        self.assertEqual(env["WB_TLS_FINGERPRINT"], "python")
+        self.assertEqual(env["WB_TLS_BRIDGE"], "off")
+        self.assertEqual(result["uci"], [])
+
+    def test_unknown_mode_falls_back_to_auto_with_a_notice(self):
+        result = simulate_start(tls_mode="mystery")
+        env = env_from_procd(result["procd"])
+        self.assertEqual(env["WB_TLS_FINGERPRINT"], "auto")
+        self.assertEqual(env["WB_TLS_BRIDGE"], "auto")
+        self.assertEqual(result["uci"], [])
+        self.assertTrue(any("未知 tls_mode" in line
+                            for line in result["logger"]), result["logger"])
+
+    def test_unsupported_cpu_keeps_auto_and_logs_fallback(self):
+        result = simulate_start(tls_mode="auto", machine="mips")
+        env = env_from_procd(result["procd"])
+        self.assertEqual(env["WB_TLS_FINGERPRINT"], "auto")
+        self.assertEqual(env["WB_TLS_BRIDGE"], "auto")
+        self.assertTrue(any("回退 Python/OpenSSL" in line
+                            for line in result["logger"]), result["logger"])
 
 
 class OpenWrtPackageTests(unittest.TestCase):
-    def test_uci_default_keeps_the_bridge_disabled(self):
+    def test_uci_default_is_auto(self):
         config = read(CONFIG)
-        self.assertIn("option tls_bridge '0'", config)
+        self.assertIn("option tls_mode 'auto'", config)
         self.assertIn("x86_64 / aarch64 / armv7l", config)
-        self.assertIn("其他架构会记录告警并保持 Python", config)
+        self.assertIn("其他架构在 auto 下自动回退", config)
 
     def test_makefile_installs_bridge_only_when_files_exist(self):
         makefile = read(MAKEFILE)

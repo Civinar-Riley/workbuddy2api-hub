@@ -50,20 +50,28 @@ bridge alive by holding the stdin pipe.
 
 ## Python configuration
 
-- `WB_TLS_FINGERPRINT=node`: enable the optional bridge.
-- `WB_TLS_FINGERPRINT=python` (default; also `0`, `off`, `false`, `no`, `native`,
-  `stdlib`): use the Python/OpenSSL profile and disable the bridge.
+- `WB_TLS_FINGERPRINT=auto` (default when unset or empty): try a bundled bridge
+  once, then fall back to Python/OpenSSL for the rest of the process if it is
+  missing, cannot start, is unsupported, or exits at runtime.
+- `WB_TLS_FINGERPRINT=node`: require the bridge. A missing/unusable bridge is a
+  clear request error; it is not silently reported as active.
+- `WB_TLS_FINGERPRINT=python` (also `0`, `off`, `false`, `no`, `native`,
+  `stdlib`): use the Python/OpenSSL profile and never start the bridge.
 - `WB_TLS_BRIDGE=host:port`: use an already-running bridge on loopback, with
   its secret supplied as `WB_TLS_BRIDGE_SECRET`.
 - `WB_TLS_BRIDGE=auto` or unset: launch a discovered bundled executable and
   cache its loopback address for the process lifetime.
-- `WB_TLS_BRIDGE=0` (also `off`, `false`, `no`, `none`): use Python/OpenSSL.
+- `WB_TLS_BRIDGE=0` (also `off`, `false`, `no`, `none`): explicitly disable
+  the bridge. With `WB_TLS_FINGERPRINT=node`, this is the documented
+  "bridge explicitly off" combination and uses Python/OpenSSL.
 
 Only HTTPS requests to non-loopback hosts use the bridge. The local
 `X-WB-Upstream-Proxy` header is consumed by the bridge and is not forwarded to
 the origin server. TLS certificates are verified against Go's system trust
-store. For a private CA, build the bridge with the desired root installed in
-that store.
+store. A configured `WB_CA_BUNDLE` makes `auto` use Python/OpenSSL and makes
+`node` fail clearly; the gateway never disables certificate verification to
+force a bridge. For a private CA with the bridge, install the root in the
+bridge's trust store explicitly.
 
 Bind the listener to loopback. The proxy header can contain credentials, so do
 not expose the bridge to an untrusted network.

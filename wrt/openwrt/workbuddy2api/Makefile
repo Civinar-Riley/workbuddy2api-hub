@@ -21,7 +21,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=workbuddy2api
-PKG_VERSION:=2.0.8
+PKG_VERSION:=2.0.9
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -37,7 +37,8 @@ $(error 找不到应用源码（files/usr/lib/workbuddy2api 或 ../../app-src）
 endif
 
 # build-apk.sh 选择带桥构建时会把固定命名的二进制放进上述目录。manual copy
-# 也可以直接使用同一布局；没有这些文件时 BRIDGE_BINS 为空，安装内容与旧包一致。
+# 也可以直接使用同一布局；没有这些文件时 BRIDGE_BINS 为空，运行时 auto 仍会
+# 发现缺桥并回退 Python/OpenSSL。
 BRIDGE_BINS:=$(wildcard $(CURDIR)/files/usr/lib/workbuddy2api/bin/wb-tls-bridge-linux-*)
 BRIDGE_LICENSE_DIR:=$(CURDIR)/files/usr/share/licenses/workbuddy2api
 BRIDGE_LICENSE_NAMES:=brotli.txt compress.txt utls.txt x-crypto.txt x-sys.txt wb-tls-bridge-README.md
@@ -64,9 +65,11 @@ define Package/workbuddy2api/description
   OpenAI 兼容 API 的多账号网关：/v1/chat/completions 与 /v1/responses，
   自带看板（8788 端口）做账号管理、用量统计、定价估算与每日自动任务。
 
-  默认是纯 Python 标准库实现（上游不引入任何 pip 依赖），使用 Python/OpenSSL。
-  可选 Go/uTLS 桥构建仅随包附带 Linux x86_64、aarch64、armv7 三个静态二进制；
-  其他 CPU 架构没有桥，打开开关也会告警并保持 Python/OpenSSL。OpenWrt 把 ssl、
+  默认 tls_mode=auto：请求优先使用随包 Go/uTLS 桥，桥缺失、启动失败或运行中
+  退出时回退 Python/OpenSSL；账号、代理槽与用量不需要重新配置。带桥构建附带
+  Linux x86_64、aarch64、armv7 三个静态二进制；其他 CPU 架构没有桥，auto 会
+  告警并回退。强制 Python 可设置 tls_mode=python，强制桥可设置 tls_mode=node。
+  OpenWrt 把 ssl、
   sqlite3 与完整编码表拆成了独立包，所以依赖里显式带上 python3-openssl /
   python3-sqlite3 / python3-codecs；Windows 专属功能（从桌面客户端内存
   回收解码密钥）在 Linux 上自动跳过，账号用看板的浏览器 OAuth 添加。

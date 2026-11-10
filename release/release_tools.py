@@ -268,6 +268,7 @@ def download_block(version, zip_name, ipk_name, apk_name):
         "  - Windows / macOS / Linux",
         "  - 需要 Python 3.9+",
         "  - 内置 Windows amd64、macOS 与 Linux amd64 / arm64 的 Go/uTLS bridge",
+        "  - 未设置 TLS 模式时默认 auto；桥不可用时自动回退 Python，无需安装 Go",
         "  - 解压后使用对应平台的启动脚本",
         "",
         "- `%s`" % ipk_name,

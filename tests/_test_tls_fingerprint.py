@@ -1,6 +1,7 @@
 """TLS fingerprint profiles and the optional local CONNECT bridge."""
 
 import hashlib
+import json
 import os
 import socket
 import ssl
@@ -196,13 +197,14 @@ def parse_client_hello(raw):
 
 
 class LocalConnectBridge(object):
-    def __init__(self):
+    def __init__(self, connect_status=200):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(8)
         self.server.settimeout(0.2)
         self.port = self.server.getsockname()[1]
+        self.connect_status = connect_status
         self.lock = threading.Lock()
         self.requests = []
         self.connections = 0
@@ -263,6 +265,15 @@ class LocalConnectBridge(object):
                         "header_lines": header_lines,
                     })
                 if method == "CONNECT":
+                    if self.connect_status != 200:
+                        body = b"rejected"
+                        conn.sendall(
+                            ("HTTP/1.1 %d Bridge Rejected\r\n"
+                             "Content-Length: %d\r\n"
+                             "Connection: close\r\n\r\n" %
+                             (self.connect_status, len(body))).encode("latin-1")
+                            + body)
+                        return
                     conn.sendall(
                         b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     continue
@@ -290,25 +301,218 @@ class LocalConnectBridge(object):
         self.thread.join(2)
 
 
+class FakeBridgeProcess(object):
+    """The small subprocess surface used by the bridge lifecycle code."""
+    def __init__(self, returncode=None):
+        self.returncode = returncode
+        self.stdin = None
+        self.stdout = None
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
 class TLSFingerprintTests(unittest.TestCase):
     def tearDown(self):
         pool.close_all()
+        with pool._TLS_BRIDGE_LOCK:
+            pool._reset_tls_state_locked()
+            pool._TLS_STATE_CONFIG_KEY = None
 
     def test_mode_switches_between_node_and_python(self):
         with EnvironmentPatch(WB_TLS_FINGERPRINT=None):
-            self.assertEqual(pool.tls_fingerprint_mode(), "python")
+            self.assertEqual(pool.tls_fingerprint_mode(), "auto")
+        with EnvironmentPatch(WB_TLS_FINGERPRINT=""):
+            self.assertEqual(pool.tls_fingerprint_mode(), "auto")
+        with EnvironmentPatch(WB_TLS_FINGERPRINT="auto"):
+            self.assertEqual(pool.tls_fingerprint_mode(), "auto")
         for value in ("0", "off", "false", "no", "python", "native", "stdlib"):
             with EnvironmentPatch(WB_TLS_FINGERPRINT=value):
                 self.assertEqual(pool.tls_fingerprint_mode(), "python")
         for value in ("node",):
             with EnvironmentPatch(WB_TLS_FINGERPRINT=value):
                 self.assertEqual(pool.tls_fingerprint_mode(), "node")
-        with EnvironmentPatch(WB_TLS_FINGERPRINT=""):
-            self.assertEqual(pool.tls_fingerprint_mode(), "python")
         for value in ("go", "something-else"):
             with EnvironmentPatch(WB_TLS_FINGERPRINT=value):
                 with self.assertRaises(ValueError):
                     pool.tls_fingerprint_mode()
+
+    def test_node_with_bridge_off_uses_python(self):
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE="off"):
+            route = pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(route["route"], "python")
+            self.assertEqual(route["reason"], "explicit_bridge_off")
+
+    def test_auto_missing_bridge_falls_back_only_once(self):
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="auto",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE=None), \
+                mock.patch.object(pool, "_bridge_binary_candidates",
+                                  return_value=[]):
+            first = pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(first["route"], "python")
+            self.assertEqual(first["reason"], "binary_missing")
+            status = pool.tls_status()
+            self.assertEqual(status["bridge_state"], "disabled")
+            self.assertFalse(status["auto_retry_available"])
+            with mock.patch.object(pool, "_start_bundled_tls_bridge") as start:
+                second = pool._resolve_tls_route("https", "www.example.test")
+                start.assert_not_called()
+            self.assertEqual(second["route"], "python")
+
+    def test_auto_custom_ca_uses_python_and_node_errors(self):
+        ca_path = os.path.join(ROOT, "README.md")
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="auto",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE=None,
+                WB_CA_BUNDLE=ca_path):
+            auto = pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(auto["route"], "python")
+            self.assertEqual(auto["reason"], "custom_ca")
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE=None,
+                WB_CA_BUNDLE=ca_path):
+            with self.assertRaises(pool.TlsBridgeUnavailable):
+                pool._resolve_tls_route("https", "www.example.test")
+
+    def test_auto_keepalive_off_uses_python(self):
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="auto",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE="0"):
+            route = pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(route["route"], "python")
+            self.assertEqual(route["reason"], "keepalive_disabled")
+
+    def test_node_keepalive_off_requires_bridge(self):
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE="0"):
+            with self.assertRaises(pool.TlsBridgeUnavailable) as ctx:
+                pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(ctx.exception.reason, "keepalive_disabled")
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE="off",
+                WB_UPSTREAM_KEEPALIVE="0"):
+            route = pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(route["route"], "python")
+            self.assertEqual(route["reason"], "explicit_bridge_off")
+
+    def test_concurrent_auto_requests_only_spawn_one_bridge(self):
+        started = threading.Event()
+        release = threading.Event()
+        spawned = []
+        fake = FakeBridgeProcess()
+
+        def spawn(_path):
+            spawned.append(_path)
+            started.set()
+            release.wait(2)
+            return fake, "x" * 64, ("127.0.0.1", 41234)
+
+        results = []
+
+        def worker():
+            try:
+                results.append(pool._start_bundled_tls_bridge("auto"))
+            except pool.TlsBridgeUnavailable as exc:
+                results.append(exc.reason)
+
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="auto",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE=None), \
+                mock.patch.object(pool, "_bridge_binary_candidates",
+                                  return_value=["/fake/wb-tls-bridge"]), \
+                mock.patch.object(pool, "_spawn_auto_tls_bridge",
+                                  side_effect=spawn):
+            with pool._TLS_BRIDGE_LOCK:
+                pool._TLS_AUTO_ATTEMPTED = False
+                pool._TLS_BRIDGE_STATE = "not_started"
+                pool._TLS_BRIDGE_CACHE = None
+                pool._TLS_BRIDGE_PROCESS = None
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for thread in threads:
+                thread.start()
+            self.assertTrue(started.wait(2))
+            release.set()
+            for thread in threads:
+                thread.join(2)
+            self.assertEqual(len(spawned), 1, spawned)
+            self.assertIn(("127.0.0.1", 41234), results)
+            self.assertIn("start_in_progress", results)
+            pool._mark_bridge_unavailable("test_cleanup")
+
+    def test_concurrent_node_requests_wait_for_the_same_bridge(self):
+        started = threading.Event()
+        release = threading.Event()
+        spawned = []
+        fake = FakeBridgeProcess()
+
+        def spawn(_path):
+            spawned.append(_path)
+            started.set()
+            release.wait(2)
+            return fake, "x" * 64, ("127.0.0.1", 41236)
+
+        results = []
+
+        def worker():
+            try:
+                route = pool._resolve_tls_route("https", "www.example.test")
+                results.append(route["bridge_address"])
+            except Exception as exc:
+                results.append(type(exc).__name__ + ":" + str(exc))
+
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE=None), \
+                mock.patch.object(pool, "_bridge_binary_candidates",
+                                  return_value=["/fake/wb-tls-bridge"]), \
+                mock.patch.object(pool, "_spawn_auto_tls_bridge",
+                                  side_effect=spawn):
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for thread in threads:
+                thread.start()
+            self.assertTrue(started.wait(2))
+            release.set()
+            for thread in threads:
+                thread.join(3)
+            self.assertEqual(len(spawned), 1, spawned)
+            self.assertEqual(results, [("127.0.0.1", 41236)] * 4)
+            pool._mark_bridge_unavailable("test_cleanup")
+
+    def test_auto_bridge_exit_marks_later_requests_as_python(self):
+        fake = FakeBridgeProcess(returncode=1)
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="auto",
+                WB_TLS_BRIDGE=None,
+                WB_UPSTREAM_KEEPALIVE=None):
+            with pool._TLS_BRIDGE_LOCK:
+                pool._TLS_AUTO_ATTEMPTED = True
+                pool._TLS_BRIDGE_STATE = "ready"
+                pool._TLS_BRIDGE_CACHE = ("127.0.0.1", 41235)
+                pool._TLS_BRIDGE_PROCESS = fake
+                pool._TLS_BRIDGE_SECRET = "secret"
+                pool._TLS_STATE_CONFIG_KEY = pool._tls_state_config_key()
+            route = pool._resolve_tls_route("https", "www.example.test")
+            self.assertEqual(route["route"], "python")
+            self.assertEqual(route["reason"], "runtime_exited")
+            self.assertEqual(pool.tls_status()["bridge_state"], "disabled")
 
     def test_python_mode_disables_bridge(self):
         with EnvironmentPatch(
@@ -414,11 +618,21 @@ class TLSFingerprintTests(unittest.TestCase):
             self.assertEqual(len(connects), 1)
             self.assertEqual(connects[0]["target"], "www.workbuddy.ai:443")
             self.assertEqual(
+                connects[0]["headers"].get("x-wb-bridge-auth"), "x" * 64)
+            self.assertEqual(
                 connects[0]["headers"].get("x-wb-upstream-proxy"), proxy)
             self.assertEqual(bridge.connections, 1)
-            self.assertEqual(len([
+            posts = [
                 item for item in bridge.requests if item["method"] == "POST"
-            ]), 2)
+            ]
+            self.assertEqual(len(posts), 2)
+            for post in posts:
+                names = {
+                    name.lower() for name, _value in post["header_lines"]
+                }
+                self.assertNotIn("x-wb-bridge-auth", names)
+                self.assertNotIn("x-wb-upstream-proxy", names)
+                self.assertNotIn("proxy-authorization", names)
             delta = {
                 key: pool.stats()[key] - before[key]
                 for key in before
@@ -429,13 +643,103 @@ class TLSFingerprintTests(unittest.TestCase):
             pool.close_all()
             bridge.close()
 
+    def test_bridge_upstream_502_does_not_disable_the_bridge(self):
+        bridge = LocalConnectBridge(connect_status=502)
+        try:
+            with EnvironmentPatch(
+                    WB_TLS_FINGERPRINT="auto",
+                    WB_TLS_BRIDGE=bridge.address(),
+                    WB_TLS_BRIDGE_SECRET="x" * 64,
+                    no_proxy="127.0.0.1,localhost",
+                    NO_PROXY="127.0.0.1,localhost"):
+                route = pool._resolve_tls_route(
+                    "https", "www.workbuddy.ai")
+                self.assertEqual(route["route"], "bridge")
+                conn = pool._new_connection(
+                    "https", "www.workbuddy.ai", 443, None, 3, route=route)
+                with self.assertRaises(pool.TlsBridgeConnectError) as ctx:
+                    conn.connect()
+                self.assertFalse(ctx.exception.bridge_unavailable)
+                self.assertEqual(ctx.exception.reason,
+                                 "upstream_tls_or_connect_failed")
+                fallback = pool._fallback_after_bridge_connect(
+                    route, ctx.exception, "https", "www.workbuddy.ai", None)
+                self.assertEqual(fallback["route"], "python")
+                self.assertEqual(fallback["reason"],
+                                 "upstream_tls_or_connect_failed")
+                status = pool.tls_status()
+                self.assertEqual(status["bridge_state"], "external")
+                self.assertEqual(status["last_fallback_reason"],
+                                 "upstream_tls_or_connect_failed")
+        finally:
+            pool.close_all()
+            bridge.close()
+
+    def test_tls_status_is_secret_free_and_reset_does_not_start_bridge(self):
+        bridge_secret = "b" * 64
+        proxy_password = "proxy-password-do-not-leak"
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE="127.0.0.1:41000",
+                WB_TLS_BRIDGE_SECRET=bridge_secret,
+                HTTP_PROXY="http://proxy-user:" + proxy_password
+                           + "@127.0.0.1:8080"):
+            status = pool.tls_status()
+            self.assertEqual(set(status), {
+                "requested_mode",
+                "bridge_state",
+                "last_route",
+                "last_route_reason",
+                "last_fallback_reason",
+                "last_fallback_at",
+                "auto_retry_available",
+                "bridge_generation",
+                "keepalive_enabled",
+            })
+            self.assertEqual(status["requested_mode"], "node")
+            self.assertEqual(status["bridge_state"], "external")
+            self.assertIsInstance(status["bridge_generation"], int)
+            encoded = json.dumps(status, sort_keys=True)
+            self.assertNotIn(bridge_secret, encoded)
+            self.assertNotIn(proxy_password, encoded)
+            with mock.patch.object(pool, "_ensure_auto_tls_bridge") as ensure:
+                pool.reset_tls_state()
+                ensure.assert_not_called()
+
+    def test_auto_invalid_external_bridge_falls_back(self):
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="auto",
+                WB_TLS_BRIDGE="127.0.0.1:41000",
+                WB_TLS_BRIDGE_SECRET=None):
+            decision = pool._resolve_tls_route(
+                "https", "www.workbuddy.ai")
+            self.assertEqual(decision["route"], "python")
+            self.assertEqual(decision["reason"], "external_invalid")
+            status = pool.tls_status()
+            self.assertEqual(status["bridge_state"], "disabled")
+            self.assertEqual(status["last_fallback_reason"],
+                             "external_invalid")
+            self.assertFalse(status["auto_retry_available"])
+
+    def test_tls_status_reports_starting(self):
+        with EnvironmentPatch(
+                WB_TLS_FINGERPRINT="node",
+                WB_TLS_BRIDGE="auto",
+                WB_TLS_BRIDGE_SECRET=None):
+            with pool._TLS_BRIDGE_LOCK:
+                pool._TLS_BRIDGE_STATE = "starting"
+                pool._TLS_AUTO_ATTEMPTED = True
+                pool._TLS_STATE_CONFIG_KEY = pool._tls_state_config_key()
+            status = pool.tls_status()
+            self.assertEqual(status["bridge_state"], "starting")
+
     def test_bundled_utls_bridge_emits_exact_official_ja3_and_ja4(self):
         candidates = [
             p for p in pool._tls_bridge_candidates()
             if os.path.isfile(p) and os.access(p, os.X_OK)
         ]
         if not candidates:
-            return
+            self.skipTest("bridge binary unavailable")
         proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         proxy.bind(("127.0.0.1", 0))
         proxy.listen(1)

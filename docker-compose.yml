@@ -21,6 +21,9 @@ services:
       # 留空则启动时自动生成高强度 API Key 写入 ./accounts/settings.json 并打印在启动日志中
       # - API_KEY=your_secret_key
       - TZ=Asia/Shanghai
+      # 默认 auto：镜像内 Go/uTLS 桥可用则使用，不可用则自动回退 Python/OpenSSL。
+      # 彻底关闭桥时改为 python；强制桥（失败即报错）时改为 node。
+      # - WB_TLS_FINGERPRINT=python
     volumes:
       # 持久化数据目录：升级与重建容器时绝不丢失配置与用量
       - ./accounts:/app/accounts

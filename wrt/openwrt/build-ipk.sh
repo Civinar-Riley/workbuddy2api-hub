@@ -298,7 +298,7 @@ for _f in "$APP_SRC"/wb_*.py; do
 done
 install_file "$APP_SRC/dashboard.html" "$DATA" usr/lib/workbuddy2api/dashboard.html 0644
 if [ "$BRIDGE_MODE" = none ]; then
-	echo "    uTLS bridge: 未包含（默认 Python/OpenSSL）"
+	echo "    uTLS bridge: 未包含（运行时为 auto，缺桥会回退 Python/OpenSSL）"
 else
 	BRIDGE_DIR="$WORK/bridge-bin"
 	prepare_bridge_bins "$BRIDGE_DIR"

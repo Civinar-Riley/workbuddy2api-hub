@@ -589,6 +589,108 @@ class AnthropicHeaderFingerprintTests(unittest.TestCase):
         self.assertNotIn("x-anthropic-billing-header",
                          body["messages"][0]["content"])
 
+    def test_user_message_billing_metadata_is_untouched(self):
+        user = "Example:\n" + self.FULL_HEADER + "\nKeep this request unchanged."
+        out = P.sanitize_messages([
+            {"role": "system", "content": self.FULL_HEADER},
+            {"role": "user", "content": user},
+        ])
+        self.assertEqual([m["role"] for m in out], ["user"])
+        self.assertEqual(out[0]["content"], user)
+
+    def test_tool_result_and_arguments_billing_metadata_is_untouched(self):
+        args = json.dumps({
+            "header": "x-anthropic-billing-header: cc_version=2.1.321.abc;",
+            "keep": "tool argument {{literal}}",
+        })
+        result = self.FULL_HEADER + "\nTool result body."
+        original = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": args},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": result},
+        ]
+        out = P.sanitize_messages(original)
+        self.assertEqual(out[0]["tool_calls"][0]["function"]["arguments"], args)
+        self.assertEqual(json.loads(
+            out[0]["tool_calls"][0]["function"]["arguments"]), json.loads(args))
+        self.assertEqual(out[1]["content"], result)
+
+    def test_assistant_history_billing_metadata_is_untouched(self):
+        text = self.FULL_HEADER + "\nAssistant history body."
+        out = P.sanitize_messages([{"role": "assistant", "content": text}])
+        self.assertEqual(out[0]["content"], text)
+
+    def test_system_prose_and_fenced_examples_are_not_stripped(self):
+        prose = (
+            "Before the example.\n"
+            + self.FULL_HEADER
+            + "\nAfter the example."
+        )
+        fenced = "```text\n" + self.FULL_HEADER + "\n```"
+        bare = "Please explain x-anthropic-billing-header before using it."
+        out = P.sanitize_messages([
+            {"role": "system", "content": prose},
+            {"role": "developer", "content": fenced},
+            {"role": "system", "content": bare},
+        ])
+        self.assertEqual(out[0]["content"], prose)
+        self.assertEqual(out[1]["content"], fenced)
+        self.assertEqual(out[2]["content"], bare)
+
+    def test_system_header_plus_same_line_prose_is_conservative(self):
+        text = (
+            "x-anthropic-billing-header: cc_version=2.1.321.abc; "
+            "Keep this instruction."
+        )
+        out = P.sanitize_messages([{"role": "system", "content": text}])
+        self.assertEqual(out[0]["content"], text)
+
+    def test_scoped_cleanup_is_idempotent_and_does_not_mutate_input(self):
+        text = self.FULL_HEADER + "\nYou are a helpful AI assistant."
+        messages = [{"role": "system", "content": text}]
+        before = json.loads(json.dumps(messages))
+        first = P.sanitize_messages(messages)
+        second = P.sanitize_messages(first)
+        self.assertEqual(messages, before)
+        self.assertEqual(first[0]["content"], "You are a helpful AI assistant.")
+        self.assertEqual(second[0]["content"], first[0]["content"])
+
+    def test_system_text_blocks_drop_only_metadata_and_empty_blocks(self):
+        text = "You are a helpful AI assistant."
+        out = P.sanitize_messages([{
+            "role": "system",
+            "content": [
+                {"type": "text", "text": self.FULL_HEADER},
+                {"type": "text", "text": text},
+            ],
+        }])
+        self.assertEqual(out[0]["content"], [{"type": "text", "text": text}])
+
+    def test_system_metadata_only_block_list_drops_whole_message(self):
+        out = P.sanitize_messages([{
+            "role": "system",
+            "content": [{"type": "text", "text": self.FULL_HEADER}],
+        }])
+        self.assertEqual(out, [])
+
+    def test_system_metadata_removal_keeps_non_text_blocks(self):
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+        out = P.sanitize_messages([{
+            "role": "developer",
+            "content": [
+                {"type": "text", "text": self.FULL_HEADER},
+                image,
+            ],
+        }])
+        self.assertEqual(out[0]["content"], [image])
+
 
 if __name__ == "__main__":
     unittest.main()

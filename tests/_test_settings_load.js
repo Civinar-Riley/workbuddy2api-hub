@@ -59,6 +59,14 @@ const SETTINGS = {
     cached_at: 1760000000,
   },
   desktop_chat_compat: false,
+  outbound_tls: {
+    requested_mode: 'auto',
+    bridge_state: 'ready',
+    last_route: 'bridge',
+    last_fallback_reason: '',
+    last_fallback_at: '',
+    auto_retry_available: true,
+  },
   version: 'v1.6.14',
   accounts_dir: '/data/accounts',
   usage_dir: '/data/usage',
@@ -187,6 +195,11 @@ global.__toasts = toasts;
   assert.equal(element('setWinMaxHeight').value, '640', '窗口限高输入框没写回');
   assert.equal(element('setWinMaxHeightState').textContent, '(当前 640px)',
     '窗口限高状态文案没写回');
+  assert.equal(element('setOutboundTlsMode').textContent, 'auto');
+  assert.equal(element('setOutboundTlsBridge').textContent, 'ready');
+  assert.equal(element('setOutboundTlsRoute').textContent, 'bridge');
+  assert.equal(element('setOutboundTlsFallback').textContent, '-');
+  assert.equal(element('setOutboundTlsRetry').textContent, '可用');
 
   /* 6. 标记里每个 id 只能出现一次：`getElementById` 静默取文档顺序上的第一个，
      重复出来的第二个永远不会被回填，按钮改的也是第一个副本。实测 v1.9.2 设置页有两张

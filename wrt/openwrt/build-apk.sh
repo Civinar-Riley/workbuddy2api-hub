@@ -32,7 +32,7 @@ usage() {
                    直接复用目录下三个约定文件名的桥二进制，不重新编译。
   -h, --help       显示本帮助
 
-不指定桥选项时，产物与仅含 Python/OpenSSL 的旧包一致。
+不指定桥选项时，包内不携带桥，运行时 auto 会在启动桥时回退 Python/OpenSSL。
 EOF
 }
 
@@ -175,7 +175,7 @@ echo "    源码版本: ${DETECTED_VER:-未知}    Makefile: $MAKE_VER-r${PKG_RE
 BRIDGE_DIR=""
 echo "==> 2/5 准备可选 Go/uTLS 桥"
 if [ "$BRIDGE_MODE" = none ]; then
-	echo "    未包含（默认 Python/OpenSSL）"
+	echo "    未包含（运行时 auto 会在缺桥时回退 Python/OpenSSL）"
 else
 	BRIDGE_DIR="$WORK/bridge-bin"
 	prepare_bridge_bins "$BRIDGE_DIR"
@@ -237,7 +237,7 @@ echo "    $OUT_APK"
 echo "    -> apk/$OUT_NAME"
 
 if [ "$BRIDGE_MODE" = none ]; then
-	echo "==> 完成（仅 Python/OpenSSL）"
+	echo "==> 完成（未带桥；运行时 auto 回退 Python/OpenSSL）"
 else
 	echo "==> 完成（含三个 Linux Go/uTLS 桥目标）"
 fi

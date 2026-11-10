@@ -2466,6 +2466,18 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     'CodeArts 账号': 'CodeArts accounts',
     'CodeArts 接入': 'CodeArts',
     'CodeArts 出口': 'CodeArts exit',
+    '出站 TLS 状态': 'Outbound TLS status',
+    '默认 auto：优先使用随包 Go/uTLS 桥，不可用时自动回退 Python/OpenSSL。这里只显示脱敏状态；桥认证密钥、代理凭据和账号 token 不会返回浏览器。': 'Default auto: prefer the bundled Go/uTLS bridge and fall back to Python/OpenSSL when it is unavailable. Only redacted status is shown here; the bridge secret, proxy credentials and account tokens are never sent to the browser.',
+    '请求模式': 'Requested mode',
+    '桥状态': 'Bridge state',
+    '最近路线': 'Last route',
+    '最近回退': 'Last fallback',
+    '自动重试': 'Auto retry',
+    '最近回退时间：': 'Last fallback: ',
+    '(只读)': '(read-only)',
+    '(不可用)': '(unavailable)',
+    '可用': 'Available',
+    '不可用': 'Unavailable',
     '启用 CodeArts 出口': 'Enable the CodeArts exit',
     '每天自动签到': 'Daily auto check-in',
     '添加 CodeArts 账号': 'Add a CodeArts account',
@@ -4174,6 +4186,18 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "智能体接入": "智能體接入",
     "网关设置": "閘道設定",
     "面板窗口限高": "面板視窗限高",
+    "出站 TLS 状态": "出站 TLS 狀態",
+    "默认 auto：优先使用随包 Go/uTLS 桥，不可用时自动回退 Python/OpenSSL。这里只显示脱敏状态；桥认证密钥、代理凭据和账号 token 不会返回浏览器。": "預設 auto：優先使用隨包 Go/uTLS 橋，不可用時自動回退 Python/OpenSSL。這裡只顯示去識別化狀態；橋認證金鑰、代理憑據和帳號 token 不會返回瀏覽器。",
+    "请求模式": "請求模式",
+    "桥状态": "橋狀態",
+    "最近路线": "最近路線",
+    "最近回退": "最近回退",
+    "自动重试": "自動重試",
+    "最近回退时间：": "最近回退時間：",
+    "(只读)": "(唯讀)",
+    "(不可用)": "(無法取得)",
+    "可用": "可用",
+    "不可用": "不可用",
     "每个窗口（区块）超过这个高度时在窗口内部滚动，不再把整页拉长；滚动时标题行固定在窗口顶部。单位像素；填 0 表示不限。": "每個視窗（區塊）超過這個高度時在視窗內部捲動，不再把整頁拉長；捲動時標題列固定在視窗頂部。單位像素；填 0 表示不限。",
     "窗口最高高度（像素，0 = 不限）": "視窗最高高度（像素，0 = 不限）",
     "已限高：窗口最高 ": "已限高：視窗最高 ",
@@ -6335,11 +6359,11 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     </div>
     <!-- 二级分类胶囊导航 -->
     <div id="settingsCatBar" class="settings-cat-bar">
-      <button type="button" class="settings-cat-btn active" data-cat="all" onclick="filterSettingsCategory('all')">全部 <span class="cat-count">36</span></button>
+      <button type="button" class="settings-cat-btn active" data-cat="all" onclick="filterSettingsCategory('all')">全部 <span class="cat-count">37</span></button>
       <button type="button" class="settings-cat-btn" data-cat="access" onclick="filterSettingsCategory('access')">🔑 访问与密钥 <span class="cat-count">6</span></button>
       <button type="button" class="settings-cat-btn" data-cat="models" onclick="filterSettingsCategory('models')">🤖 模型与调度 <span class="cat-count">10</span></button>
       <button type="button" class="settings-cat-btn" data-cat="limits" onclick="filterSettingsCategory('limits')">🛡️ 限额与并发 <span class="cat-count">4</span></button>
-      <button type="button" class="settings-cat-btn" data-cat="network" onclick="filterSettingsCategory('network')">🌐 出口与网络 <span class="cat-count">7</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="network" onclick="filterSettingsCategory('network')">🌐 出口与网络 <span class="cat-count">8</span></button>
       <button type="button" class="settings-cat-btn" data-cat="tasks" onclick="filterSettingsCategory('tasks')">⏰ 自动化 <span class="cat-count">3</span></button>
       <button type="button" class="settings-cat-btn" data-cat="system" onclick="filterSettingsCategory('system')">🛠️ 计费与运维 <span class="cat-count">6</span></button>
     </div>
@@ -6501,6 +6525,22 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         <button class="sec" onclick="testCodeartsConnection(this)">测试连接</button>
         <span id="setCodeartsHint" style="font-size:12px;color:var(--dim)"></span>
       </div>
+    </section>
+
+    <section data-cat="network">
+      <h2>出站 TLS 状态 <em id="setOutboundTlsState"></em></h2>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
+        默认 auto：优先使用随包 Go/uTLS 桥，不可用时自动回退 Python/OpenSSL。
+        这里只显示脱敏状态；桥认证密钥、代理凭据和账号 token 不会返回浏览器。
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+        <div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">请求模式</div><b id="setOutboundTlsMode" class="mono">-</b></div>
+        <div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">桥状态</div><b id="setOutboundTlsBridge" class="mono">-</b></div>
+        <div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">最近路线</div><b id="setOutboundTlsRoute" class="mono">-</b></div>
+        <div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">最近回退</div><b id="setOutboundTlsFallback" class="mono">-</b></div>
+        <div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">自动重试</div><b id="setOutboundTlsRetry" class="mono">-</b></div>
+      </div>
+      <div id="setOutboundTlsWhen" style="font-size:11px;color:var(--dim);margin-top:10px"></div>
     </section>
 
     <section data-cat="network">
@@ -15058,9 +15098,29 @@ async function saveWinMaxHeight(btn){
 }
 // ==== 面板窗口限高结束 ====
 
+function applyOutboundTlsStatus(tls){
+  const info = (tls && typeof tls === 'object') ? tls : {};
+  const put = (id, value) => {
+    const node = document.getElementById(id);
+    if(node) node.textContent = (value === undefined || value === null || value === '') ? '-' : String(value);
+  };
+  const state = document.getElementById('setOutboundTlsState');
+  if(state) state.textContent = tls ? '(只读)' : '(不可用)';
+  put('setOutboundTlsMode', info.requested_mode || '-');
+  put('setOutboundTlsBridge', info.bridge_state || '-');
+  put('setOutboundTlsRoute', info.last_route || '-');
+  const reason = info.last_fallback_reason || '';
+  put('setOutboundTlsFallback', reason || '-');
+  put('setOutboundTlsRetry', info.auto_retry_available ? '可用' : '不可用');
+  const when = document.getElementById('setOutboundTlsWhen');
+  if(when) when.textContent = info.last_fallback_at
+    ? ('最近回退时间：' + info.last_fallback_at) : '';
+}
+
 async function loadSettings(showToast, opts){
   try {
     const data = await getJSON('/settings');
+    applyOutboundTlsStatus(data.outbound_tls);
     const pwdState = document.getElementById('setPwdState');
     if(pwdState){
       pwdState.textContent = data.panel_password_is_default ? '(当前为默认密码)' : '(已自定义)';
@@ -22306,7 +22366,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     api: {
       title: 'API 与出口',
       desc: 'API Key、CodeArts、代理槽、账号限额和出站身份。',
-      items: ['API Key', 'CodeArts 接入', '账号代理槽', '账号限额', '自动切换出站身份', '出站身份版本号', '设备 Token 文件', '桌面 chat 兼容头', '跨出口回退']
+      items: ['API Key', 'CodeArts 接入', '出站 TLS 状态', '账号代理槽', '账号限额', '自动切换出站身份', '出站身份版本号', '设备 Token 文件', '桌面 chat 兼容头', '跨出口回退']
     },
     model: {
       title: '模型与定价',

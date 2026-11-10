@@ -310,18 +310,23 @@ def urlopen(req, timeout=30, proxy=""):
     池路径会原样发这些头名（见 wb_proxy.open_upstream）；没挂的请求（billing /
     登录 / 签到等）走原来的 .title() 路径，行为不变。
     """
-    bridge_required = (wb_upstream_pool.tls_fingerprint_mode() == "node"
-                       and os.environ.get("WB_TLS_BRIDGE", "").strip().lower()
-                       not in ("0", "off", "false", "no", "none")
-                       and str(req.full_url).lower().startswith("https://"))
+    target_is_https = str(req.full_url).lower().startswith("https://")
+    bridge_required = (target_is_https
+                       and wb_upstream_pool.tls_bridge_required())
     if bridge_required and not wb_upstream_pool.enabled():
         raise RuntimeError("TLS bridge requires WB_UPSTREAM_KEEPALIVE to be enabled")
     if wb_upstream_pool.enabled():
         try:
             return wb_upstream_pool.urlopen(req, timeout=timeout, proxy=proxy)
-        except wb_upstream_pool.PoolBypass:
+        except wb_upstream_pool.PoolBypass as exc:
             if bridge_required:
                 raise RuntimeError("TLS bridge cannot handle this proxy or redirect") from None
+            wb_upstream_pool.record_python_fallback(
+                getattr(exc, "reason", "proxy_unsupported"))
+    elif target_is_https:
+        # The bridge currently rides on the keep-alive path. Keep the fallback
+        # visible instead of silently presenting urllib as the selected route.
+        wb_upstream_pool.record_python_fallback("keepalive_disabled")
     opener = opener_for_proxy(proxy)
     if opener is None:
         return urllib.request.urlopen(req, timeout=timeout)

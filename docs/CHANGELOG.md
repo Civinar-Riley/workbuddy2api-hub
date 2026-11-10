@@ -1,3 +1,12 @@
+## v2.0.9
+
+- **TLS 出站桥默认 `auto`**：未显式设置 `WB_TLS_FINGERPRINT` 时先尝试随包 Go/uTLS 桥；桥缺失、架构不支持、启动失败、运行中退出、自定义 CA 或不兼容代理时，当前进程后续请求安全回退 Python/OpenSSL。`node` 仍是强制语义，`python` 可立即关闭桥。便携版、Docker 和 OpenWrt 受支持架构继续携带桥，用户不需要安装 Go，也不需要重新导入账号或代理。
+- **桥生命周期与连接池隔离**：桥启动使用单飞保护，失败后本进程不再自动重试；桥退出时主动清退旧代次空闲连接，活跃连接不归还池。池键加入实际路线与桥代次，Python 与桥连接不混池；当前请求不会因桥失败被透明重放。上游 TCP、代理 CONNECT 或 TLS 握手返回的 502 只回退尚未发送的当前请求，不会把仍可服务其他目标的桥误标为损坏。
+- **请求清洗作用域收紧**（#853 / #854）：计费归因头只允许在 `system` / `developer` 的受控起始元数据块中清洗；用户消息、工具结果、工具参数、代码块和正文中的字段名保持原样，避免 v2.0.8 的误删。
+- **状态与迁移**：`/health`、`/settings` 和 `/panel/status` 增加脱敏的出站 TLS 状态；OpenWrt 新安装默认 `tls_mode=auto`，旧 `tls_bridge=1` 迁移为 `node`，旧默认关闭迁移为 `auto`，迁移只写 TLS 键并保留账号、API Key、代理槽和 usage。
+- **出站请求头审计**：新增 `docs/OUTBOUND-HEADER-AUDIT.md`，记录 Chat、计费、登录/刷新、config、report、媒体及代理/桥头的实际顺序与原始捕获证据；没有本地官方夹具的参考差异保持原行为。
+- 全量测试：**289 个套件：218 个 Python + 71 个 JS，`289 passed, 0 failed, 0 skipped`**。
+
 ## v2.0.8
 
 - **Claude Code 计费归因头完整清洗**（#853 / #854）：`x-anthropic-billing-header` 是 Claude Code 2.1.37+ 注入 system 首块的保留关键字，上游见到即回 400 / 11128。v2.0.7 只登记了缩写 `x-anthropic-billing-hdr`，完整键名漏网，所以 2.0.3 可用、2.0.7 在 Claude Code 中被拦截。现在两种拼写都按整行删除（含 `cch=` 等不以前缀 `cc_` 开头的尾部参数）；整条 system 消息只剩该头时直接丢弃，不再向上游发送空 system 文本。

@@ -87,20 +87,246 @@ OFFICIAL_TLS_SIGALGS = (
 
 _TLS_FINGERPRINT_OFF = ("0", "off", "false", "no", "python", "native", "stdlib")
 _TLS_BRIDGE_OFF = ("0", "off", "false", "no", "none")
+_TLS_BRIDGE_START_TIMEOUT = 5.0
+_TLS_BRIDGE_START_WAIT_TIMEOUT = _TLS_BRIDGE_START_TIMEOUT * 3 + 2.0
 _TLS_BRIDGE_CACHE = None
 _TLS_BRIDGE_PROCESS = None
 _TLS_BRIDGE_SECRET = ""
-_TLS_BRIDGE_LOCK = threading.Lock()
+_TLS_BRIDGE_LOCK = threading.RLock()
+_TLS_BRIDGE_START_EVENT = threading.Event()
+_TLS_BRIDGE_START_EVENT.set()
+
+# Process-local TLS routing state. The bridge is attempted once per configuration
+# and process lifetime: a failed start (or a bridge that exits later) makes all
+# subsequent auto requests use Python TLS until the gateway is restarted.
+_TLS_STATE_CONFIG_KEY = None
+_TLS_AUTO_ATTEMPTED = False
+_TLS_BRIDGE_DISABLED_REASON = ""
+_TLS_BRIDGE_STATE = "not_started"
+_TLS_LAST_ROUTE = ""
+_TLS_LAST_ROUTE_REASON = ""
+_TLS_LAST_FALLBACK_REASON = ""
+_TLS_LAST_FALLBACK_AT = ""
+_TLS_BRIDGE_GENERATION = 0
+_TLS_LOG = None
+
+
+def set_tls_logger(logger):
+    """Install the gateway's redacting logger without creating an import cycle."""
+    global _TLS_LOG
+    _TLS_LOG = logger
+
+
+def _tls_log(message, level="INFO"):
+    logger = _TLS_LOG
+    if logger is None:
+        return
+    try:
+        logger(message, level=level, tag="tls")
+    except Exception:
+        try:
+            logger(message)
+        except Exception:
+            pass
 
 
 def tls_fingerprint_mode():
-    """Return the active TLS profile: Node/OpenSSL by default, or stdlib."""
-    raw = os.environ.get("WB_TLS_FINGERPRINT", "python").strip().lower()
-    if raw in _TLS_FINGERPRINT_OFF or not raw:
+    """Return ``auto`` (default), ``node`` (bridge required) or ``python``."""
+    raw = os.environ.get("WB_TLS_FINGERPRINT", "auto").strip().lower()
+    if not raw:
+        return "auto"
+    if raw in _TLS_FINGERPRINT_OFF:
         return "python"
-    if raw == "node":
-        return "node"
-    raise ValueError("WB_TLS_FINGERPRINT must be python or node")
+    if raw in ("auto", "node"):
+        return raw
+    raise ValueError("WB_TLS_FINGERPRINT must be auto, python or node")
+
+
+def _bridge_setting():
+    return os.environ.get("WB_TLS_BRIDGE", "").strip()
+
+
+def _bridge_explicitly_off():
+    return _bridge_setting().lower() in _TLS_BRIDGE_OFF
+
+
+def _bridge_secret_setting():
+    return os.environ.get("WB_TLS_BRIDGE_SECRET", "")
+
+
+def _tls_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+
+
+def _tls_state_config_key():
+    """Everything that makes a previous bridge decision inapplicable."""
+    secret = _bridge_secret_setting()
+    try:
+        ident, _build = _resolve_ssl_factory()
+    except Exception:
+        ident = None
+    try:
+        candidates = tuple(_tls_bridge_candidates())
+    except Exception:
+        candidates = ()
+    return (
+        tls_fingerprint_mode(),
+        _bridge_setting().lower(),
+        hashlib.sha256(secret.encode("utf-8")).hexdigest() if secret else "",
+        os.environ.get("WB_CA_BUNDLE", ""),
+        os.environ.get("SSL_CERT_FILE", ""),
+        platform.system().lower(),
+        platform.machine().lower(),
+        ident,
+        id(_PooledHTTPSConnection),
+        candidates,
+    )
+
+
+def _reset_tls_state_locked():
+    global _TLS_AUTO_ATTEMPTED, _TLS_BRIDGE_CACHE, _TLS_BRIDGE_DISABLED_REASON
+    global _TLS_BRIDGE_GENERATION, _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_SECRET
+    global _TLS_BRIDGE_STATE, _TLS_LAST_FALLBACK_AT, _TLS_LAST_FALLBACK_REASON
+    global _TLS_LAST_ROUTE, _TLS_LAST_ROUTE_REASON
+    if _TLS_BRIDGE_PROCESS is not None:
+        _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
+    _TLS_BRIDGE_PROCESS = None
+    _TLS_BRIDGE_CACHE = None
+    _TLS_BRIDGE_SECRET = ""
+    _TLS_AUTO_ATTEMPTED = False
+    _TLS_BRIDGE_DISABLED_REASON = ""
+    _TLS_LAST_ROUTE = ""
+    _TLS_LAST_ROUTE_REASON = ""
+    _TLS_LAST_FALLBACK_REASON = ""
+    _TLS_LAST_FALLBACK_AT = ""
+    _TLS_BRIDGE_GENERATION += 1
+    _TLS_BRIDGE_STATE = "not_started"
+    _TLS_BRIDGE_START_EVENT.set()
+
+
+def _sync_tls_state():
+    """Invalidate cached decisions when the TLS environment changes."""
+    global _TLS_STATE_CONFIG_KEY, _TLS_BRIDGE_STATE
+    key = _tls_state_config_key()
+    with _TLS_BRIDGE_LOCK:
+        if key != _TLS_STATE_CONFIG_KEY:
+            _reset_tls_state_locked()
+            _TLS_STATE_CONFIG_KEY = key
+            mode = key[0]
+            if mode == "python" or _bridge_explicitly_off():
+                _TLS_BRIDGE_STATE = "off"
+            elif _bridge_setting().lower() not in ("", "auto"):
+                _TLS_BRIDGE_STATE = "external"
+    return key
+
+
+def _remember_route(route, reason, fallback=False):
+    global _TLS_LAST_ROUTE, _TLS_LAST_ROUTE_REASON
+    global _TLS_LAST_FALLBACK_AT, _TLS_LAST_FALLBACK_REASON
+    with _TLS_BRIDGE_LOCK:
+        _TLS_LAST_ROUTE = route
+        _TLS_LAST_ROUTE_REASON = reason
+        if fallback:
+            _TLS_LAST_FALLBACK_REASON = reason
+            _TLS_LAST_FALLBACK_AT = _tls_now()
+
+
+def _mark_bridge_unavailable(reason):
+    """Invalidate this bridge generation and close all of its idle sockets."""
+    global _TLS_AUTO_ATTEMPTED, _TLS_BRIDGE_CACHE, _TLS_BRIDGE_DISABLED_REASON
+    global _TLS_BRIDGE_GENERATION, _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_SECRET
+    global _TLS_BRIDGE_STATE, _TLS_LAST_FALLBACK_AT, _TLS_LAST_FALLBACK_REASON
+    with _TLS_BRIDGE_LOCK:
+        if (_TLS_BRIDGE_STATE == "disabled"
+                and _TLS_BRIDGE_DISABLED_REASON == reason):
+            _TLS_BRIDGE_START_EVENT.set()
+            return _TLS_BRIDGE_GENERATION
+        old_generation = _TLS_BRIDGE_GENERATION
+        if _TLS_BRIDGE_PROCESS is not None:
+            _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
+        _TLS_BRIDGE_PROCESS = None
+        _TLS_BRIDGE_CACHE = None
+        _TLS_BRIDGE_SECRET = ""
+        _TLS_AUTO_ATTEMPTED = True
+        _TLS_BRIDGE_DISABLED_REASON = reason
+        _TLS_LAST_FALLBACK_REASON = reason
+        _TLS_LAST_FALLBACK_AT = _tls_now()
+        _TLS_BRIDGE_STATE = "disabled"
+        _TLS_BRIDGE_GENERATION += 1
+        _TLS_BRIDGE_START_EVENT.set()
+    _drop_stale_bridge_connections()
+    _tls_log(
+        "TLS: bridge unavailable (%s); later auto-mode requests will use "
+        "Python/OpenSSL" % reason,
+        "WARN")
+    return old_generation
+
+
+def _refresh_bridge_process_locked():
+    """Mark a started bridge unavailable when its child process has exited."""
+    global _TLS_BRIDGE_CACHE, _TLS_BRIDGE_DISABLED_REASON
+    global _TLS_BRIDGE_GENERATION, _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_SECRET
+    global _TLS_BRIDGE_STATE, _TLS_LAST_FALLBACK_AT, _TLS_LAST_FALLBACK_REASON
+    if _TLS_BRIDGE_PROCESS is None:
+        return False
+    try:
+        exited = _TLS_BRIDGE_PROCESS.poll() is not None
+    except Exception:
+        exited = True
+    if not exited:
+        return False
+    _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
+    _TLS_BRIDGE_PROCESS = None
+    _TLS_BRIDGE_CACHE = None
+    _TLS_BRIDGE_SECRET = ""
+    _TLS_BRIDGE_DISABLED_REASON = "runtime_exited"
+    _TLS_LAST_FALLBACK_REASON = "runtime_exited"
+    _TLS_LAST_FALLBACK_AT = _tls_now()
+    _TLS_BRIDGE_STATE = "disabled"
+    _TLS_BRIDGE_GENERATION += 1
+    _tls_log(
+        "TLS: bridge process exited; later auto-mode requests use "
+        "Python/OpenSSL", "WARN")
+    return True
+
+
+def _is_bridge_transport(transport):
+    return (isinstance(transport, tuple) and len(transport) >= 2
+            and transport[0] == "bridge")
+
+
+def _transport_is_current(transport):
+    if not _is_bridge_transport(transport):
+        return True
+    with _TLS_BRIDGE_LOCK:
+        return (transport[1] == _TLS_BRIDGE_GENERATION
+                and _TLS_BRIDGE_STATE != "disabled")
+
+
+def _drop_stale_bridge_connections():
+    with _TLS_BRIDGE_LOCK:
+        generation = _TLS_BRIDGE_GENERATION
+        disabled = _TLS_BRIDGE_STATE == "disabled"
+    _POOL.close_where(
+        lambda key: (_is_bridge_transport(key[-1])
+                     and (disabled
+                          or key[-1][1] != generation)))
+
+
+class TlsBridgeUnavailable(RuntimeError):
+    def __init__(self, reason, message=None):
+        self.reason = reason
+        RuntimeError.__init__(self, message or (
+            "TLS bridge unavailable: %s" % reason))
+
+
+class TlsBridgeConnectError(Exception):
+    """The local bridge CONNECT failed before any upstream HTTP was sent."""
+    def __init__(self, reason="bridge_connect_failed", bridge_unavailable=True):
+        self.reason = reason
+        self.bridge_unavailable = bool(bridge_unavailable)
+        Exception.__init__(self, "TLS bridge connect failed: %s" % reason)
+
 
 
 def _apply_node_tls_profile(ctx):
@@ -173,89 +399,392 @@ def _stop_tls_bridge_process(proc):
 
 def _shutdown_tls_bridge():
     global _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_CACHE, _TLS_BRIDGE_SECRET
+    global _TLS_BRIDGE_STATE
     with _TLS_BRIDGE_LOCK:
         if _TLS_BRIDGE_PROCESS is not None:
             _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
         _TLS_BRIDGE_PROCESS = None
         _TLS_BRIDGE_CACHE = None
         _TLS_BRIDGE_SECRET = ""
+        if _TLS_BRIDGE_STATE in ("ready", "external"):
+            _TLS_BRIDGE_STATE = "off"
 
 
 atexit.register(_shutdown_tls_bridge)
 
 
+def _spawn_auto_tls_bridge(bin_path):
+    """Spawn one bridge child and return (process, secret, address)."""
+    proc = subprocess.Popen(
+        [bin_path, "--listen", "127.0.0.1:0", "--parent-watch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+    )
+    try:
+        secret = secrets.token_hex(32)
+        proc.stdin.write(secret + "\n")
+        proc.stdin.flush()
+        result = []
+        reader = threading.Thread(
+            target=lambda: result.append(proc.stdout.readline()), daemon=True)
+        reader.start()
+        reader.join(_TLS_BRIDGE_START_TIMEOUT)
+        if reader.is_alive():
+            raise TlsBridgeUnavailable("start_timeout")
+        line = result[0] if result else ""
+        address = _parse_tls_bridge_address(line)
+        if not address:
+            if proc.poll() is not None:
+                raise TlsBridgeUnavailable("start_exited")
+            raise TlsBridgeUnavailable("start_failed")
+        return proc, secret, address
+    except Exception:
+        _stop_tls_bridge_process(proc)
+        raise
+
+
 def _ensure_auto_tls_bridge(bin_path):
-    """Start the bundled bridge once and cache the loopback address it prints."""
+    """Compatibility wrapper: start or return the cached bundled bridge."""
     global _TLS_BRIDGE_CACHE, _TLS_BRIDGE_PROCESS, _TLS_BRIDGE_SECRET
+    global _TLS_AUTO_ATTEMPTED, _TLS_BRIDGE_GENERATION, _TLS_BRIDGE_STATE
     with _TLS_BRIDGE_LOCK:
         if _TLS_BRIDGE_CACHE and _TLS_BRIDGE_PROCESS is not None:
             if _TLS_BRIDGE_PROCESS.poll() is None:
                 return _TLS_BRIDGE_CACHE
-            _stop_tls_bridge_process(_TLS_BRIDGE_PROCESS)
-            _TLS_BRIDGE_CACHE = None
-            _TLS_BRIDGE_PROCESS = None
-
-        proc = subprocess.Popen(
-            [bin_path, "--listen", "127.0.0.1:0", "--parent-watch"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
-        )
-        try:
-            secret = secrets.token_hex(32)
-            proc.stdin.write(secret + "\n")
-            proc.stdin.flush()
-            result = []
-            reader = threading.Thread(target=lambda: result.append(proc.stdout.readline()), daemon=True)
-            reader.start()
-            reader.join(5)
-            if reader.is_alive():
-                raise TimeoutError("TLS bridge startup timed out")
-            line = result[0] if result else ""
-            address = _parse_tls_bridge_address(line)
-            if not address:
-                raise RuntimeError("TLS bridge did not announce a listen address")
-        except Exception:
-            _stop_tls_bridge_process(proc)
-            raise
+            _refresh_bridge_process_locked()
+            raise TlsBridgeUnavailable(
+                _TLS_BRIDGE_DISABLED_REASON or "runtime_exited")
+        if _TLS_BRIDGE_STATE == "disabled":
+            raise TlsBridgeUnavailable(
+                _TLS_BRIDGE_DISABLED_REASON or "unavailable")
+        if _TLS_AUTO_ATTEMPTED:
+            raise TlsBridgeUnavailable("start_in_progress")
+        _TLS_AUTO_ATTEMPTED = True
+        _TLS_BRIDGE_STATE = "starting"
+        _TLS_BRIDGE_START_EVENT.clear()
+        proc, secret, address = _spawn_auto_tls_bridge(bin_path)
         _TLS_BRIDGE_PROCESS = proc
         _TLS_BRIDGE_SECRET = secret
         _TLS_BRIDGE_CACHE = address
+        _TLS_BRIDGE_GENERATION += 1
+        _TLS_BRIDGE_STATE = "ready"
+        _TLS_BRIDGE_START_EVENT.set()
         return address
+
+
+def _bridge_binary_candidates():
+    return [
+        path for path in _tls_bridge_candidates()
+        if os.path.isfile(path) and os.access(path, os.X_OK)
+    ]
+
+
+def _start_bundled_tls_bridge(mode):
+    """Start the first usable bundled bridge; never called for external mode."""
+    global _TLS_AUTO_ATTEMPTED, _TLS_BRIDGE_CACHE, _TLS_BRIDGE_PROCESS
+    global _TLS_BRIDGE_SECRET, _TLS_BRIDGE_GENERATION, _TLS_BRIDGE_STATE
+    ident, _build = _resolve_ssl_factory()
+    if ident not in _INITIAL_SSL_FACTORIES:
+        raise TlsBridgeUnavailable("unsupported_ssl_factory")
+    if _PooledHTTPSConnection is not _INITIAL_POOLED_HTTPS_CONN:
+        raise TlsBridgeUnavailable("unsupported_connection_class")
+    with _TLS_BRIDGE_LOCK:
+        if _TLS_BRIDGE_CACHE and _TLS_BRIDGE_PROCESS is not None:
+            if _TLS_BRIDGE_PROCESS.poll() is None:
+                return _TLS_BRIDGE_CACHE
+            _refresh_bridge_process_locked()
+            raise TlsBridgeUnavailable(
+                _TLS_BRIDGE_DISABLED_REASON or "runtime_exited")
+        if _TLS_BRIDGE_STATE == "disabled":
+            raise TlsBridgeUnavailable(
+                _TLS_BRIDGE_DISABLED_REASON or "unavailable")
+        if _TLS_AUTO_ATTEMPTED:
+            raise TlsBridgeUnavailable("start_in_progress")
+        _TLS_AUTO_ATTEMPTED = True
+        _TLS_BRIDGE_STATE = "starting"
+        _TLS_BRIDGE_START_EVENT.clear()
+
+    candidates = _bridge_binary_candidates()
+    if not candidates:
+        raise TlsBridgeUnavailable("binary_missing")
+    last = None
+    for path in candidates:
+        try:
+            proc, secret, address = _spawn_auto_tls_bridge(path)
+        except TlsBridgeUnavailable as exc:
+            last = exc
+            continue
+        except Exception as exc:
+            last = exc
+            continue
+        with _TLS_BRIDGE_LOCK:
+            _TLS_BRIDGE_PROCESS = proc
+            _TLS_BRIDGE_SECRET = secret
+            _TLS_BRIDGE_CACHE = address
+            _TLS_BRIDGE_GENERATION += 1
+            _TLS_BRIDGE_STATE = "ready"
+            _TLS_BRIDGE_START_EVENT.set()
+        _tls_log("TLS: Go/uTLS bridge ready (generation %d)" %
+                 _TLS_BRIDGE_GENERATION)
+        return address
+    if isinstance(last, TlsBridgeUnavailable):
+        raise last
+    raise TlsBridgeUnavailable("start_failed") from last
+
+
+def _external_tls_bridge():
+    raw = _bridge_setting()
+    if not raw or raw.lower() == "auto" or raw.lower() in _TLS_BRIDGE_OFF:
+        return None
+    address = _parse_tls_bridge_address(raw)
+    if not address or address[0] not in ("127.0.0.1", "::1", "localhost"):
+        raise ValueError("TLS bridge must use a loopback address")
+    secret = _bridge_secret_setting()
+    if not secret:
+        raise ValueError(
+            "WB_TLS_BRIDGE_SECRET is required for an external bridge")
+    return address, secret
+
+
+def _tls_route_decision(mode, reason, bridge_address=None,
+                        bridge_secret="", external=False):
+    return {
+        "mode": mode,
+        "route": "bridge" if bridge_address else "python",
+        "reason": reason,
+        "bridge_address": bridge_address,
+        "bridge_secret": bridge_secret,
+        "external": bool(external),
+        "generation": _TLS_BRIDGE_GENERATION,
+        "transport": (
+            ("bridge", _TLS_BRIDGE_GENERATION,
+             bridge_address or (),
+             hashlib.sha256(bridge_secret.encode("utf-8")).hexdigest()
+             if bridge_secret else "",
+             mode)
+            if bridge_address else
+            ("python", mode)
+        ),
+    }
+
+
+def _python_route(mode, reason, fallback=False):
+    decision = _tls_route_decision(mode, reason)
+    _remember_route("python", reason, fallback=fallback)
+    return decision
+
+
+def _bridge_route(mode, address, secret, external=False):
+    decision = _tls_route_decision(
+        mode, "external" if external else "ready",
+        bridge_address=address, bridge_secret=secret, external=external)
+    _remember_route("bridge", decision["reason"])
+    return decision
+
+
+def _fallback_after_bridge_connect(decision, exc, scheme, host, proxy_info):
+    """Choose a safe route after the bridge failed before request bytes."""
+    if decision.get("mode") != "auto":
+        raise TlsBridgeUnavailable(
+            getattr(exc, "reason", "connect_failed"),
+            "TLS bridge CONNECT failed before the request was sent: %s"
+            % getattr(exc, "reason", "bridge_connect_failed")) from exc
+    if not getattr(exc, "bridge_unavailable", True):
+        # Upstream/proxy/TLS failures happen behind a healthy local bridge.
+        # Keep the bridge available for other destinations and only fall back
+        # this not-yet-sent request to Python.
+        return _python_route(
+            decision.get("mode") or "auto",
+            getattr(exc, "reason", "upstream_failure"),
+            fallback=True)
+    reason = ("external_unavailable" if decision.get("external")
+              else getattr(exc, "reason", "connect_failed"))
+    _mark_bridge_unavailable(reason)
+    next_route = _resolve_tls_route(scheme, host, proxy_info)
+    if next_route["route"] == "bridge":
+        raise TlsBridgeUnavailable(
+            reason,
+            "TLS bridge failed and a second bridge route was selected")
+    return next_route
+
+
+def _resolve_tls_route(scheme, host, proxy_info=None):
+    """Resolve one new upstream connection to ``bridge`` or ``python``."""
+    global _TLS_BRIDGE_STATE
+    mode = tls_fingerprint_mode()
+    if mode == "python":
+        return _python_route(mode, "explicit_python")
+    if _bridge_explicitly_off():
+        return _python_route(mode, "explicit_bridge_off")
+    if not enabled():
+        if mode == "node":
+            raise TlsBridgeUnavailable(
+                "keepalive_disabled",
+                "TLS bridge requires WB_UPSTREAM_KEEPALIVE to be enabled")
+        return _python_route(mode, "keepalive_disabled", fallback=True)
+    if scheme != "https" or str(host).lower() in (
+            "127.0.0.1", "localhost", "::1"):
+        return _python_route(
+            mode, "non_https" if scheme != "https" else "loopback_target")
+    ca_bundle = ca_bundle_path()
+    if ca_bundle:
+        if mode == "node":
+            raise TlsBridgeUnavailable(
+                "custom_ca",
+                "TLS bridge does not support WB_CA_BUNDLE; "
+                "use Python TLS for custom CAs")
+        return _python_route(mode, "custom_ca", fallback=True)
+
+    _sync_tls_state()
+    try:
+        external = _external_tls_bridge()
+    except ValueError as exc:
+        if mode == "auto":
+            _mark_bridge_unavailable("external_invalid")
+            return _python_route(
+                mode, "external_invalid", fallback=True)
+        raise exc
+    if external is not None:
+        address, secret = external
+        with _TLS_BRIDGE_LOCK:
+            if _TLS_BRIDGE_STATE == "disabled":
+                return _python_route(
+                    mode, _TLS_BRIDGE_DISABLED_REASON or "unavailable",
+                    fallback=mode == "auto")
+            _TLS_BRIDGE_STATE = "external"
+        return _bridge_route(mode, address, secret, external=True)
+
+    if mode == "node":
+        deadline = time.monotonic() + _TLS_BRIDGE_START_WAIT_TIMEOUT
+        while True:
+            try:
+                address = _start_bundled_tls_bridge(mode)
+                break
+            except TlsBridgeUnavailable as exc:
+                if exc.reason != "start_in_progress":
+                    _mark_bridge_unavailable(exc.reason)
+                    raise
+                with _TLS_BRIDGE_LOCK:
+                    state = _TLS_BRIDGE_STATE
+                    event = _TLS_BRIDGE_START_EVENT
+                if state != "starting":
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TlsBridgeUnavailable(
+                        "start_in_progress",
+                        "TLS bridge startup is still in progress") from None
+                event.wait(remaining)
+        return _bridge_route(mode, address, _TLS_BRIDGE_SECRET)
+
+    with _TLS_BRIDGE_LOCK:
+        if _TLS_BRIDGE_STATE == "disabled":
+            return _python_route(
+                mode, _TLS_BRIDGE_DISABLED_REASON or "unavailable",
+                fallback=True)
+        if _TLS_BRIDGE_CACHE and _TLS_BRIDGE_PROCESS is not None:
+            if _TLS_BRIDGE_PROCESS.poll() is None:
+                return _bridge_route(
+                    mode, _TLS_BRIDGE_CACHE, _TLS_BRIDGE_SECRET)
+            _refresh_bridge_process_locked()
+            return _python_route(
+                mode, _TLS_BRIDGE_DISABLED_REASON or "runtime_exited",
+                fallback=True)
+        if _TLS_AUTO_ATTEMPTED:
+            return _python_route(
+                mode, "start_in_progress", fallback=False)
+    try:
+        address = _start_bundled_tls_bridge(mode)
+    except TlsBridgeUnavailable as exc:
+        if exc.reason == "start_in_progress":
+            return _python_route(mode, exc.reason)
+        _mark_bridge_unavailable(exc.reason)
+        return _python_route(mode, exc.reason, fallback=True)
+    return _bridge_route(mode, address, _TLS_BRIDGE_SECRET)
 
 
 def tls_bridge_addr():
-    """Return the optional local Go/uTLS bridge address as (host, port)."""
-    if tls_fingerprint_mode() != "node":
+    """Return the optional local Go/uTLS bridge address as (host, port).
+
+    Kept as a diagnostic/compatibility helper. Normal requests resolve one
+    route through ``_resolve_tls_route`` so the pool key and the connection use
+    the same bridge generation.
+    """
+    mode = tls_fingerprint_mode()
+    if mode == "python" or _bridge_explicitly_off():
         return ""
-    raw = os.environ.get("WB_TLS_BRIDGE", "").strip()
-    if raw.lower() in _TLS_BRIDGE_OFF:
-        return ""
-    if ca_bundle_path():
-        raise RuntimeError("TLS bridge does not support WB_CA_BUNDLE; use Python TLS for custom CAs")
-    if raw and raw.lower() != "auto":
-        address = _parse_tls_bridge_address(raw)
-        if not address or address[0] not in ("127.0.0.1", "::1", "localhost"):
-            raise ValueError("TLS bridge must use a loopback address")
-        if not os.environ.get("WB_TLS_BRIDGE_SECRET"):
-            raise ValueError("WB_TLS_BRIDGE_SECRET is required for an external bridge")
-        return address
-    ident, _build = _resolve_ssl_factory()
-    if ident not in _INITIAL_SSL_FACTORIES:
-        return ""
-    if _PooledHTTPSConnection is not _INITIAL_POOLED_HTTPS_CONN:
-        return ""
-    for path in _tls_bridge_candidates():
-        if not (os.path.isfile(path) and os.access(path, os.X_OK)):
-            continue
-        try:
-            return _ensure_auto_tls_bridge(path)
-        except Exception as exc:
-            raise RuntimeError("TLS bridge failed to start") from exc
-    raise RuntimeError("TLS bridge is enabled but no compatible binary was found")
+    decision = _resolve_tls_route("https", "www.workbuddy.ai")
+    if decision["route"] == "bridge":
+        return decision["bridge_address"]
+    if mode == "node":
+        raise TlsBridgeUnavailable(decision["reason"])
+    return ""
+
+
+def tls_bridge_required():
+    """True only for explicit ``node`` with the bridge not explicitly off."""
+    return tls_fingerprint_mode() == "node" and not _bridge_explicitly_off()
+
+
+def record_python_fallback(reason):
+    """Record a Python fallback selected outside the connection pool."""
+    _remember_route("python", reason, fallback=True)
+
+
+def tls_status():
+    """Public, secret-free TLS routing status for health/settings/UI."""
+    _sync_tls_state()
+    refreshed = False
+    with _TLS_BRIDGE_LOCK:
+        refreshed = _refresh_bridge_process_locked()
+    if refreshed:
+        _drop_stale_bridge_connections()
+    with _TLS_BRIDGE_LOCK:
+        mode = tls_fingerprint_mode()
+        setting = _bridge_setting().lower()
+        if mode == "python" or setting in _TLS_BRIDGE_OFF:
+            bridge_state = "off"
+        elif _TLS_BRIDGE_STATE == "disabled":
+            bridge_state = "disabled"
+        elif _TLS_BRIDGE_STATE == "starting":
+            bridge_state = "starting"
+        elif _TLS_BRIDGE_PROCESS is not None:
+            try:
+                bridge_state = (
+                    "ready" if _TLS_BRIDGE_PROCESS.poll() is None
+                    else "disabled")
+            except Exception:
+                bridge_state = "disabled"
+        elif setting and setting != "auto":
+            bridge_state = "external"
+        elif _TLS_AUTO_ATTEMPTED:
+            bridge_state = "disabled"
+        else:
+            bridge_state = "not_started"
+        return {
+            "requested_mode": mode,
+            "bridge_state": bridge_state,
+            "last_route": _TLS_LAST_ROUTE,
+            "last_route_reason": _TLS_LAST_ROUTE_REASON,
+            "last_fallback_reason": _TLS_LAST_FALLBACK_REASON,
+            "last_fallback_at": _TLS_LAST_FALLBACK_AT,
+            "auto_retry_available": (
+                mode == "auto" and not _TLS_AUTO_ATTEMPTED
+                and setting in ("", "auto")),
+            "bridge_generation": _TLS_BRIDGE_GENERATION,
+            "keepalive_enabled": enabled(),
+        }
+
+
+def reset_tls_state():
+    """Reset process-local routing state (tests and explicit diagnostics)."""
+    with _TLS_BRIDGE_LOCK:
+        _reset_tls_state_locked()
+        _TLS_STATE_CONFIG_KEY = None
 
 
 def enabled():
@@ -402,6 +931,9 @@ class PoolBypass(Exception):
     只用于「还没发出去」的情形（URL/代理不受支持）和「收到 3xx 需要跟随」的情形。
     调用方（wb_accounts.urlopen）捕获后原样走原来的 opener，行为与改动前一致。
     """
+    def __init__(self, message="", reason="unsupported"):
+        Exception.__init__(self, message)
+        self.reason = reason
 
 
 class _StaleConnection(Exception):
@@ -520,7 +1052,8 @@ class _PooledResponse(http.client.HTTPResponse):
         pool, key, conn = self._pool, self._pool_key, self._pool_conn
         if pool is None or conn is None:
             return
-        if (self._body_complete() and not self.will_close
+        if (_transport_is_current(key[-1])
+                and self._body_complete() and not self.will_close
                 and conn.sock is not None):
             pool.release(key, conn)
         else:
@@ -544,52 +1077,97 @@ class _PooledHTTPConnection(http.client.HTTPConnection):
 class _PooledHTTPSConnection(http.client.HTTPSConnection):
     response_class = _PooledResponse
     _wb_proxy_url = ""
+    _wb_tls_route = None
 
     def connect(self):
         target_host = self._tunnel_host or self.host
         target_port = (self._tunnel_port or 443) if self._tunnel_host else self.port
-        if target_host not in ("127.0.0.1", "localhost", "::1"):
-            bridge = tls_bridge_addr()
-            if bridge:
-                self._connect_via_tls_bridge(bridge, target_host, target_port)
-                return
+        route = self._wb_tls_route
+        if (route and route.get("route") == "bridge"
+                and target_host not in ("127.0.0.1", "localhost", "::1")):
+            self._connect_via_tls_bridge(route, target_host, target_port)
+            return
         http.client.HTTPSConnection.connect(self)
 
-    def _connect_via_tls_bridge(self, bridge, target_host, target_port):
-        bridge_host, bridge_port = bridge
-        sock = socket.create_connection((bridge_host, bridge_port), self.timeout)
+    def _connect_via_tls_bridge(self, route, target_host, target_port):
+        bridge_host, bridge_port = route["bridge_address"]
+        sock = None
         try:
+            try:
+                sock = socket.create_connection(
+                    (bridge_host, bridge_port), self.timeout)
+            except Exception as exc:
+                raise TlsBridgeConnectError(
+                    "bridge_local_unavailable", True) from exc
             target_authority = "[%s]:%d" % (target_host, int(target_port)) if ":" in target_host else "%s:%d" % (target_host, int(target_port))
+            if "\r" in target_authority or "\n" in target_authority:
+                raise TlsBridgeConnectError("invalid_connect_target", False)
             lines = ["CONNECT %s HTTP/1.1" % target_authority,
                      "Host: %s" % target_authority]
-            secret = os.environ.get("WB_TLS_BRIDGE_SECRET", "") if os.environ.get("WB_TLS_BRIDGE", "").strip().lower() not in ("", "auto") else _TLS_BRIDGE_SECRET
+            secret = route.get("bridge_secret") or ""
             if not secret or "\r" in secret or "\n" in secret:
-                raise ValueError("TLS bridge authentication is unavailable")
+                raise TlsBridgeConnectError(
+                    "bridge_auth_unavailable", True)
             lines.append("X-WB-Bridge-Auth: " + secret)
             if self._wb_proxy_url:
+                if "\r" in self._wb_proxy_url or "\n" in self._wb_proxy_url:
+                    raise TlsBridgeConnectError(
+                        "upstream_proxy_invalid", False)
                 lines.append("X-WB-Upstream-Proxy: %s" % self._wb_proxy_url)
             lines.append("")
             lines.append("")
-            sock.sendall("\r\n".join(lines).encode("latin-1"))
+            try:
+                sock.sendall("\r\n".join(lines).encode("latin-1"))
+            except Exception as exc:
+                raise TlsBridgeConnectError(
+                    "bridge_local_io", True) from exc
             buf = b""
             while b"\r\n\r\n" not in buf:
-                chunk = sock.recv(1)
+                try:
+                    chunk = sock.recv(1)
+                except Exception as exc:
+                    raise TlsBridgeConnectError(
+                        "bridge_local_io", True) from exc
                 if not chunk:
-                    raise OSError("TLS bridge closed before CONNECT reply")
+                    raise TlsBridgeConnectError("bridge_local_io", True)
                 buf += chunk
                 if len(buf) > 16384:
-                    raise OSError("TLS bridge CONNECT header too large")
+                    raise TlsBridgeConnectError(
+                        "bridge_local_protocol_error", True)
             status_line = buf.split(b"\r\n", 1)[0].decode("latin-1", "replace")
             parts = status_line.split(None, 2)
             code = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
             if code != 200:
-                raise OSError("TLS bridge CONNECT failed: %s" % status_line)
-        except Exception:
-            try:
-                sock.close()
-            except Exception:
-                pass
+                if code == 502:
+                    # The bridge reached its listener, but the upstream TCP,
+                    # proxy CONNECT or TLS handshake failed. Certificates stay
+                    # verified in Go; this is not evidence that the bridge
+                    # process itself is broken.
+                    raise TlsBridgeConnectError(
+                        "upstream_tls_or_connect_failed", False)
+                if code in (401, 403):
+                    raise TlsBridgeConnectError("bridge_auth_failed", True)
+                if code == 400:
+                    raise TlsBridgeConnectError(
+                        "invalid_connect_target", False)
+                if code == 405:
+                    raise TlsBridgeConnectError(
+                        "bridge_protocol_error", True)
+                raise TlsBridgeConnectError("bridge_rejected", True)
+        except TlsBridgeConnectError:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
             raise
+        except Exception:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            raise TlsBridgeConnectError("bridge_local_io", True)
         self.sock = sock
 
 
@@ -715,6 +1293,18 @@ class _KeepAlivePool(object):
         for conn in conns:
             self._close(conn)
 
+    def close_where(self, predicate):
+        """Close idle connections whose pool key matches ``predicate``."""
+        with self._lock:
+            keys = [key for key in self._idle if predicate(key)]
+            conns = [
+                conn
+                for key in keys
+                for conn, _ts in self._idle.pop(key, [])
+            ]
+        for conn in conns:
+            self._close(conn)
+
 
 _POOL = _KeepAlivePool()
 
@@ -743,7 +1333,9 @@ def _target_parts(url):
     parts = urllib.parse.urlsplit(url)
     scheme = (parts.scheme or "").lower()
     if scheme not in ("http", "https") or not parts.hostname:
-        raise PoolBypass("unsupported url for the keep-alive pool: %r" % (url,))
+            raise PoolBypass(
+                "unsupported url for the keep-alive pool: %r" % (url,),
+                "unsupported_url")
     port = parts.port or (443 if scheme == "https" else 80)
     selector = parts.path or "/"
     if parts.query:
@@ -841,7 +1433,7 @@ def _proxy_bypassed(host):
         return False
 
 
-def _new_connection(scheme, host, port, proxy_info, timeout):
+def _new_connection(scheme, host, port, proxy_info, timeout, route=None):
     """新建一条连接对象（不连接，惰性连接交给 http.client 自己）。
 
     - 直连：HTTPS 目标用 HTTPSConnection（context 走进程级共享的
@@ -856,9 +1448,12 @@ def _new_connection(scheme, host, port, proxy_info, timeout):
         proxy_port = int(proxy_info["port"]) if proxy_info["port"] else (
             443 if scheme == "https" else 80)
         if scheme == "https":
+            context = (None if route and route.get("route") == "bridge"
+                       else shared_ssl_context())
             conn = _PooledHTTPSConnection(proxy_info["host"], proxy_port, timeout=timeout,
-                                          context=shared_ssl_context())
+                                          context=context)
             conn._wb_proxy_url = _proxy_url(proxy_info)
+            conn._wb_tls_route = route
             tunnel_headers = {}
             auth = _proxy_auth_header(proxy_info)
             if auth:
@@ -868,8 +1463,12 @@ def _new_connection(scheme, host, port, proxy_info, timeout):
             return conn
         return _PooledHTTPConnection(proxy_info["host"], proxy_port, timeout=timeout)
     if scheme == "https":
-        return _PooledHTTPSConnection(host, port, timeout=timeout,
-                                      context=shared_ssl_context())
+        context = (None if route and route.get("route") == "bridge"
+                   else shared_ssl_context())
+        conn = _PooledHTTPSConnection(host, port, timeout=timeout,
+                                      context=context)
+        conn._wb_tls_route = route
+        return conn
     return _PooledHTTPConnection(host, port, timeout=timeout)
 
 
@@ -1111,7 +1710,9 @@ def _fold_bypassed(host, proxy_raw):
     """
     proxy_info = _split_proxy(proxy_raw)
     if proxy_raw and proxy_info is None:
-        raise PoolBypass("proxy %r is not an http proxy" % (proxy_raw,))
+        raise PoolBypass(
+            "proxy %r is not an http proxy" % (proxy_raw,),
+            "proxy_unsupported")
     if proxy_info and _proxy_bypassed(host):
         return None, ""
     return proxy_info, proxy_raw
@@ -1167,22 +1768,68 @@ def urlopen(req, timeout=30, proxy="", headers=None):
     # 池键按（目标, 代理串, 凭据）分：不同出口的账号绝不共用一条连接，即使代理
     # 地址相同、只是串写法不同（宁可多一条连接，也不赌两个出口是同一个）；同一
     # 出口上的不同账号也绝不共用（凭据摘要不同），见模块 docstring。
-    bridge_setting = os.environ.get("WB_TLS_BRIDGE", "") if tls_fingerprint_mode() == "node" else ""
-    bridge_secret = os.environ.get("WB_TLS_BRIDGE_SECRET", "") if bridge_setting else ""
-    transport_key = (tls_fingerprint_mode(), bridge_setting,
-                     hashlib.sha256(bridge_secret.encode("utf-8")).hexdigest() if bridge_secret else "")
-    key = (scheme, host, port, proxy_raw,
-           _identity_discriminator(req, ordered_headers), transport_key)
+    route = _resolve_tls_route(scheme, host, proxy_info)
+    route_fallback_used = False
 
-    def factory():
-        return _new_connection(scheme, host, port, proxy_info, timeout)
+    def pool_key(decision):
+        return (scheme, host, port, proxy_raw,
+                _identity_discriminator(req, ordered_headers),
+                decision["transport"])
 
-    conn, reused = _POOL.acquire(key, timeout, factory)
+    def make_connection(decision):
+        conn = _new_connection(
+            scheme, host, port, proxy_info, timeout, route=decision)
+        if decision["route"] != "bridge":
+            return conn
+        # http.client connects lazily on the first request. For a bridge route
+        # that is too late: a failed local CONNECT must be visible before any
+        # request bytes can reach the upstream. Doing it in the factory keeps
+        # the fallback boundary explicit and lets auto choose Python safely.
+        try:
+            conn.connect()
+        except TlsBridgeConnectError:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise TlsBridgeConnectError("bridge_connect_failed") from exc
+        return conn
+
+    def acquire_for(decision):
+        return _POOL.acquire(
+            pool_key(decision), timeout,
+            lambda: make_connection(decision))
+
+    def bridge_failure(decision, exc):
+        """Turn a pre-request bridge failure into a route or a clear error."""
+        nonlocal route, route_fallback_used
+        if route_fallback_used:
+            raise TlsBridgeUnavailable(
+                getattr(exc, "reason", "connect_failed"),
+                "TLS bridge CONNECT failed after a Python fallback was "
+                "already selected") from exc
+        route_fallback_used = True
+        return _fallback_after_bridge_connect(
+            decision, exc, scheme, host, proxy_info)
+
+    try:
+        conn, reused = acquire_for(route)
+    except TlsBridgeConnectError as exc:
+        route = bridge_failure(route, exc)
+        conn, reused = acquire_for(route)
+
     # 只对可重放的 body（bytes/None）做安全重试：file-like 的 body 重发会从当前位置
     # 续读，第二条请求会残缺。本仓库的调用点全是 bytes，这个判断只是兜底。
     replayable = req.data is None or isinstance(req.data, (bytes, bytearray, memoryview))
     retried = False
     while True:
+        key = pool_key(route)
         try:
             resp = _exchange(conn, req, selector, scheme, proxy_info, key, reused,
                              ordered_headers)
@@ -1194,8 +1841,13 @@ def urlopen(req, timeout=30, proxy="", headers=None):
                 # 再用池连接就把重试的安全前提破坏掉了）。
                 retried = True
                 reused = False
-                conn = factory()
-                _POOL.note_created()
+                try:
+                    conn = make_connection(route)
+                except TlsBridgeConnectError as exc:
+                    route = bridge_failure(route, exc)
+                    conn, reused = acquire_for(route)
+                else:
+                    _POOL.note_created()
                 continue
             raise stale.original
         except _TransportFailure as failure:
@@ -1219,6 +1871,8 @@ def urlopen(req, timeout=30, proxy="", headers=None):
             # 重定向跟随（相对 Location、换主机、POST 降级 GET）交给 urllib 原路径，
             # 语义一字不改。代价是这一条请求会被发两次——3xx 在这条链路上不出现
             # （都是 JSON API），值得。
-            raise PoolBypass("upstream answered %d; replayed via urllib" % status)
+            raise PoolBypass(
+                "upstream answered %d; replayed via urllib" % status,
+                "redirect")
         raise urllib.error.HTTPError(req.full_url, status, resp.reason,
                                      resp.headers, io.BytesIO(body))

@@ -11739,6 +11739,7 @@ def runtime_settings_view():
         "keep_backups": wb_settings.keep_backups(ACCOUNTS_DIR),
         "keep_backups_max": wb_settings.MAX_KEEP_BACKUPS,
         "upstream": _panel_upstream_config(ACCOUNTS_DIR),
+        "outbound_tls": wb_upstream_pool.tls_status(),
         "device_token_status": _panel_device_token_status(ACCOUNTS_DIR),
         "desktop_chat_compat": wb_settings.desktop_chat_compat(ACCOUNTS_DIR),
         "max_payload_mb": wb_settings.max_payload_mb(ACCOUNTS_DIR),
@@ -11754,7 +11755,7 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
-        "version": "2.0.8",
+        "version": "2.0.9",
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
@@ -12245,6 +12246,7 @@ def log(msg, level=None, tag=None):
 
 # 本地网路工具的多引擎轮换、冷却与失败分类写进看板日志（tag=webtools）
 wb_webtools.set_logger(log)
+wb_upstream_pool.set_tls_logger(log)
 
 def get_logs(limit=200, level="", tag="", search="", since_id=0):
     # 落库开启时以数据库为准：它是完整历史（受保留上限约束），而内存环形缓冲
@@ -13366,6 +13368,10 @@ SANITIZE_HDR_RE = re.compile(
     r"(?i)x-anthropic-billing-(?:header|hdr)\s*:\s*[^;\r\n]*(?:;\s*)?")
 SANITIZE_BARE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-(?:header|hdr)")
 SANITIZE_KV_RE = re.compile(r"(?i)\bcc_[a-z0-9_]+=[^;\r\n]*;?\s*")
+SANITIZE_BILLING_LINE_RE = re.compile(
+    r"(?i)^[ \t]*x-anthropic-billing-(?:header|hdr)[ \t]*:(.*)$")
+SANITIZE_BILLING_CONT_RE = re.compile(
+    r"(?i)^(?:[ \t]*(?:cc_[a-z0-9_]+|cch)=[^;\r\n]*(?:;[ \t]*)?)+$")
 # WorkBuddy upstream returns 11128 ("Illegal API invocation from an unapproved
 # channel") when this exact OmO identity fingerprint appears as a contiguous
 # substring in a system message. A/B tests show the match is case-insensitive,
@@ -13459,9 +13465,10 @@ SANITIZE_REI_FOLD = str.maketrans({0x130: "i", 0x131: "i", 0x17F: "s"})
 # 计费头有两个合法拼写（header / hdr），字面量快路径直接用登记表；
 # OMO 短语仍是单一字面量，继续从正则派生，保证与正则同源。
 SANITIZE_BARE_HDR_LOWER = SANITIZE_BILLING_HDR_NAMES[0]
+SANITIZE_BILLING_LOWER = tuple(name.lower() for name in SANITIZE_BILLING_HDR_NAMES)
 SANITIZE_OMO_JUNIOR_LOWER = SANITIZE_OMO_JUNIOR_RE.pattern.lower()
 SANITIZE_IDENTITY_LOWER = SANITIZE_IDENTITY_VERBS
-def has_fingerprint(text, identity=True):
+def has_fingerprint(text, identity=True, billing=True):
     if not isinstance(text, str) or not text:
         return False
     # 三个特例字符几乎从不出现：先做三次 C 速度探测，命中才走归一化副本，
@@ -13471,11 +13478,13 @@ def has_fingerprint(text, identity=True):
     else:
         low = text.lower()
     for f in SANITIZE_FEATURES:
+        if not billing and f.lower() in SANITIZE_BILLING_LOWER:
+            continue
         if f.lower() in low:
             return True
-    if (SANITIZE_BARE_HDR_LOWER in low
+    if ((billing and SANITIZE_BARE_HDR_LOWER in low)
             or SANITIZE_OMO_JUNIOR_LOWER in low
-            or "cc_" in low):
+            or (billing and "cc_" in low)):
         return True
     if not identity:
         return False
@@ -13501,10 +13510,77 @@ def has_fingerprint(text, identity=True):
     if not any(needle in low for needle in SANITIZE_IDENTITY_LOWER):
         return False
     return SANITIZE_IDENTITY_RE.search(text) is not None
-def sanitize_text(text, identity=True):
+
+
+def _billing_payload_is_metadata(value):
+    """True when a candidate header value contains only known metadata pairs."""
+    value = str(value or "").strip()
+    if not value:
+        return False
+    # Older clients emitted a bare version after the key.
+    if re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z_-]+){1,4}", value):
+        return True
+    pairs = [part.strip() for part in value.split(";") if part.strip()]
+    if not pairs:
+        return False
+    for pair in pairs:
+        if "=" not in pair:
+            return False
+        key, item = pair.split("=", 1)
+        key = key.strip().lower()
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", key):
+            return False
+        if key != "cch" and not key.startswith("cc_"):
+            return False
+        if not item.strip():
+            return False
+    return True
+
+
+def sanitize_billing_metadata_prefix(text):
+    """Remove only a leading, self-contained Claude Code billing block.
+
+    #853's metadata is a complete line (or a complete list of ``cc_*`` /
+    ``cch`` continuation lines) at the start of a system/developer block.  A
+    key mentioned in prose, a fenced example, a user message or a tool result
+    is not enough to trigger this cleaner.
+    """
     if not isinstance(text, str) or not text:
         return text
-    if not has_fingerprint(text, identity=identity):
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+    first = lines[0].rstrip("\r\n")
+    match = SANITIZE_BILLING_LINE_RE.fullmatch(first)
+    if match is None or not _billing_payload_is_metadata(match.group(1)):
+        return text
+    end = 1
+    while end < len(lines):
+        candidate = lines[end].rstrip("\r\n")
+        if not SANITIZE_BILLING_CONT_RE.fullmatch(candidate):
+            break
+        end += 1
+    return "".join(lines[end:]).strip()
+
+
+def sanitize_message_text(text, identity=True, billing=False):
+    """Sanitize one message text without applying legacy broad header cleanup.
+
+    The unscoped ``sanitize_text`` entry point remains available for existing
+    callers and tests, but the wire-body pipeline uses this wrapper so billing
+    metadata can only be removed in system/developer messages and only from a
+    fully recognisable leading block.
+    """
+    cleaned = sanitize_text(text, identity=identity, billing=False)
+    if billing:
+        cleaned = sanitize_billing_metadata_prefix(cleaned)
+    return cleaned
+
+
+def sanitize_text(text, identity=True, billing=True):
+    if not isinstance(text, str) or not text:
+        return text
+    if not has_fingerprint(text, identity=identity, billing=billing):
         return text
     # Keep the rewrite deliberately narrow: do not globally remove
     # "OhMyOpenCode" or "Sisyphus-Junior", because either token alone is
@@ -13526,27 +13602,35 @@ def sanitize_text(text, identity=True):
         text = SANITIZE_BRAND_RE.sub(SANITIZE_BRAND_REPLACEMENT, text)
     for old, new in SANITIZE_REWRITES:
         text = text.replace(old, new)
-    # 计费归因头通常独占 system 首行；先整行删掉，`cch=` 等尾部参数不会残留。
-    text = SANITIZE_HDR_LINE_RE.sub("", text)
-    text = SANITIZE_HDR_RE.sub("", text)
-    if "cc_" in text:
-        prev = ""
-        while prev != text:
-            prev = text
-            text = SANITIZE_KV_RE.sub("", text)
-    # The bare header is the last rewrite: has_fingerprint() matches this exact
-    # key, so replacing it earlier would leave a value the fast path ignores.
-    text = SANITIZE_BARE_HDR_RE.sub("anthropic-header", text)
+    if billing:
+        # Preserve the historical unscoped entry point. Message processing
+        # passes billing=False and uses sanitize_billing_metadata_prefix().
+        text = SANITIZE_HDR_LINE_RE.sub("", text)
+        text = SANITIZE_HDR_RE.sub("", text)
+        if "cc_" in text:
+            prev = ""
+            while prev != text:
+                prev = text
+                text = SANITIZE_KV_RE.sub("", text)
+        # The bare header is the last rewrite: has_fingerprint() matches this
+        # exact key, so replacing it earlier would leave a value the fast path
+        # ignores.
+        text = SANITIZE_BARE_HDR_RE.sub("anthropic-header", text)
     return text.strip()
-def sanitize_content(content, identity=True):
+
+
+def sanitize_content(content, identity=True, billing=False):
     if isinstance(content, str):
-        return sanitize_text(content, identity=identity)
+        return sanitize_message_text(content, identity=identity, billing=billing)
     if isinstance(content, list):
         out = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text" and "text" in part:
                 p = dict(part)
-                p["text"] = sanitize_text(p["text"], identity=identity)
+                p["text"] = sanitize_message_text(
+                    p["text"], identity=identity, billing=billing)
+                if billing and not p["text"]:
+                    continue
                 out.append(p)
             else:
                 out.append(part)
@@ -13575,7 +13659,8 @@ def sanitize_tools(tools):
             fn = dict(fn)
             desc = fn.get("description")
             if isinstance(desc, str):
-                fn["description"] = sanitize_text(desc, identity=True)
+                fn["description"] = sanitize_text(
+                    desc, identity=True, billing=False)
             item["function"] = fn
         out.append(item)
     return out
@@ -13599,7 +13684,9 @@ def sanitize_tool_calls(tool_calls):
                 raw_args = fn.get("arguments")
                 if isinstance(raw_args, str):
                     fn["arguments"] = (raw_args if preserve
-                                       else sanitize_text(raw_args, identity=False))
+                                       else sanitize_text(
+                                           raw_args, identity=False,
+                                           billing=False))
                 elif raw_args is None:
                     fn["arguments"] = "{}"
                 else:
@@ -13626,22 +13713,37 @@ def sanitize_messages(messages):
             # assistant 里 400/400/400，放在 user 里 200/200/200）。user / tool
             # 仍是用户数据，不改写。
             identity = item.get("role") in ("system", "developer", "assistant")
+            billing = item.get("role") in ("system", "developer")
             if "content" in item and not preserve_tool_result:
                 before = item.get("content")
                 item["content"] = sanitize_content(item["content"],
-                                                   identity=identity)
-                # 整条 system 文本可能只有一个计费归因头；清洗后为空就直接
-                # 丢掉，避免把空 system 消息发给上游（空文本段会 400 / 11151）。
+                                                   identity=identity,
+                                                   billing=billing)
+                # 整条 system 文本或文本块数组可能只有计费归因头；清洗后为空
+                # 就直接丢掉，避免把空 system 消息发给上游（空文本段会 400 /
+                # 11151）。图片等非文本块不参与这个判定。
+                had_text = (
+                    isinstance(before, str) and bool(before.strip())
+                ) or (
+                    isinstance(before, list)
+                    and any(
+                        isinstance(part, dict)
+                        and part.get("type") == "text"
+                        and isinstance(part.get("text"), str)
+                        and bool(part["text"].strip())
+                        for part in before
+                    )
+                )
                 if (item.get("role") in ("system", "developer")
-                        and isinstance(before, str) and before.strip()
-                        and item["content"] == ""):
+                        and had_text
+                        and item["content"] in ("", [])):
                     continue
             if isinstance(item.get("reasoning_content"), str):
                 item["reasoning_content"] = sanitize_text(
-                    item["reasoning_content"], identity=False)
+                    item["reasoning_content"], identity=False, billing=False)
             if not preserve_request_contract_enabled() and isinstance(item.get("reasoning"), str):
                 item["reasoning"] = sanitize_text(
-                    item["reasoning"], identity=False)
+                    item["reasoning"], identity=False, billing=False)
             if "tool_calls" in item:
                 item["tool_calls"] = sanitize_tool_calls(item["tool_calls"])
             out.append(item)
@@ -21031,7 +21133,7 @@ class Handler(BaseHTTPRequestHandler):
             super().finish()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
-    server_version = "wb-proxy/2.0.8"
+    server_version = "wb-proxy/2.0.9"
     def log_message(self, fmt, *args):
         # 静默过滤前端看板高频定时心跳的正常 200 GET 请求（/logs、/usage、/accounts 轮询等）
         # 避免自增死循环刷屏与日志污染。遇 4xx/5xx 异常或所有非 GET 业务操作依然如实记录。
@@ -21871,6 +21973,7 @@ class Handler(BaseHTTPRequestHandler):
             "panel_password_is_default": wb_settings.panel_password_is_default(ACCOUNTS_DIR),
             "authenticated": self._panel_ok(),
             "crypto_ok": crypto_ok,
+            "outbound_tls": wb_upstream_pool.tls_status(),
         }
         if not crypto_ok:
             info["crypto_error"] = crypto_reason
@@ -21919,6 +22022,7 @@ class Handler(BaseHTTPRequestHandler):
             # literal "intl" and drifted from the panel switch.
             "realm": CURRENT_REALM,
             "crypto_ok": crypto_ok,
+            "outbound_tls": wb_upstream_pool.tls_status(),
         }
         if not crypto_ok:
             info["crypto_error"] = crypto_reason

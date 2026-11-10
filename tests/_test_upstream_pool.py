@@ -26,6 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -44,7 +45,9 @@ os.environ["NO_PROXY"] = os.environ["no_proxy"]
 
 
 import wb_accounts            # noqa: E402
+import wb_media_client        # noqa: E402
 import wb_proxy               # noqa: E402  (_apply_stream_idle_timeout 的对齐)
+import wb_tasks               # noqa: E402
 import wb_upstream_pool as pool  # noqa: E402
 
 PASS = 0
@@ -226,8 +229,36 @@ class FakeUpstream(object):
         path = target
         if path.startswith("http://") or path.startswith("https://"):
             path = urllib.parse.urlsplit(path).path
+        else:
+            path = path.split("?", 1)[0]
         if path == "/ok":
             self._send(conn, 200, "OK", OK_BODY,
+                       extra=[("Content-Type", "application/json")])
+        elif path in ("/v2/chat/completions", "/v2/report"):
+            self._send(conn, 200, "OK", b'{"code":0,"ok":true}',
+                       extra=[("Content-Type", "application/json")])
+        elif path == "/v2/plugin/auth/token/refresh":
+            body = json.dumps({
+                "code": 0,
+                "data": {
+                    "accessToken": "refreshed-access-token",
+                    "refreshToken": "refreshed-refresh-token",
+                },
+            }).encode("utf-8")
+            self._send(conn, 200, "OK", body,
+                       extra=[("Content-Type", "application/json")])
+        elif path == "/v2/plugin/auth/state":
+            body = json.dumps({
+                "code": 0,
+                "data": {
+                    "state": "fixture-login-state",
+                    "authUrl": "https://example.invalid/login",
+                },
+            }).encode("utf-8")
+            self._send(conn, 200, "OK", body,
+                       extra=[("Content-Type", "application/json")])
+        elif path == "/v3/config":
+            self._send(conn, 200, "OK", b'{"code":0,"data":{"agents":{}}}',
                        extra=[("Content-Type", "application/json")])
         elif path == "/echo":
             payload = json.dumps({"method": method, "target": target}).encode()
@@ -889,6 +920,138 @@ try:
     check("egress_key 仍是 4 元组、不含账号",
           len(pool.egress_key(srv18.base() + "/ok", "")) == 4,
           pool.egress_key(srv18.base() + "/ok", ""))
+
+    # ------------------------------------------------------------------
+    print("[19] 逐路径原始头捕获：chat / billing / 登录 / 刷新 / config / report / media")
+    srv19 = new_server()
+    pool.close_all()
+    account = wb_accounts.Account({
+        "accessToken": "fixture-access-token",
+        "refreshToken": "fixture-refresh-token",
+        "uid": "uid-header-fixture",
+        "realm": "intl",
+        "product": "workbuddy",
+        "domain": "www.workbuddy.ai",
+    })
+
+    def exchange(req):
+        resp = wb_accounts.urlopen(req, timeout=5)
+        resp.read()
+        resp.close()
+        return srv19.requests[-1]["header_lines"]
+
+    def business_names(raw, expected):
+        wanted = {name.title() for name in expected}
+        return [name for name, _value in raw if name in wanted]
+
+    chat_headers = account.headers(
+        "chat", session_key="fixture-session",
+        turn_request_id="fixture-turn", model="fixture-model")
+    req = urllib.request.Request(
+        srv19.base() + "/v2/chat/completions",
+        data=b'{"messages":[]}', method="POST")
+    req.wb_exact_headers = list(chat_headers.items())
+    raw = exchange(req)
+    want = (["Accept-Encoding", "Content-Length", "Host"]
+            + list(chat_headers) + ["Connection"])
+    check("chat：真实构造器的头名与顺序原样上线",
+          [name for name, _value in raw] == want,
+          ([name for name, _value in raw], want))
+
+    billing_headers = account.headers("billing")
+    raw = exchange(urllib.request.Request(
+        srv19.base() + "/echo", data=b"{}", method="POST",
+        headers=billing_headers))
+    check("billing：默认 .title() 路径、集合与顺序稳定",
+          business_names(raw, billing_headers)
+          == [name.title() for name in billing_headers],
+          business_names(raw, billing_headers))
+    check("billing：不带 chat 的会话/IDE/B3 头",
+          not any(name.lower() in {
+              "x-conversation-id", "x-ide-type", "traceparent", "b3"
+          } for name, _value in raw), raw)
+
+    login_pool = wb_accounts.AccountPool(
+        os.path.join(_TMP.name, "accounts"))
+    base_cfg = dict(wb_accounts.get_realm_config("intl"))
+    base_cfg["chat_upstream"] = srv19.base()
+    original_realm_config = wb_accounts.get_realm_config
+
+    def local_realm_config(realm):
+        if realm == "intl":
+            return base_cfg
+        return original_realm_config(realm)
+
+    with mock.patch.object(
+            wb_accounts, "get_realm_config", local_realm_config):
+        started = login_pool._start_login("intl", "CLI", "", "", False)
+        raw = srv19.requests[-1]["header_lines"]
+        login_names = [name for name, _value in raw]
+        check("登录：auth/state 使用轻量 Web 头，不带 Authorization",
+              started["state"] == "fixture-login-state"
+              and "Authorization" not in login_names
+              and "User-Agent" in login_names
+              and "Origin" in login_names
+              and "Referer" in login_names, login_names)
+
+        refresh_account = wb_accounts.Account({
+            "accessToken": "old-access-token",
+            "refreshToken": "fixture-refresh-token",
+            "uid": "uid-refresh-fixture",
+            "realm": "intl",
+            "product": "workbuddy",
+            "domain": "www.workbuddy.ai",
+        })
+        refreshed = refresh_account.refresh()
+        raw = srv19.requests[-1]["header_lines"]
+        refresh_names = [name for name, _value in raw]
+        check("刷新：X-Refresh-Token 正确，响应 token 已更新",
+              refreshed is True
+              and refresh_account.access_token == "refreshed-access-token"
+              and "X-Refresh-Token" in refresh_names
+              and "Authorization" not in refresh_names, refresh_names)
+
+    config_headers = wb_proxy.remote_config_headers(account, "intl")
+    raw = exchange(urllib.request.Request(
+        srv19.base() + "/v3/config", method="GET",
+        headers=config_headers))
+    check("config：/v3/config 只发当前实现的最小集合",
+          business_names(raw, config_headers)
+          == [name.title() for name in config_headers],
+          business_names(raw, config_headers))
+    check("config：不带 chat / billing 独有头",
+          not any(name.lower() in {
+              "x-request-with", "x-requested-with", "x-codebuddy-request",
+              "x-machine-id", "x-session-id", "x-conversation-id",
+          } for name, _value in raw), raw)
+
+    report_expected = account.headers("chat")
+    report_ok = wb_tasks.report_events(
+        account, [{"eventCode": "fixture"}], base=srv19.base())
+    raw = srv19.requests[-1]["header_lines"]
+    check("report：默认 chat 头、响应 code=0 被接受",
+          report_ok is True
+          and business_names(raw, report_expected)
+          == [name.title() for name in report_expected],
+          (report_ok, business_names(raw, report_expected)))
+
+    media_expected = account.headers(
+        "media", media_identity=wb_media_client._IDENTITY)
+    with mock.patch.object(account, "chat_base_url",
+                           return_value=srv19.base()):
+        wb_media_client._get_json(account, "/echo", 5)
+    raw = srv19.requests[-1]["header_lines"]
+    media_names = [name for name, _value in raw]
+    check("media：沿用媒体分支的头集合与顺序",
+          business_names(raw, media_expected)
+          == [name.title() for name in media_expected],
+          business_names(raw, media_expected))
+    check("media：有会话三件套、没有 Origin / Referer",
+          "X-Conversation-Id" in media_names
+          and "X-Conversation-Request-Id" in media_names
+          and "X-Conversation-Message-Id" in media_names
+          and "Origin" not in media_names
+          and "Referer" not in media_names, media_names)
 finally:
     for srv in servers:
         srv.stop()
