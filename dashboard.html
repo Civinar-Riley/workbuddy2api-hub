@@ -8200,6 +8200,9 @@ async function pollLogin(){
       loginState = null;
       await loadAccounts();
       setTimeout(closeLogin, 1200);
+      if(r.account && r.account.uid && r.account.realm === 'cn' && taskActive(r.account)){
+        await offerCnTasksAfterImport([r.account.uid]);
+      }
     }else if(r.status === "error" || r.status === "expired" || r.status === "unknown"){
       if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
     }
@@ -9366,6 +9369,11 @@ try {
   if(_autoClaim && localStorage.getItem('wb-growth-auto-claim') === '0') _autoClaim.checked = false;
 } catch(e) {}
 
+function taskUidForRequest(uidOverride){
+  const uid = uidOverride === undefined ? CURRENT_GROWTH_UID : uidOverride;
+  return (uid && uid !== 'all') ? uid : '';
+}
+
 async function switchGrowthAccount(uid){
   CURRENT_GROWTH_UID = uid;
   ["growthAcctSelect", "cnCheckinAcctSelect"].forEach(function(id){
@@ -9533,7 +9541,7 @@ async function loadGrowthTasks(){
   }
 }
 
-async function runGrowthTasks(btn){
+async function runGrowthTasks(btn, uidOverride){
   if(btn){ btn.disabled = true; }
   const oldText = btn ? btn.textContent : '';
   if(btn) btn.textContent = '任务执行中...';
@@ -9544,9 +9552,8 @@ async function runGrowthTasks(btn){
   }
   try{
     const payload = {};
-    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
-      payload.uid = CURRENT_GROWTH_UID;
-    }
+    const uid = taskUidForRequest(uidOverride);
+    if(uid) payload.uid = uid;
     const autoClaim = document.getElementById('growthAutoClaim');
     payload.claim = !autoClaim || autoClaim.checked;
     const r = await postJSON("/tasks/run", payload);
@@ -9578,13 +9585,13 @@ async function runGrowthTasks(btn){
   }
 }
 
-async function runAllCnTasks(btn){
+async function runAllCnTasks(btn, uidOverride){
   if(btn){ btn.disabled = true; btn.textContent = '国内任务执行中...'; }
   const results = [];
   const failures = [];
-  const step = async (name, fn, button) => {
+  const step = async (name, fn, button, uid) => {
     try {
-      const ok = await fn(button);
+      const ok = await fn(button, uid);
       if(ok === false){
         failures.push(name + '：未完成');
       } else {
@@ -9597,10 +9604,19 @@ async function runAllCnTasks(btn){
   const growthBtn = document.getElementById('btnRunTasks');
   const catBtn = document.getElementById('btnCatTravel');
   const streakBtn = document.getElementById('btnRunStreakBonus');
+  const targets = Array.isArray(uidOverride)
+    ? uidOverride.filter(Boolean)
+    : [uidOverride];
   try {
-    await step('成长任务', runGrowthTasks, growthBtn);
-    await step('猫猫旅行', triggerCatTravel, catBtn);
-    await step('连登管家与抽奖', triggerStreakBonus, streakBtn);
+    if(Array.isArray(uidOverride) && !targets.length) return;
+    for(const uid of targets){
+      const suffix = (targets.length > 1 && uid)
+        ? '（' + String(uid).slice(0, 8) + '）'
+        : '';
+      await step('成长任务' + suffix, runGrowthTasks, growthBtn, uid);
+      await step('猫猫旅行' + suffix, triggerCatTravel, catBtn, uid);
+      await step('连登管家与抽奖' + suffix, triggerStreakBonus, streakBtn, uid);
+    }
     if (failures.length) {
       const done = results.length ? results.join('；') : '没有步骤完成';
       toast('国内任务执行：' + done + '。失败：' + failures.join('；'), 'warn');
@@ -9638,13 +9654,12 @@ async function claimGrowthTask(btn){
   }
 }
 
-async function triggerCatTravel(btn){
+async function triggerCatTravel(btn, uidOverride){
   if(btn){ btn.disabled = true; btn.textContent = '旅行中...'; }
   try{
     const payload = {};
-    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
-      payload.uid = CURRENT_GROWTH_UID;
-    }
+    const uid = taskUidForRequest(uidOverride);
+    if(uid) payload.uid = uid;
     const r = await postJSON("/tasks/travel", payload);
     const ok = r.ok !== false;
     toast(r.msg || (ok ? "猫猫旅行结算完成" : "操作失败"), ok ? "ok" : "warn");
@@ -9686,13 +9701,12 @@ async function triggerBuddyCheckin(btn){
   finally { if(btn){ btn.disabled = false; btn.textContent = ot; } }
 }
 
-async function triggerStreakBonus(btn){
+async function triggerStreakBonus(btn, uidOverride){
   if(btn){ btn.disabled = true; btn.textContent = '执行中...'; }
   try{
     const payload = {};
-    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
-      payload.uid = CURRENT_GROWTH_UID;
-    }
+    const uid = taskUidForRequest(uidOverride);
+    if(uid) payload.uid = uid;
     const r = await postJSON("/tasks/streak-bonus", payload);
     const ok = r.ok !== false;
     const msg = r.msg || (ok ? "连登管家与抽奖执行完成" : "操作未完成");
@@ -12532,6 +12546,9 @@ async function commitApiKey(btn){
     closeApiKeyModal();
     // 与导入一致：只重拉账号列表，不整页刷新（会打断正在看的其他面板）。
     await loadAccounts();
+    if(r.uid && r.account && r.account.realm === 'cn' && taskActive(r.account)){
+      await offerCnTasksAfterImport([r.uid]);
+    }
   }catch(e){
     if(msg){ msg.style.color = 'var(--warn)'; msg.textContent = '添加失败: ' + e.message; }
     if(btn){ btn.disabled = false; btn.textContent = '验证并添加'; }
@@ -12646,24 +12663,75 @@ async function commitImport(btn){
   const ow = document.getElementById('importOverwrite');
   const overwrite = !!(ow && ow.checked);
   const group = String((document.getElementById('importGroup') || {}).value || '').trim();
+  const rows = importRows.slice();
   if(overwrite && !confirm('将覆盖同 UID 的现有账号（含其凭证），确定继续？')) return;
 
   if(btn){ btn.disabled = true; btn.textContent = '导入中...'; }
   try{
     const r = await postJSON('/accounts/import',
-      {data: importRows, overwrite: overwrite, group: group});
+      {data: rows, overwrite: overwrite, group: group});
     const res = r.result || {};
     const n = (res.added || []).length + (res.updated || []).length;
     toast('导入完成：新增 ' + (res.added || []).length
           + '，覆盖 ' + (res.updated || []).length
           + '，跳过 ' + (res.skipped || []).length
           + '，无效 ' + (res.invalid || []).length);
-    if(n > 0){ closeImport(); await loadAccounts(); }
-    else { renderImportPreview(importFileCount > 1 ? importFileCount + ' 个文件' : '（已导入）', res, importRows.length); }
+    if(n > 0){
+      closeImport();
+      await loadAccounts();
+      const cnUids = importedCnTaskUids(rows, res, r.accounts || []);
+      if(cnUids.length) await offerCnTasksAfterImport(cnUids);
+    }
+    else { renderImportPreview(importFileCount > 1 ? importFileCount + ' 个文件' : '（已导入）', res, rows.length); }
   }catch(e){
     toast('导入失败: ' + e.message, 'err');
     if(btn){ btn.disabled = false; btn.textContent = '确认导入'; }
   }
+}
+
+function importedCnTaskUids(rows, result, accounts){
+  // Only accounts touched by this import are eligible. Running the whole
+  // existing CN pool here would silently spend daily task quota on old accounts.
+  const changed = new Set([].concat(result.added || [], result.updated || []));
+  if(!changed.size) return [];
+  const byUid = new Map();
+  (accounts || []).forEach(a => { if(a && a.uid) byUid.set(a.uid, a); });
+  (window.ACCOUNTS || []).forEach(a => { if(a && a.uid && !byUid.has(a.uid)) byUid.set(a.uid, a); });
+  const candidates = new Set();
+  byUid.forEach((a, uid) => {
+    if(changed.has(uid) && a.realm === 'cn' && taskActive(a)) candidates.add(uid);
+  });
+  // Imported rows are the fallback when the account view is stale or filtered.
+  rows.forEach(row => {
+    if(!row || typeof row !== 'object') return;
+    const flat = (row.account && typeof row.account === 'object') ? row.account : row;
+    const auth = (row.auth && typeof row.auth === 'object') ? row.auth : {};
+    const uid = String(row.uid || flat.uid || auth.uid || '').trim();
+    const realm = String(row.realm || flat.realm || auth.realm || '').trim();
+    const tasks = row.tasksEnabled !== undefined ? row.tasksEnabled
+      : (flat.tasksEnabled !== undefined ? flat.tasksEnabled : auth.tasksEnabled);
+    // The row's realm is only a hint: normalise_import_row() may derive it from
+    // the JWT/domain. An account already found above is authoritative.
+    const known = byUid.get(uid);
+    const isCn = known ? known.realm === 'cn' : realm === 'cn';
+    const tasksOn = known ? taskActive(known) : tasks !== false;
+    if(changed.has(uid) && isCn && tasksOn) candidates.add(uid);
+  });
+  return [...candidates];
+}
+
+async function offerCnTasksAfterImport(uids){
+  const labels = uids.map(uid => {
+    const a = (window.ACCOUNTS || []).find(x => x.uid === uid);
+    return a && a.nickname ? a.nickname : uid.slice(0, 8);
+  });
+  const who = labels.length === 1 ? labels[0] : (labels.length + ' 个国内版账号');
+  if(!confirm('本次导入包含 ' + who + '，是否立即执行国内版任务？\n\n'
+      + '将依次执行成长任务、猫猫旅行、连登管家与抽奖；只处理本次导入的账号。')) return;
+  const tabBtn = document.getElementById('btnNavTasks');
+  if(tabBtn) switchMainTab('tasks');
+  toast('正在执行国内版任务：成长任务 → 猫猫旅行 → 连登管家与抽奖', 'ok');
+  await runAllCnTasks(document.getElementById('btnRunAllCnTasks'), uids);
 }
 
 /* 桌面客户端账号：两步确认（先扫描展示弹窗，再逐条导入） */
@@ -13395,6 +13463,9 @@ async function doImportDesktop(btn, path, realm){
     if(a.realm && a.realm !== window.VIEW_REALM){
       toast('该账号属于' + (a.realm === 'cn' ? '国内版' : '国际版')
             + '列表，点击上方选项卡即可查看', 'err');
+    }
+    if(a.uid && a.realm === 'cn' && taskActive(a)){
+      await offerCnTasksAfterImport([a.uid]);
     }
   }catch(e){
     toast('导入失败: ' + e.message, 'err');

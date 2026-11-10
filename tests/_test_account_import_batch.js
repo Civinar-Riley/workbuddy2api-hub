@@ -56,6 +56,7 @@ try {
       rows: () => importRows,
       fileCount: () => importFileCount,
       parseImportFile: parseImportFile,
+      importedCnTaskUids: importedCnTaskUids,
     };`)();
 } catch(e) {
   console.log = realLog;
@@ -130,6 +131,70 @@ const byId = id => document.getElementById(id);
   await api.readImportFiles([file('empty.json', {accounts: []})]);
   check('空账号列表被拒绝', api.rows() === null && calls.length === 0,
     byId('importBody').innerHTML);
+
+  // 6. 导入成功后只提示本次变更的国内版任务账号；国际版、任务关闭与未变更
+  //    账号都不能被批量带进去，否则会误跑已有账号的每日任务。
+  check('导入成功路径会询问是否执行国内版任务',
+    /const cnUids = importedCnTaskUids\(rows, res, r\.accounts \|\| \[\]\);/.test(script) &&
+    /if\(cnUids\.length\) await offerCnTasksAfterImport\(cnUids\);/.test(script));
+  const cn = api.importedCnTaskUids(
+    [
+      {uid: 'cn-ok', realm: 'cn'},
+      {uid: 'intl-no', realm: 'intl'},
+      {uid: 'cn-task-off', realm: 'cn', tasksEnabled: false},
+      {uid: 'cn-old', realm: 'cn'},
+    ],
+    {added: ['cn-ok', 'intl-no', 'cn-task-off'], updated: []},
+    [
+      {uid: 'cn-ok', realm: 'cn', tasksEnabled: true},
+      {uid: 'intl-no', realm: 'intl', tasksEnabled: true},
+      {uid: 'cn-task-off', realm: 'cn', tasksEnabled: false},
+      {uid: 'cn-old', realm: 'cn', tasksEnabled: true},
+    ]);
+  check('只返回本次新增/覆盖且开启任务的国内账号',
+    JSON.stringify(cn) === JSON.stringify(['cn-ok']), JSON.stringify(cn));
+  const cnFromRows = api.importedCnTaskUids(
+    [{uid: 'cn-row', realm: 'cn'}],
+    {added: ['cn-row'], updated: []},
+    []);
+  check('账号列表暂未刷新时按导入行识别国内版',
+    JSON.stringify(cnFromRows) === JSON.stringify(['cn-row']), JSON.stringify(cnFromRows));
+
+  // 7. 确认框取消时不执行；确认后直接按本次 UID 列表执行三步流水线。
+  const offerStart = script.indexOf('async function offerCnTasksAfterImport');
+  const offerEnd = script.indexOf('\n/* 桌面客户端账号', offerStart);
+  check('能定位导入后任务确认函数', offerStart >= 0 && offerEnd > offerStart);
+  const makeOffer = (answer, calls, toasts) => new Function(
+    'confirm', 'toast', 'switchMainTab', 'runAllCnTasks', 'document', 'window',
+    script.slice(offerStart, offerEnd) + '\nreturn offerCnTasksAfterImport;'
+  )(
+    msg => { calls.push({kind: 'confirm', msg: msg}); return answer; },
+    (msg, kind) => toasts.push({msg: msg, kind: kind}),
+    tab => calls.push({kind: 'tab', tab: tab}),
+    async (btn, uids) => calls.push({kind: 'run', uids: uids}),
+    {getElementById: () => null},
+    {ACCOUNTS: [{uid: 'cn-ok', nickname: 'CN One'}]}
+  );
+  const cancelCalls = [];
+  await makeOffer(false, cancelCalls, [])(['cn-ok']);
+  check('取消确认时不执行任务',
+    cancelCalls.length === 1 && cancelCalls[0].kind === 'confirm', JSON.stringify(cancelCalls));
+  const runCalls = [];
+  const runToasts = [];
+  await makeOffer(true, runCalls, runToasts)(['cn-ok']);
+  check('确认后直接执行本次导入账号',
+    runCalls.some(x => x.kind === 'run' &&
+      JSON.stringify(x.uids) === JSON.stringify(['cn-ok'])),
+    JSON.stringify(runCalls));
+  check('确认提示写明三步流水线',
+    /成长任务、猫猫旅行、连登管家与抽奖/.test(runCalls[0].msg) &&
+    /只处理本次导入的账号/.test(runCalls[0].msg),
+    runCalls[0].msg);
+
+  // 8. 桌面客户端单账号导入同样只对国内账号发起确认。
+  check('桌面客户端导入国内账号后复用同一确认流程',
+    /a\.realm === 'cn' && taskActive\(a\)/.test(script) &&
+    /await offerCnTasksAfterImport\(\[a\.uid\]\)/.test(script));
 
   console.log('account import batch assertions passed (' + checks + ' checks)');
 })().catch(e => {
