@@ -540,6 +540,55 @@ class AnthropicHeaderFingerprintTests(unittest.TestCase):
         self.assertEqual(out, "`anthropic-header`")
         self.assertFalse(P.has_fingerprint(out))
 
+    # #853 / #854：Claude Code 2.1.37+ 把完整键名写进 system 首块。
+    # v2.0.7 只认缩写 `...-hdr`，完整键名被原样留在出站文本里，
+    # 上游把 `x-anthropic-billing-header` 当保留关键字，回 400 / 11128。
+    FULL_HEADER = (
+        "x-anthropic-billing-header: cc_version=2.1.321.abc; "
+        "cc_entrypoint=cli; cch=00000;")
+
+    def test_full_header_line_removed(self):
+        self.assertTrue(P.has_fingerprint(self.FULL_HEADER))
+        out = P.sanitize_text(self.FULL_HEADER)
+        self.assertEqual(out, "")
+        self.assertFalse(P.has_fingerprint(out))
+
+    def test_full_header_line_removed_before_prompt(self):
+        text = self.FULL_HEADER + "\nYou are a helpful AI assistant."
+        self.assertEqual(P.sanitize_text(text), "You are a helpful AI assistant.")
+
+    def test_full_header_line_is_case_insensitive(self):
+        text = self.FULL_HEADER.upper() + "\nKeep this."
+        self.assertEqual(P.sanitize_text(text), "Keep this.")
+
+    def test_full_header_bare_key_is_reduced(self):
+        out = P.sanitize_text("`x-anthropic-billing-header`")
+        self.assertEqual(out, "`anthropic-header`")
+        self.assertFalse(P.has_fingerprint(out))
+
+    def test_header_only_system_message_is_dropped(self):
+        out = P.sanitize_messages([
+            {"role": "system", "content": self.FULL_HEADER},
+            {"role": "user", "content": "hi"},
+        ])
+        self.assertEqual([m["role"] for m in out], ["user"])
+
+    def test_anthropic_messages_path_drops_full_header_block(self):
+        chat = P.messages_to_chat({
+            "model": "deepseek-v4.1-flash",
+            "system": [
+                {"type": "text", "text": self.FULL_HEADER},
+                {"type": "text", "text": "You are a helpful AI assistant."},
+            ],
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 128,
+        })
+        body = P.build_upstream_body(chat)
+        self.assertEqual(body["messages"][0]["content"],
+                         "You are a helpful AI assistant.")
+        self.assertNotIn("x-anthropic-billing-header",
+                         body["messages"][0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,7 @@ class FingerprintFastPathTests(unittest.TestCase):
             text = P.SANITIZE_OMO_JUNIOR_RE.sub(replacement, text)
             for old, new in P.SANITIZE_REWRITES:
                 text = text.replace(old, new)
+            text = P.SANITIZE_HDR_LINE_RE.sub("", text)
             text = P.SANITIZE_HDR_RE.sub("", text)
             if "cc_" in text:
                 prev = ""
@@ -129,11 +130,15 @@ class FingerprintFastPathTests(unittest.TestCase):
             self.assertEqual(P.sanitize_text(t), old_sanitize(t), repr(t[:80]))
 
     def test_lowercase_constants_stay_in_sync_with_the_regexes(self):
-        # 快路径的两个小写字面量必须与正则同源，改一处忘另一处会被这里拦下。
+        # 快路径的小写字面量必须与正则同源，改一处忘另一处会被这里拦下。
         self.assertEqual(P.SANITIZE_OMO_JUNIOR_RE.pattern.lower(),
                          P.SANITIZE_OMO_JUNIOR_LOWER)
-        self.assertEqual(P.SANITIZE_BARE_HDR_RE.pattern,
-                         "(?i)" + P.SANITIZE_BARE_HDR_LOWER)
+        self.assertEqual(P.SANITIZE_BARE_HDR_LOWER,
+                         P.SANITIZE_BILLING_HDR_NAMES[0])
+        for name in P.SANITIZE_BILLING_HDR_NAMES:
+            self.assertIsNotNone(P.SANITIZE_BARE_HDR_RE.fullmatch(name), name)
+            self.assertIsNotNone(
+                P.SANITIZE_HDR_LINE_RE.fullmatch(name + ": x"), name)
 
     def test_unicode_case_specials_follow_re_ignorecase(self):
         # 'ſ' 替 s、'İ'/'ı' 替 i：这三个字符是 re.I 与 lower() 的全部差异点，
