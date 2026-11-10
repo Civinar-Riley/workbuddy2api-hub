@@ -1,4 +1,4 @@
-## Unreleased
+## v2.0.8
 
 - **Claude Code 计费归因头完整清洗**（#853 / #854）：`x-anthropic-billing-header` 是 Claude Code 2.1.37+ 注入 system 首块的保留关键字，上游见到即回 400 / 11128。v2.0.7 只登记了缩写 `x-anthropic-billing-hdr`，完整键名漏网，所以 2.0.3 可用、2.0.7 在 Claude Code 中被拦截。现在两种拼写都按整行删除（含 `cch=` 等不以前缀 `cc_` 开头的尾部参数）；整条 system 消息只剩该头时直接丢弃，不再向上游发送空 system 文本。
 - 全量测试：**289 个套件：218 个 Python + 71 个 JS，`289 passed, 0 failed, 0 skipped`**。
