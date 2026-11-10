@@ -84,6 +84,22 @@ class GroupActionTests(unittest.TestCase):
         self.assertEqual(self.pool.set_group_enabled("", False), [])
         self.assertEqual([account.enabled for account in self.pool.accounts], before)
 
+    def test_selected_batch_enable_only_touches_named_uids(self):
+        changed = self.pool.set_enabled_many(["g-a", "g-c"], True)
+        self.assertEqual(sorted(changed), ["g-a", "g-c"])
+        self.assertTrue(self.pool.get("g-a").enabled)
+        self.assertTrue(self.pool.get("g-a").tasks_enabled)
+        self.assertTrue(self.pool.get("g-c").enabled)
+        self.assertTrue(self.pool.get("g-none").enabled)
+
+    def test_selected_batch_disable_only_touches_named_uids(self):
+        changed = self.pool.set_enabled_many(["g-a", "g-b"], False)
+        self.assertEqual(sorted(changed), ["g-a", "g-b"])
+        self.assertFalse(self.pool.get("g-a").enabled)
+        self.assertFalse(self.pool.get("g-b").enabled)
+        self.assertTrue(self.pool.get("g-c").enabled)
+        self.assertTrue(self.pool.get("g-none").enabled)
+
     def test_route_accepts_group_and_rejects_bad_enabled(self):
         class Request(object):
             _route_accounts_set = wb_proxy.Handler._route_accounts_set
@@ -117,6 +133,44 @@ class GroupActionTests(unittest.TestCase):
             request = Request({"enabled": "false", "group": "Team A"})
             request._route_accounts_set_all(request.payload)
             self.assertEqual(request.status, 400)
+
+    def test_route_selected_uids_does_not_fall_back_to_the_whole_pool(self):
+        class Request(object):
+            _route_accounts_set_all = wb_proxy.Handler._route_accounts_set_all
+
+            def __init__(self, payload):
+                self.payload = payload
+                self.status = None
+                self.reply = None
+
+            def _error(self, status, message, kind=""):
+                self.status, self.reply = status, message
+                return status, message
+
+            def _json_panel(self, status, payload):
+                self.status, self.reply = status, payload
+                return status, payload
+
+        with mock.patch.object(wb_proxy, "POOL", self.pool), \
+                mock.patch.object(wb_proxy, "account_views", lambda: []):
+            request = Request({"uids": ["g-c"], "enabled": False})
+            request._route_accounts_set_all(request.payload)
+            self.assertEqual(request.status, 200)
+            self.assertEqual(request.reply["changed"], 1)
+            self.assertFalse(self.pool.get("g-c").enabled)
+            self.assertFalse(self.pool.get("g-a").enabled)
+            self.assertTrue(self.pool.get("g-none").enabled)
+
+            before = [a.enabled for a in self.pool.accounts]
+            request = Request({"uids": [], "enabled": False})
+            request._route_accounts_set_all(request.payload)
+            self.assertEqual(request.status, 400)
+            self.assertEqual([a.enabled for a in self.pool.accounts], before)
+
+            request = Request({"uids": ["missing"], "enabled": False})
+            request._route_accounts_set_all(request.payload)
+            self.assertEqual(request.status, 404)
+            self.assertEqual([a.enabled for a in self.pool.accounts], before)
 
     def test_route_batch_refresh_credits_and_test_are_group_scoped(self):
         class Request(object):

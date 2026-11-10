@@ -2183,7 +2183,7 @@ MAX_RESTRICTION_HOLD_SECONDS = 86400 * 7
 
 def restriction_hold_seconds(accounts_dir):
     """How many seconds the gateway pauses dispatch when upstream reports an
-    unusual activity restriction (403 / 11140).
+    unusual activity account ban (403 / 11140).
 
     Defaults to 1800 seconds (30 minutes). When set to 0, restriction hold is
     disabled. Operator can configure custom duration via panel settings.

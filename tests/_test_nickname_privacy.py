@@ -387,6 +387,19 @@ class PostRoutePayloadTest(unittest.TestCase):
         self.assertIn(PHONE_MASKED, payload["msg"])
         self.assertEqual(payload["results"][0]["nickname"], PHONE_MASKED)
 
+    def test_tasks_night_logs_and_results_are_masked(self):
+        import wb_tasks
+        acct = _FakeAccount("u" * 16, PHONE)
+        payload = self._run(
+            "_route_tasks_night", {"uid": acct.uid}, [acct],
+            [(wb_tasks, "run_night_growth",
+              lambda acc: {"ok": True, "earned_credit": 2,
+                           "logs": ["night ok"]})])
+        blob = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn(PHONE, blob)
+        self.assertIn(PHONE_MASKED, blob)
+        self.assertEqual(payload["results"][0]["nickname"], PHONE_MASKED)
+
     def test_checkin_results_and_account_views_are_masked(self):
         acct = _FakeAccount("u" * 16, PHONE)
         payload = self._run(
@@ -423,7 +436,8 @@ class SourceLevelTest(unittest.TestCase):
                      "_get_activity_history", "_get_account_credits_grants",
                      "_get_account_credits_detail", "_get_accounts_login_poll",
                      "_get_tasks", "_get_scheduler",
-                     "_route_tasks_run", "_route_tasks_streak_bonus",
+                     "_route_tasks_run", "_route_tasks_night",
+                     "_route_tasks_streak_bonus",
                      "_route_tasks_travel", "_route_accounts_checkin",
                      "_route_accounts_daily_chat",
                      "_route_accounts_daily_chat_web",

@@ -66,13 +66,15 @@ def _http_error(url, code, body):
 class GrowthPrereqTests(unittest.TestCase):
     def setUp(self):
         self._orig = (T.fetch_growth_tasks, T.accept_tasks, T.claim_task,
-                      T.report_events, T.do_cat_travel)
+                      T.report_events, T.do_cat_travel, T.do_buddy_open,
+                      T.run_miniprogram_tasks)
         self.events = []
         self.state = {"fb": 0, "cc": "not_accepted"}
 
     def tearDown(self):
         (T.fetch_growth_tasks, T.accept_tasks, T.claim_task,
-         T.report_events, T.do_cat_travel) = self._orig
+         T.report_events, T.do_cat_travel, T.do_buddy_open,
+         T.run_miniprogram_tasks) = self._orig
 
     def _stub(self):
         def fetch(acc):
@@ -106,6 +108,8 @@ class GrowthPrereqTests(unittest.TestCase):
                     "reasons": []}
         T.accept_tasks = accept
         T.do_cat_travel = lambda acc: {"ok": True, "msg": "ok"}
+        T.do_buddy_open = lambda acc: {"ok": True, "action": "open",
+                                       "msg": "unexpected"}
 
     def test_auto_task_completed_and_claimed_before_accept(self):
         self._stub()
@@ -125,6 +129,41 @@ class GrowthPrereqTests(unittest.TestCase):
         self.assertEqual(res["earned_credit"], 0)
         # first_buddy 已完成但没领奖，状态停在 completed，等用户手动领取。
         self.assertEqual(self.state["fb"], 1)
+
+    def test_growth_run_does_not_touch_daily_rewards(self):
+        self._stub()
+        daily_calls = []
+        T.do_cat_travel = lambda acc: (daily_calls.append("cat")
+                                       or {"ok": True, "msg": "ok"})
+        T.do_buddy_open = lambda acc: (daily_calls.append("buddy")
+                                       or {"ok": True, "action": "open",
+                                           "msg": "opened"})
+        T.run_miniprogram_tasks = lambda acc, gap=1.0, claim=True: {
+            "ok": True, "logs": [], "earned_credit": 0}
+        res = T.run_growth_tasks(FakeAccount(), gap=0)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(daily_calls, [], daily_calls)
+
+    def test_growth_run_skips_night_task(self):
+        self._stub()
+
+        def fetch(acc):
+            return [
+                _task("first_buddy", status="claimed", current=1, target=1,
+                      task_type="auto"),
+                _task("black_cat", status="accepted", current=1, target=3,
+                      task_type="single"),
+                _task("create_canvas", status="accepted"),
+            ]
+        T.fetch_growth_tasks = fetch
+        events = []
+        T.report_events = lambda acc, evs, base=None: (events.extend(evs), True)[1]
+        T.run_miniprogram_tasks = lambda acc, gap=1.0, claim=True: {
+            "ok": True, "logs": [], "earned_credit": 0}
+        res = T.run_growth_tasks(FakeAccount(), gap=0)
+        self.assertTrue(res["ok"], res)
+        self.assertFalse([e for e in events if e.get("eventCode") == "cat"],
+                         events)
 
     def test_specs_updated(self):
         self.assertEqual(T.TASK_SPECS["first_buddy"]["kind"], "chat")

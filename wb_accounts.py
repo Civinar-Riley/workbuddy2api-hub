@@ -799,12 +799,10 @@ except (TypeError, ValueError):
 DEGRADE_THRESHOLD = 5           # consecutive unknown failures before degrading
 DEGRADE_COOLDOWN = 600.0        # first degrade window: 10 minutes
 DEGRADE_COOLDOWN_MAX = 7200.0   # ... doubling up to 2 hours
-# 上游账号级风控限制（HTTP 403 / code 11140「账号存在异常行为，已被限制使用」）
-# 的冷却时长。上游按小时到工作日计：社区复盘里官方工单给的口径是「临时风控
-# 1-3 个工作日自动解除」，期间官方客户端同样报这个错，所以这不是内容审核、
-# 也不能靠换提示词或换号解决。取 2 小时作第一档，到期再试一次即可。
-# 与其它冷却不同，这个期限是**持久化**的（见 note_restricted）。
-RESTRICTED_ACCOUNT_COOLDOWN = 7200.0
+# 上游账号级封禁（HTTP 403 / code 11140「账号存在异常行为，已被限制使用」）
+# 不是冷却或限流：官方客户端同样报这个错，自动到期再试只会继续喂风控。
+# 账号一旦命中就持久化为禁用，只有操作者在面板手动启用才重新入池。
+RESTRICTED_ACCOUNT_COOLDOWN = 0.0
 
 # 临期积分优先的权重放大系数。_expiry_weight() 算出的乘积（紧迫度 × 剩余量，
 # 约 1.0–5.5）乘上它再取整，让相邻档位之间留出足够的分辨率：不放大时
@@ -1055,16 +1053,30 @@ class Account(object):
         self.cooldown_until = 0.0
         # 运行时标记：上游返回 401 或 token 为空时置为 True，提示需重新登录
         self.token_expired = bool(not self.access_token)
-        # 上游账号级风控限制（403 / code 11140「账号存在异常行为，已被限制
-        # 使用」）的解除时刻。与上面那些节流窗口不同，这一条**持久化**：上游的
-        # 限制按小时到工作日计，网关重启 / 换身分 / 刷新 token 都不能让它重新
-        # 入池——否则同一台设备上的账号会被一个个送进风控（见 note_restricted
-        # 与社区复盘「解封前严禁换号继续打同一设备」）。
-        self.restricted_until = 0.0
+        # 上游账号级封禁（403 / code 11140）：不是有期限的冷却，而是持久化的
+        # 禁用状态。重启、刷新 token、换身份、一键测试都不能自动放回池子；
+        # 只有操作者在面板手动启用才解除。旧版本的 restrictedUntil 在加载时
+        # 迁移成同一状态，避免升级后把仍被封的账号重新派出去。
+        self.account_banned = bool(data.get("accountBanned"))
+        self.banned_at = 0.0
         try:
-            self.restricted_until = max(0.0, float(data.get("restrictedUntil") or 0))
+            self.banned_at = max(0.0, float(data.get("bannedAt") or 0))
         except (TypeError, ValueError):
-            self.restricted_until = 0.0
+            self.banned_at = 0.0
+        legacy_restricted = 0.0
+        try:
+            legacy_restricted = max(
+                0.0, float(data.get("restrictedUntil") or 0))
+        except (TypeError, ValueError):
+            legacy_restricted = 0.0
+        if legacy_restricted > time.time():
+            self.account_banned = True
+            self.enabled = False
+            self.tasks_enabled = False
+            if not self.banned_at:
+                self.banned_at = time.time()
+        # 兼容旧代码/旧测试的只读属性：封禁已不再按时间自动解除。
+        self.restricted_until = 0.0
         # Per-model throttling. Upstream rate limits (code 6004 "usage exceeds
         # frequency limit") apply to ONE model for one account, not to the whole
         # account: other models keep working. Cooldown the offending model only,
@@ -1243,10 +1255,12 @@ class Account(object):
             "poolScope": self.pool_scope,
             "lastError": self.last_error,
             "cooldownUntil": self.cooldown_until,
-            # 持久化：上游风控限制按小时到工作日计，重启后仍然成立（见
-            # note_restricted）。导出的文档会带上它供查看，导入侧
-            # normalise_import_row() 不认这个字段，换机器不会把账号一起停掉。
-            "restrictedUntil": self.restricted_until,
+            # 持久化：上游账号封禁按小时到工作日计，重启后仍然成立（见
+            # note_restricted）。导入侧不认这个字段，换机器不会把账号一起停掉。
+            "accountBanned": bool(self.account_banned),
+            "bannedAt": self.banned_at,
+            # 保留旧字段供老版本读取；新版本不再用它表达封禁状态。
+            "restrictedUntil": 0.0,
             "credits": self.credits,
             # 账号档位（#505）。持久化：一天一次的计费摘要结论，重启后仍然
             # 有效；导入到另一台机器时按 VOLATILE_FIELDS 丢掉，不把上一台
@@ -1265,9 +1279,7 @@ class Account(object):
             error = self.last_error
             detail = self.last_error_detail
             deadline = max(self.cooldown_until, self.balance_until,
-                           self.breaker_until, self.degrade_until,
-                           self.restricted_until)
-            restricted = self.restricted_until
+                           self.breaker_until, self.degrade_until)
             active = [(model, until) for model, until in self.model_cooldowns.items()
                       if until > now]
         active.sort(key=lambda pair: (pair[1], pair[0]))
@@ -1298,7 +1310,7 @@ class Account(object):
             if capped_at:
                 entry["cappedAt"] = capped_at
             models.append(entry)
-        return error, deadline, models, detail, restricted
+        return error, deadline, models, detail
 
     def model_cooldowns_snapshot(self):
         """Active model cooldowns, ordered by recovery time (epoch seconds)."""
@@ -1308,7 +1320,7 @@ class Account(object):
         exp = self.expires_at or jwt_exp(self.access_token)
         now = time.time()
         is_token_expired = bool(getattr(self, "token_expired", False) or (exp and exp <= now) or not self.access_token)
-        last_error, deadline, models, last_error_detail, restricted = \
+        last_error, deadline, models, last_error_detail = \
             self._throttle_snapshot(now)
         return {
             "uid": self.uid,
@@ -1340,9 +1352,9 @@ class Account(object):
             "lastErrorDetail": last_error_detail or None,
             "inCooldown": deadline > now,
             "cooldownFor": round(max(0.0, deadline - now)) or None,
-            # 上游账号级风控限制（403 / 11140）：面板据此把账号标成「风控限制」
-            # 而不是普通冷却，并提示去官方渠道申诉而不是换号重试。
-            "restrictedFor": round(max(0.0, restricted - now)) or None,
+            # 上游账号封禁（403 / 11140）：持久禁用，必须手动重新启用。
+            "accountBanned": bool(self.account_banned),
+            "bannedAt": self.banned_at or None,
             "modelCooldowns": models,
             "softStreak": int(self.soft_streak),
             "unscopedStreak": int(self.unscoped_streak),
@@ -1860,6 +1872,8 @@ class Account(object):
         拒绝的原因（唯一不覆盖的是临期凭证那条：它会真的发起刷新，诊断路径上
         不该顺带打上游）。
         """
+        if self.account_banned:
+            return "账号封禁（需手动启用）"
         if not self.enabled:
             return "已停用"
         if not self.access_token:
@@ -1877,8 +1891,7 @@ class Account(object):
         # 四种惩罚的到期时间各走各的，谁把时间推得最远就报谁：只报「冷却」
         # 会让人往 429 的方向查，而实际可能是上游连续断连触发的熔断（30 分钟
         # 起，与账号本身无关），或者余额保护这类完全不同的原因。
-        penalties = [("上游风控限制", self.restricted_until),
-                     ("熔断", self.breaker_until), ("降权", self.degrade_until),
+        penalties = [("熔断", self.breaker_until), ("降权", self.degrade_until),
                      ("余额保护", self.balance_until), ("软限流冷却", self.cooldown_until)]
         if model:
             penalties.append(("模型 %s 冷却" % model, self.model_cooldowns.get(model, 0.0)))
@@ -1918,7 +1931,8 @@ class Account(object):
         return str(model).strip().lower() in self.disabled_models
 
     def ready(self, model=None, refresh=True):
-        if not self.enabled or not self.access_token or getattr(self, "token_expired", False):
+        if (self.account_banned or not self.enabled
+                or not self.access_token or getattr(self, "token_expired", False)):
             return False
         # 人工黑名单排在最前：它是静态配置（最便宜），而且在语义上优先于所有
         # 「暂时不可用」的判断 —— 被禁用的模型不该因为账号恰好恢复了就漏进来。
@@ -2271,7 +2285,7 @@ class Account(object):
 
         Independent of `enabled`: `enabled` only controls API dispatch.
         """
-        return bool(self.tasks_enabled)
+        return bool(self.tasks_enabled) and not self.account_banned
 
     def can_checkin(self):
         if self.realm != "cn":
@@ -2287,11 +2301,9 @@ class Account(object):
     def can_daily_chat(self):
         if self.realm != "intl":
             return False
-        # 403 / code 11140 is an account-level restriction. Scheduled daily
-        # activity must respect the same persisted restriction window as normal
-        # chat dispatch, otherwise every later activity slot probes the account
-        # again even though the upstream already told us to stop.
-        if self.restricted_until > time.time():
+        # 403 / code 11140 是持久封禁；在操作者手动启用前，定时活跃不再
+        # 探测该账号。
+        if self.account_banned:
             return False
         if not self.last_daily_chat:
             return True
@@ -2846,11 +2858,11 @@ class Account(object):
         """
         if self.realm != "intl":
             return {"ok": False, "error": "daily chat is only for international accounts"}
-        # 11140 的限制窗口要和普通 chat 一样先挡住；这里单独返回失败形状，
-        # 不能把「账号受限」伪装成「今日活跃已完成」。
-        if self.restricted_until > time.time():
+        # 11140 的持久封禁要和普通 chat 一样先挡住；这里单独返回失败形状，
+        # 不能把「账号被封禁」伪装成「今日活跃已完成」。
+        if self.account_banned:
             return {"ok": False, "skipped": True, "restricted": True,
-                    "error": "账号处于上游风控限制窗口，跳过每日活跃"}
+                    "error": "账号已被上游封禁，需手动重新启用"}
         # 当日活跃成功后再触发（下一个定时点、手动补跑、并发重复调度）直接
         # 跳过，连桌面腿也不发：这一天的 30/50 积分已经拿到了。
         if not self.can_daily_chat():
@@ -2952,10 +2964,10 @@ class Account(object):
                 err = exc.read().decode("utf-8", "replace")
             except Exception:
                 err = str(exc)
-            # Normal chat already treats 403/code 11140 as an account-level
-            # restriction and persists restrictedUntil. Daily activity used to
-            # bypass that path and therefore retried the same restricted account
-            # at later scheduler slots. Mirror the existing governance here.
+            # Normal chat already treats 403/code 11140 as a persistent
+            # account ban. Daily activity used to bypass that path and therefore
+            # retried the same banned account at later scheduler slots. Mirror
+            # the existing governance here.
             upstream_code = None
             try:
                 body = json.loads(err or "{}")
@@ -3557,8 +3569,8 @@ class Account(object):
             # 企业空间的 IsPaidUser 语义未验证（#505），先按「未知」处理。
             # 静态 Key 的个人计费摘要端点直接 401，同样按未知处理。
             return None
-        if self.restricted_until > time.time():
-            # 账号正被上游限制：这时再打计费接口只会继续喂风控。
+        if self.account_banned:
+            # 账号已被上游封禁：这时再打计费接口只会继续喂风控。
             return None
         if headers is None:
             headers = self.headers(purpose="billing")
@@ -3674,7 +3686,7 @@ class Account(object):
             self.cooldown_until = time.time() + actual_cooldown
 
     def note_restricted(self, detail="", cooldown=None):
-        """上游账号级风控限制（403 / code 11140）：按小时冷却，且不随重启消失。
+        """上游账号级封禁（403 / code 11140）：直接禁用，且不自动恢复。
 
         实测正文：{"code":11140,"msg":"request illegal",...,"displayMsg":
         「账号存在异常行为，已被限制使用」}。官方客户端同样报这个错，说明是
@@ -3683,21 +3695,20 @@ class Account(object):
         给出的处置口径是：看到 11140 立即停手，解封前严禁换号继续打同一台设备，
         否则设备指纹会连坐。
 
-        与普通冷却的区别：
-        - 固定 2 小时（可用 cooldown 覆盖），不吃 single_account 的 3 秒兜底——
-          把被限制的账号每 3 秒再试一次，只会继续喂上游风控；
-        - 持久化到凭据档（restrictedUntil）：重启 / 刷新 token / 换身分 /
-          「一键测试」都不会把它清掉，只有真正成功一次（说明上游已解除）才清。
+        与普通冷却的区别：没有到期时间，也不参与自动恢复。命中的账号会立即
+        关闭 API 派发与自动任务并持久化；重启 / 刷新 token / 换身分 /「一键
+        测试」都不会把它放回池子。官方解封后，由操作者在面板手动启用。
         """
-        now = time.time()
-        wait = RESTRICTED_ACCOUNT_COOLDOWN if cooldown is None else float(cooldown)
         with self._throttle_lock:
-            self.last_error = "HTTP 403 (account restricted)"
+            self.last_error = "HTTP 403 (account banned)"
             self.last_error_detail = str(detail)[:2000] if detail else ""
-            # 第一次命中才起算：反复探测/重试不该把 2 小时越推越长。
-            if self.restricted_until <= now:
-                self.restricted_until = now + max(1.0, wait)
-        return self.restricted_until
+            self.enabled = False
+            self.tasks_enabled = False
+            self.account_banned = True
+            if not self.banned_at:
+                self.banned_at = time.time()
+            self.restricted_until = 0.0
+        return 0.0
 
     def note_balance_cooled(self, message="insufficient credits"):
         """402 / out of credits: park until the next local 04:00.
@@ -3815,11 +3826,6 @@ class Account(object):
     def note_success(self, model=None):
         """A served request clears every account-level penalty.
 
-        That includes a persisted upstream restriction: a request that actually
-        succeeded is the one piece of evidence that the vendor lifted it. (In
-        normal dispatch a restricted account is never picked, so this only fires
-        from a manual test.)
-
         It also lifts the `token_expired` park. A response the upstream really
         served is direct proof that the credential still works, yet that flag is
         process-local and only ever cleared by a successful refresh, a re-login
@@ -3841,7 +3847,6 @@ class Account(object):
             self.last_soft_at = 0.0
             self.breaker_until = 0.0
             self.degrade_until = 0.0
-            self.restricted_until = 0.0
             self.last_error = ""
             self.last_error_detail = ""
             self.cooldown_until = 0.0
@@ -3849,13 +3854,13 @@ class Account(object):
 
     def throttle_wait(self, model=None):
         """Seconds until this account can serve `model` again (0 = right now)."""
-        if not self.enabled or not self.access_token:
+        if self.account_banned or not self.enabled or not self.access_token:
             return 0.0
         now = time.time()
         with self._throttle_lock:
             wait = max(0.0, self.cooldown_until - now,
                        self.balance_until - now, self.breaker_until - now,
-                       self.degrade_until - now, self.restricted_until - now)
+                       self.degrade_until - now)
             if model:
                 wait = max(wait, max(0.0, self.model_cooldowns.get(model, 0.0) - now))
         return wait
@@ -3888,9 +3893,20 @@ class Account(object):
                 self.last_error_detail = ""
                 self.cooldown_until = 0
                 self.balance_until = 0.0
-            # 上游账号级风控限制（restricted_until）故意不在这里清：它不是本机
-            # 记的限流窗口，而是上游对账号的标记；换身分 / 重试 / 刷新都不该把
+            # 上游账号封禁（account_banned）故意不在这里清：它不是本机记的
+            # 限流窗口，而是上游对账号的标记；换身分 / 重试 / 刷新都不该把
             # 它放回池子（见 note_restricted）。
+
+    def clear_account_ban(self):
+        """操作者手动启用账号时解除上游封禁标记。
+
+        这是封禁唯一的解除入口。`clear_error()`、成功请求、token 刷新、重启
+        和导入都不能调用它。
+        """
+        with self._throttle_lock:
+            self.account_banned = False
+            self.banned_at = 0.0
+            self.restricted_until = 0.0
 
     def clear_model_cooldown(self, model):
         """只解除某个模型的限流，账号级状态原样保留。
@@ -4422,6 +4438,13 @@ class AccountPool(object):
             if existing is not None:
                 account.added_at = existing.added_at
                 account.path = existing.path
+                # Re-login / re-import must not bypass an upstream ban:
+                # only an explicit operator enable clears it.
+                if getattr(existing, "account_banned", False):
+                    account.account_banned = True
+                    account.banned_at = existing.banned_at
+                    account.enabled = False
+                    account.tasks_enabled = False
                 if not account.credits and existing.credits:
                     account.credits = existing.credits
                 # 重新登录 / 扫码换 token 不该丢掉已经读到的档位（#505）。
@@ -4543,6 +4566,7 @@ class AccountPool(object):
                                  if tasks_enabled is not None
                                  else bool(enabled))
         if enabled:
+            account.clear_account_ban()
             account.clear_error()
         account.save(self.dir)
         self.apply_proxy_slots()
@@ -4830,9 +4854,34 @@ class AccountPool(object):
                 account.enabled = bool(enabled)
                 account.tasks_enabled = bool(enabled)
                 if enabled:
+                    account.clear_account_ban()
                     account.clear_error()
                 account.save(self.dir)
         self.apply_proxy_slots()
+
+    def set_enabled_many(self, uids, enabled):
+        """Enable/disable exactly the selected accounts.
+
+        The panel's checkbox selection is an explicit operator choice, so this
+        must not widen to a group or the whole pool when a UID is missing.
+        Callers validate missing UIDs before calling; this method only applies
+        the requested set and returns the accounts that were changed.
+        """
+        wanted = {str(uid) for uid in uids if uid}
+        changed = []
+        with self._lock:
+            for account in self.accounts:
+                if str(account.uid) not in wanted:
+                    continue
+                account.enabled = bool(enabled)
+                account.tasks_enabled = bool(enabled)
+                if enabled:
+                    account.clear_account_ban()
+                    account.clear_error()
+                account.save(self.dir)
+                changed.append(account.uid)
+        self.apply_proxy_slots()
+        return changed
 
     def set_group_enabled(self, group, enabled):
         """Enable/disable exactly the accounts carrying one non-empty group."""
@@ -4847,6 +4896,7 @@ class AccountPool(object):
                 account.enabled = bool(enabled)
                 account.tasks_enabled = bool(enabled)
                 if enabled:
+                    account.clear_account_ban()
                     account.clear_error()
                 account.save(self.dir)
                 changed.append(account.uid)

@@ -103,7 +103,7 @@ class CycleScopeTests(unittest.TestCase):
         self.acc = mock.MagicMock()
         self.acc.uid = "u1"
         self.acc.realm = "intl"
-        self.acc.restricted_until = 0.0
+        self.acc.account_banned = False
         self.acc.can_daily_chat.return_value = True
         self.acc.daily_chat.return_value = {"ok": True, "msg": "ok"}
         self.pool = mock.MagicMock()
@@ -193,7 +193,7 @@ class CycleScopeTests(unittest.TestCase):
         acc = mock.MagicMock()
         acc.uid = "u2"
         acc.realm = "intl"
-        acc.restricted_until = 0.0
+        acc.account_banned = False
         acc.can_daily_chat.return_value = True
         acc.daily_chat.return_value = {"ok": True, "msg": "ok"}
         self.pool.accounts = [acc]

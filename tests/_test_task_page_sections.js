@@ -1,15 +1,13 @@
-/* 自动化页的四段结构与三个手动入口。
+/* 自动化页的结构与手动入口。
  *
- * 这页回答的是「哪一类自动化现在能手动跑」，而不是把签到、成长任务和后台
- * 调度器混成一大块：
+ * 页面回答「哪一类自动化现在能手动跑」：
  *
- *   1. 后台调度器；
- *   2. 国际版每日签到（官方叫每日活跃福利）；
- *   3. 国内版每日签到（Buddy 加油站）；
- *   4. 国内版任务（成长任务、猫猫旅行、连登管家与抽奖）。
+ *   1. 后台调度器（保留独立区块）；
+ *   2. 一次性 / 活动福利（成长任务、活动任务、小程序任务）；
+ *   3. 每日任务（国际版签到；国内版 Buddy 签到、猫猫旅行、连登、夜猫子）。
  *
- * 结构断言盯住每段各自的按钮，行为断言盯住「一键执行国内任务」在单项失败时
- * 仍继续跑后面的步骤，并把失败列进最终提示。Run with Node:
+ * 行为断言盯住「一键执行每日任务」在单项失败时仍继续跑后面的步骤，并且
+ * 导入账号后的每日任务入口不跑国际版签到。Run with Node:
  *   node tests/_test_task_page_sections.js
  */
 'use strict';
@@ -34,79 +32,103 @@ function section(id){
   return html.slice(start, end + '</section>'.length);
 }
 
-const intl = section('sectionIntlTasks');
-const cnCheckin = section('sectionCnCheckin');
-const cnTasks = section('sectionGrowthTasks');
+const daily = section('sectionDailyTasks');
+const growth = section('sectionGrowthTasks');
 
-check('国际版区块标题是「国际版每日签到」',
-  /<h2 style="margin:0">国际版每日签到<\/h2>/.test(intl));
-check('国际版区块有独立的一键签到按钮',
-  /<button class="primary" id="btnPageDailyChat" onclick="doDailyChat\(this\)">一键国际版签到<\/button>/.test(intl));
-check('国际版区块保留未活跃账号补跑入口',
-  /id="btnPageDailyChatPending"[^>]*onclick="doDailyChatPending\(this\)"/.test(intl));
+check('每日任务区块标题是「每日任务」',
+  /<h2 style="margin:0">每日任务<\/h2>/.test(daily));
+check('每日任务区块有总入口',
+  /<button class="primary" id="btnRunAllDailyTasks" onclick="runAllDailyTasks\(this\)">一键执行每日任务<\/button>/.test(daily));
+check('国际版签到仍在每日任务区块',
+  /<button class="primary" id="btnPageDailyChat" onclick="doDailyChat\(this\)">一键国际版签到<\/button>/.test(daily) &&
+  /id="btnPageDailyChatPending"[^>]*onclick="doDailyChatPending\(this\)"/.test(daily));
+check('国内版签到仍在每日任务区块',
+  /<button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin\(this\)">一键国内版签到<\/button>/.test(daily));
+check('猫猫旅行是每日任务单项入口',
+  /<button id="btnCatTravel" onclick="triggerCatTravel\(this\)">猫猫旅行<\/button>/.test(daily));
+check('连登管家是每日任务单项入口',
+  /<button id="btnRunStreakBonus" onclick="triggerStreakBonus\(this\)">连登管家与抽奖<\/button>/.test(daily));
+check('夜猫子是每日任务单项入口',
+  /<button id="btnRunNightTask" onclick="triggerNightTask\(this\)">夜猫子任务<\/button>/.test(daily));
+check('每日任务区块保留国际版与国内版状态卡',
+  daily.includes('id="intlTodayActiveState"') &&
+  daily.includes('id="cnTodayCheckinState"') &&
+  daily.includes('id="stkDays"') &&
+  daily.includes('id="catState"'));
 
-check('国内签到区块标题是「国内版每日签到」',
-  /<h2 style="margin:0">国内版每日签到<\/h2>/.test(cnCheckin));
-check('国内签到区块有 Buddy 加油站独立入口',
-  /<button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin\(this\)">一键国内版签到<\/button>/.test(cnCheckin));
-check('国内签到状态与福利总积分留在签到区块',
-  cnCheckin.includes('id="cnTodayCheckinState"') && cnCheckin.includes('id="cnTotalGranted"'));
-check('国内签到区块有自己的国内账号选择器',
-  /id="cnCheckinAcctSelect"[^>]*onchange="switchGrowthAccount\(this.value\)"/.test(cnCheckin));
+check('一次性区块标题是「一次性 / 活动福利」',
+  /<h2 style="margin:0">一次性 \/ 活动福利<\/h2>/.test(growth));
+check('一次性区块只有一个总入口',
+  /<button class="primary" id="btnRunTasks" onclick="runGrowthTasks\(this\)">一键完成一次性任务<\/button>/.test(growth));
+check('一次性区块不包含每日单项按钮',
+  !growth.includes('id="btnPageCheckin"') &&
+  !growth.includes('id="btnCatTravel"') &&
+  !growth.includes('id="btnRunStreakBonus"') &&
+  !growth.includes('id="btnRunNightTask"'));
+check('一次性区块保留任务表与日志',
+  growth.includes('id="growthTable"') && growth.includes('id="taskLogBox"'));
 
-check('国内任务区块标题是「国内版任务」',
-  /<h2 style="margin:0">国内版任务<\/h2>/.test(cnTasks));
-check('国内任务区块有串行总执行按钮',
-  /<button class="primary" id="btnRunAllCnTasks" onclick="runAllCnTasks\(this\)">一键执行国内任务<\/button>/.test(cnTasks));
-check('国内任务区块保留成长任务单项入口',
-  /<button class="sec mini" id="btnRunTasks" onclick="runGrowthTasks\(this\)">/.test(cnTasks));
-check('国内任务区块保留猫猫旅行单项入口',
-  /<button id="btnCatTravel" onclick="triggerCatTravel\(this\)">猫猫旅行<\/button>/.test(cnTasks));
-check('国内任务区块保留连登管家单项入口',
-  /<button id="btnRunStreakBonus" onclick="triggerStreakBonus\(this\)">连登管家与抽奖<\/button>/.test(cnTasks));
-check('签到卡片已从国内任务区块移走',
-  !cnTasks.includes('id="cnTodayCheckinState"') && !cnTasks.includes('id="cnTotalGranted"'));
-
+check('任务表过滤每日夜猫子',
+  /filter\(t => String\(t\.task_code \|\| ''\) !== 'black_cat'\)/.test(script));
 check('两个国内账号下拉框双向同步',
   /\["growthAcctSelect", "cnCheckinAcctSelect"\]\.forEach/.test(script) &&
   /if\(el && el\.value !== uid\) el\.value = uid;/.test(script));
 check('调度器保留独立的立即巡检按钮',
   /id="btnTriggerSched" onclick="triggerSchedulerNow\(this\)"/.test(html));
 
-/* ---- 总执行：某一步返回 false 时仍继续，并正确汇总 -------------------- */
-const start = script.indexOf('async function runAllCnTasks');
+/* ---- 每日总执行：某一步返回 false 时仍继续，并正确汇总 ------------------ */
+const start = script.indexOf('async function runAllDailyTasks');
 const end = script.indexOf('\nfunction saveGrowthAutoClaim', start);
-assert.ok(start >= 0 && end > start, '找不到 runAllCnTasks，测试需要更新');
+assert.ok(start >= 0 && end > start, '找不到 runAllDailyTasks，测试需要更新');
 
 const calls = [];
 const toasts = [];
-const runGrowthTasks = async () => { calls.push('growth'); return false; };
-const triggerCatTravel = async () => { calls.push('cat'); return true; };
-const triggerStreakBonus = async () => { calls.push('streak'); return false; };
+const doDailyChatPending = async () => { calls.push('intl'); return false; };
+const triggerBuddyCheckin = async (btn, uid) => { calls.push('checkin:' + uid); return true; };
+const triggerCatTravel = async (btn, uid) => { calls.push('cat:' + uid); return true; };
+const triggerStreakBonus = async (btn, uid) => { calls.push('streak:' + uid); return false; };
+const triggerNightTask = async (btn, uid) => { calls.push('night:' + uid); return true; };
 const toast = (msg, kind) => { toasts.push({msg: msg, kind: kind}); };
 const elements = {
-  btnRunTasks: {disabled: false},
+  btnPageDailyChatPending: {disabled: false},
+  btnPageCheckin: {disabled: false},
   btnCatTravel: {disabled: false},
   btnRunStreakBonus: {disabled: false},
+  btnRunNightTask: {disabled: false},
 };
 const document = {getElementById: id => elements[id] || null};
 
 const factory = new Function(
-  'document', 'toast', 'runGrowthTasks', 'triggerCatTravel', 'triggerStreakBonus',
-  script.slice(start, end) + '\nreturn runAllCnTasks;'
+  'document', 'toast', 'doDailyChatPending', 'triggerBuddyCheckin',
+  'triggerCatTravel', 'triggerStreakBonus', 'triggerNightTask',
+  script.slice(start, end) + '\nreturn runAllDailyTasks;'
 );
-const runAll = factory(document, toast, runGrowthTasks, triggerCatTravel, triggerStreakBonus);
+const runAll = factory(document, toast, doDailyChatPending,
+  triggerBuddyCheckin, triggerCatTravel, triggerStreakBonus, triggerNightTask);
 
 (async () => {
-  await runAll({disabled: false, textContent: '一键执行国内任务'});
+  await runAll({disabled: false, textContent: '一键执行每日任务'}, ['uid-a']);
   check('失败步骤不会中断后续步骤',
-    JSON.stringify(calls) === JSON.stringify(['growth', 'cat', 'streak']), JSON.stringify(calls));
+    JSON.stringify(calls) === JSON.stringify([
+      'intl', 'checkin:uid-a', 'cat:uid-a', 'streak:uid-a', 'night:uid-a'
+    ]), JSON.stringify(calls));
   check('成功与失败分别汇总',
     toasts.length === 1 && toasts[0].kind === 'warn' &&
-    /成长任务：未完成/.test(toasts[0].msg) &&
-    /猫猫旅行：完成/.test(toasts[0].msg) &&
+    /国际版签到：未完成/.test(toasts[0].msg) &&
+    /国内版签到：完成/.test(toasts[0].msg) &&
     /连登管家与抽奖：未完成/.test(toasts[0].msg),
     JSON.stringify(toasts));
+
+  calls.length = 0;
+  toasts.length = 0;
+  await runAll({disabled: false, textContent: '一键执行每日任务'}, ['uid-a'],
+    {skipIntl: true});
+  check('导入后每日任务不跑国际版签到',
+    !calls.includes('intl'), JSON.stringify(calls));
+  check('导入后仍执行全部国内每日步骤',
+    JSON.stringify(calls) === JSON.stringify([
+      'checkin:uid-a', 'cat:uid-a', 'streak:uid-a', 'night:uid-a'
+    ]), JSON.stringify(calls));
 
   console.log('task page section assertions passed (' + checks + ' checks)');
 })().catch(e => {

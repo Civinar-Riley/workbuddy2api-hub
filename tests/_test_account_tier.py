@@ -136,7 +136,7 @@ class TierFetchTests(unittest.TestCase):
     def test_enterprise_and_restricted_are_skipped(self):
         enterprise = make_account("t-ent", enterpriseId="e-1")
         restricted = make_account("t-res")
-        restricted.restricted_until = time.time() + 3600
+        restricted.account_banned = True
         boom = mock.patch.object(wb_accounts, "http_json",
                                  side_effect=AssertionError("must not call"))
         with boom:

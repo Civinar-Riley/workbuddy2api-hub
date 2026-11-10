@@ -40,11 +40,11 @@ class DailyChatTests(unittest.TestCase):
         acc.last_daily_chat = "2020-01-01 10:00:00"
         self.assertTrue(acc.can_daily_chat())
 
-        # An upstream 11140 restriction suppresses later scheduler slots until
-        # its persisted window expires.
-        acc.restricted_until = time.time() + 3600
+        # An upstream 11140 ban suppresses later scheduler slots until the
+        # operator explicitly re-enables the account.
+        acc.account_banned = True
         self.assertFalse(acc.can_daily_chat())
-        acc.restricted_until = time.time() - 1
+        acc.account_banned = False
         self.assertTrue(acc.can_daily_chat())
 
     def test_cn_account_ineligible(self):
@@ -68,17 +68,20 @@ class DailyChatTests(unittest.TestCase):
             acc.save(directory)
             err = urllib.error.HTTPError(
                 "https://www.workbuddy.ai/chat", 403, "Forbidden", {}, io.BytesIO(body))
-            before = time.time()
             with mock.patch.object(wb_accounts, "urlopen", side_effect=err):
                 res = acc._daily_chat_upstream(web=False)
 
             self.assertFalse(res["ok"])
             self.assertTrue(res["restricted"])
-            self.assertGreater(acc.restricted_until, before)
+            self.assertTrue(acc.account_banned)
+            self.assertFalse(acc.enabled)
+            self.assertFalse(acc.tasks_enabled)
             self.assertFalse(acc.can_daily_chat())
             with open(acc.path, "r", encoding="utf-8") as handle:
                 saved = json.load(handle)
-            self.assertEqual(saved["restrictedUntil"], acc.restricted_until)
+            self.assertTrue(saved["accountBanned"])
+            self.assertFalse(saved["enabled"])
+            self.assertFalse(saved["tasksEnabled"])
 
             # A manual retry during the restriction window must not pretend the
             # day is complete and must not touch the upstream again.

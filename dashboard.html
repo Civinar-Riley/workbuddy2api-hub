@@ -379,6 +379,7 @@ body.pricing-off #kpiCostCard{display:none}
    toolbar 的 gap 负责，不必再插竖线。 */
 .tb-group{display:inline-flex;align-items:center;gap:4px;padding:3px;background:var(--panel2);
   border:1px solid var(--line);border-radius:10px}
+.tb-group[hidden]{display:none!important}
 .tb-group button.sec{box-shadow:none}
 .tb-group button.sec:hover{background:var(--panel3);border-color:var(--line-hover)}
 button{cursor:pointer;font:inherit;font-size:12px;font-weight:500;padding:6px 14px;border-radius:8px;
@@ -2437,6 +2438,14 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '当前页全部记录': 'All records on this page',
     '当前页没有符合筛选条件的请求': 'No request on this page matches the filter',
     '没有符合当前条件的账号': 'No account matches the current filter',
+    '全部错误码': 'All error codes',
+    '11140 · 账号封禁': '11140 · account banned',
+    '6004 · 额度撞线': '6004 · quota reached',
+    '401 · 凭证失效': '401 · credential expired',
+    '429 · 限流': '429 · rate limited',
+    '全选筛选结果': 'Select filtered results',
+    '删除已选': 'Delete selected',
+    '错误码筛选只改显示；选中分组后，刷新、测试、补积分和启停仍只作用于该分组': 'The error-code filter only changes what is shown; bulk refresh, test, credits and enable/disable still follow the selected group.',
     '没有符合当前条件的模型': 'No model matches the current filter',
     '暂无模型用量分布': 'No model usage yet',
     '筛选仅影响显示，批量操作仍按原账号范围执行': 'Filtering only changes what is shown; bulk actions still act on the original account scope',
@@ -2446,19 +2455,28 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '国内版 (China) · copilot.tencent.com': 'China · copilot.tencent.com',
     '国内版成长任务与日常福利': 'China growth tasks and daily perks',
     '国内版任务与福利': 'China tasks and perks',
+    '每日任务': 'Daily tasks',
+    '一次性 / 活动福利': 'One-time / event rewards',
     '国际版每日签到': 'Daily check-in (Global)',
     '国内版每日签到': 'Daily check-in (China)',
+    '国内版每日福利': 'Daily rewards (China)',
     '国内版任务': 'China tasks',
+    '一键完成一次性任务': 'Run all one-time tasks',
+    '一键执行每日任务': 'Run all daily tasks',
+    '夜猫子任务': 'Night-owl task',
+    '猫猫旅行': 'Cat travel',
+    '连登管家与抽奖': 'Streak rewards & lottery',
     '一键国际版签到': 'One-click Global check-in',
     '一键国内版签到': 'One-click China check-in',
     '一键执行国内任务': 'Run all China tasks',
-    'Buddy 加油站每日签到；签到与成长任务、猫猫旅行互不占用。': 'Daily Buddy refuel check-in; it is independent of growth tasks and cat travel.',
+    'Buddy 加油站签到、猫猫旅行、连登管家与抽奖、夜猫子任务；各项每日额度互不占用。': 'Buddy refuel check-in, cat travel, streak rewards and lottery, and the night-owl task; each daily quota is independent.',
     '国内任务执行中...': 'Running China tasks...',
     // 页签名与区块标题：词级词典缺了「福利」，整体只能拼出「Taskand福利」。
     '任务与福利': 'Tasks & rewards',
     '国际版每日活跃福利': 'Daily activity rewards (Global)',
     '已获取福利总积分': 'Total reward credits earned',
-    '每日活跃打卡、Buddy 加油站、成长任务与福利积分总览。': 'Daily check-in, Buddy refuel and an overview of growth tasks plus reward credits.',
+    '国际版每日签到与国内版每日福利；按天刷新，可单项执行，也可一键跑完。': 'Global daily check-in and China daily rewards; each runs independently or as one sequence.',
+    '批量接取、事件上报并领取成长任务、活动任务与小程序任务奖励；不包含任何每日福利。': 'Batch-accept, report events and claim growth, event and mini-program rewards; daily rewards are not included.',
     '福利': 'rewards',
     '国内版签到': 'China check-in',
     '国家未知': 'Country unknown',
@@ -3587,14 +3605,32 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '猫猫正在旅行途中，请稍后再来查看！': 'The cat is still travelling; check again later!'
   };
   var HANT_PHRASES = {
+    "每日任务": "每日任務",
+    "一次性 / 活动福利": "一次性 / 活動福利",
     "国际版每日签到": "國際版每日簽到",
+    "国内版每日福利": "國內版每日福利",
+    "一键完成一次性任务": "一鍵完成一次性任務",
+    "一键执行每日任务": "一鍵執行每日任務",
+    "全部错误码": "全部錯誤碼",
+    "11140 · 账号封禁": "11140 · 帳號封禁",
+    "6004 · 额度撞线": "6004 · 額度撞線",
+    "401 · 凭证失效": "401 · 憑證失效",
+    "429 · 限流": "429 · 限流",
+    "全选筛选结果": "全選篩選結果",
+    "删除已选": "刪除已選",
+    "夜猫子任务": "夜貓子任務",
+    "连登管家与抽奖": "連登管家與抽獎",
     "国内版每日签到": "國內版每日簽到",
     "国内版任务": "國內版任務",
     "一键国际版签到": "一鍵國際版簽到",
     "一键国内版签到": "一鍵國內版簽到",
     "一键执行国内任务": "一鍵執行國內任務",
-    "Buddy 加油站每日签到；签到与成长任务、猫猫旅行互不占用。":
-      "Buddy 加油站每日簽到；簽到與成長任務、貓貓旅行互不佔用。",
+    "Buddy 加油站签到、猫猫旅行、连登管家与抽奖、夜猫子任务；各项每日额度互不占用。":
+      "Buddy 加油站簽到、貓貓旅行、連登管家與抽獎、夜貓子任務；各項每日額度互不佔用。",
+    "国际版每日签到与国内版每日福利；按天刷新，可单项执行，也可一键跑完。":
+      "國際版每日簽到與國內版每日福利；按天刷新，可單項執行，也可一鍵跑完。",
+    "批量接取、事件上报并领取成长任务、活动任务与小程序任务奖励；不包含任何每日福利。":
+      "批次接取、事件上報並領取成長任務、活動任務與小程式任務獎勵；不包含任何每日福利。",
     "国内任务执行中...": "國內任務執行中...",
     "全部号池": "全部號池",
     "文本号池": "文字號池",
@@ -3698,7 +3734,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "—（需手动启用）": "—（需手動啟用）",
     "⇄ 切换默认出口为【国内版】": "⇄ 切換預設出口為【國內版】",
     "。名字带渠道后缀（如": "。名字帶渠道字尾（如",
-    "「上游限流」到点自动恢复；「本地停用」需手动启用；「日限额」次日零点恢复": "「上游限流」到點自動恢復；「本地停用」需手動啟用；「日限額」次日零點恢復",
+    "「账号封禁」需官方申诉；「上游限流」到点自动恢复；「本地停用」需手动启用；「日限额」次日零点恢复": "「帳號封禁」需官方申訴；「上游限流」到點自動恢復；「本地停用」需手動啟用；「日限額」次日零點恢復",
     "「绑定账号」只统计已启用账号；停用账号会自动释放槽位，重新启用后需重新绑定。在网关页账号表的「出口」下拉中调整绑定。名称留空时按出口自动显示「国家 类型」，点「测试」会补全出口信息并据此命名。": "「繫結帳號」只統計已啟用帳號；停用帳號會自動釋放槽位，重新啟用後需重新繫結。在閘道頁帳號表的「出口」下拉中調整繫結。名稱留空時按出口自動顯示「國家 型別」，點「測試」會補全出口資訊並據此命名。",
     "」的全局默认请填 0 或正整数": "」的全域性預設請填 0 或正整數",
     "一键刷新凭证": "一鍵重新整理憑證",
@@ -5804,16 +5840,24 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <div id="accountsBody" class="collapse">
       <div class="collapse-inner">
     <div class="console-filterbar" aria-label="账号列表筛选">
-      <input id="accountSearchFilter" class="console-search" type="search" placeholder="搜索昵称、备注或 UID" aria-label="搜索账号" oninput="ACCOUNT_FILTERS.query=this.value;renderAccounts()">
-      <select id="accountStatusFilter" aria-label="账号状态" onchange="ACCOUNT_FILTERS.status=this.value;renderAccounts()">
+      <input id="accountSearchFilter" class="console-search" type="search" placeholder="搜索昵称、备注或 UID" aria-label="搜索账号" oninput="ACCOUNT_FILTERS.query=this.value;clearAccountSelection();renderAccounts()">
+      <select id="accountStatusFilter" aria-label="账号状态" onchange="ACCOUNT_FILTERS.status=this.value;clearAccountSelection();renderAccounts()">
         <option value="">全部状态</option><option value="healthy">可用</option><option value="attention">需关注</option><option value="disabled">本地停用</option>
       </select>
-      <select id="accountGroupFilter" aria-label="账号分组" onchange="ACCOUNT_FILTERS.group=this.value;renderAccounts()">
+      <select id="accountGroupFilter" aria-label="账号分组" onchange="ACCOUNT_FILTERS.group=this.value;clearAccountSelection();renderAccounts()">
         <option value="">全部分组</option>
       </select>
+      <select id="accountErrorFilter" aria-label="错误码" onchange="setAccountErrorFilter(this.value)">
+        <option value="">全部错误码</option>
+        <option value="11140">11140 · 账号封禁</option>
+        <option value="6004">6004 · 额度撞线</option>
+        <option value="401">401 · 凭证失效</option>
+        <option value="429">429 · 限流</option>
+      </select>
       <span class="console-filter-count" id="accountFilterCount">全部账号</span>
+      <button type="button" class="sec mini" id="btnSelectFiltered" onclick="selectFilteredAccounts(this)" disabled>全选筛选结果</button>
       <button type="button" class="sec mini" onclick="clearAccountFilters()">清除筛选</button>
-      <span style="font-size:11px;color:var(--dim)">选中分组后，刷新、测试、补积分和启停都只作用于该分组</span>
+      <span style="font-size:11px;color:var(--dim)">选择错误码会自动勾选全部命中账号；选中分组后，刷新、测试、补积分和启停仍只作用于该分组</span>
     </div>
     <div class="toolbar">
     <button onclick="openLoginModal()">添加</button>
@@ -5852,6 +5896,10 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" onclick="setAll(false, this)">全部停用</button>
     <button class="sec" onclick="setCurrentGroup(true, this)">当前分组启用</button>
     <button class="sec" onclick="setCurrentGroup(false, this)">当前分组停用</button>
+    <button class="sec" id="btnExportSelected" onclick="exportSelectedAccounts(this)" title="只导出当前勾选的账号，可再次导入到其他实例" disabled>导出已选</button>
+    <button class="sec" id="btnEnableSelected" onclick="setSelectedEnabled(true, this)" title="只启用当前勾选的账号；封禁账号会同时解除封禁标记" disabled>启用已选</button>
+    <button class="sec" id="btnDisableSelected" onclick="setSelectedEnabled(false, this)" title="只停用当前勾选的账号，不会影响未勾选账号" disabled>停用已选</button>
+    <button class="sec" id="btnDeleteSelected" onclick="deleteSelectedAccounts(this)" title="删除当前勾选的账号；只作用于当前视图与当前号池，不会删除未勾选账号" disabled>删除已选</button>
     </div>
     <div class="tb-group tb-pool" id="poolToolsGroup" hidden>
     <button class="sec" id="pfAll" onclick="poolFilter('all', this)">全部号池</button>
@@ -5872,7 +5920,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
   <section id="workbuddyDisabledSection">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <h2 style="margin:0">当前禁用<em id="disabledRealmTag" style="color:var(--dim);font-weight:500"></em><em id="disabledCount"></em></h2>
-      <div class="legend" style="margin:0"><span>「上游限流」到点自动恢复；「本地停用」需手动启用；「日限额」次日零点恢复</span></div>
+      <div class="legend" style="margin:0"><span>「账号封禁」需官方申诉；「上游限流」到点自动恢复；「本地停用」需手动启用；「日限额」次日零点恢复</span></div>
     </div>
     <div id="disabledList"></div>
   </section>
@@ -5922,74 +5970,105 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <h2 style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">任务与福利</h2>
     <div style="font-size:12px;color:var(--dim);margin-top:4px">每日活跃打卡、Buddy 加油站、成长任务与福利积分总览。</div>
   </div>
-  <!-- 国际版每日签到（官方名称是每日活跃福利，但入口按签到语义排列） -->
-  <section id="sectionIntlTasks" style="margin-bottom:24px">
+  <!-- 每日任务：国际版签到与国内版每日福利放在同一块，但每个动作仍有独立
+       入口；一键执行每日任务只是把它们串起来，不改变单项语义。 -->
+  <section id="sectionDailyTasks" style="margin-bottom:24px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
-        <h2 style="margin:0">国际版每日签到</h2>
-        <div style="font-size:12px;color:var(--dim)">国际版每日轻量会话与网页通道打卡，触发官方发放每日活跃 Bonus Pack (+30/+50 积分)</div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="primary" id="btnPageDailyChat" onclick="doDailyChat(this)">一键国际版签到</button>
-        <!-- 未活跃打卡一键打卡：只补跑今天还没有活跃打卡记录的国际版账号。
-             要打的那批与左边「今日活跃打卡状态」卡片悬停时列出的名单完全同源，
-             所以不会把已经打过的账号再打一遍、白烧它的额度。 -->
-        <button class="primary" id="btnPageDailyChatPending" onclick="doDailyChatPending(this)">未活跃打卡一键打卡</button>
-      </div>
-    </div>
-    <div class="cards" style="margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-      <div class="card accent2" id="cardIntlTodayActive">
-        <div class="k">今日活跃打卡状态</div>
-        <div class="v" id="intlTodayActiveState" style="font-size:20px">-</div>
-      </div>
-      <div class="card warn">
-        <div class="k">累计活跃奖励积分</div>
-        <div class="v" id="intlTotalGranted" style="color:var(--warn)">-</div>
-      </div>
-    </div>
-    <!-- 今日活跃的现场：时段、未完成名单与原因、正在跑的账号。设置项在「设置」页，
-         这里只读，回答的是「今天到底跑没跑、卡在谁身上」。 -->
-    <div id="intlDailyChatPanel" style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;line-height:1.8">
-      <div id="intlDailyChatSlots" style="color:var(--dim)">今日时段：-</div>
-      <div id="intlDailyChatLive" style="color:var(--dim)"></div>
-      <div id="intlDailyChatPending" style="margin-top:6px"></div>
-    </div>
-  </section>
-
-  <!-- 国内版每日签到：只负责 Buddy 加油站，签到与任务执行分开，避免误点一次
-       就同时消耗签到额度和成长任务额度。 -->
-  <section id="sectionCnCheckin" style="margin-bottom:24px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-      <div>
-        <h2 style="margin:0">国内版每日签到</h2>
-        <div style="font-size:12px;color:var(--dim)">Buddy 加油站每日签到；签到与成长任务、猫猫旅行互不占用。</div>
+        <h2 style="margin:0">每日任务</h2>
+        <div style="font-size:12px;color:var(--dim)">国际版每日签到与国内版每日福利；按天刷新，可单项执行，也可一键跑完。</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select id="cnCheckinAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
           <option value="all">全部国内账号 (批量)</option>
         </select>
-        <button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin(this)">一键国内版签到</button>
+        <button class="primary" id="btnRunAllDailyTasks" onclick="runAllDailyTasks(this)">一键执行每日任务</button>
       </div>
     </div>
-    <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
-      <div class="card accent2" title="Buddy 加油站每日签到活动">
-        <div class="k">本期 Buddy 加油站活动</div>
-        <div class="v" id="cnTodayCheckinState" style="font-size:17px;letter-spacing:-.2px">-</div>
+
+    <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;background:var(--panel2)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h3 style="margin:0;font-size:14px">国际版每日签到</h3>
+          <div style="font-size:12px;color:var(--dim);margin-top:3px">每日轻量会话与网页通道打卡，触发官方发放每日活跃 Bonus Pack (+30/+50 积分)</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="primary" id="btnPageDailyChat" onclick="doDailyChat(this)">一键国际版签到</button>
+          <!-- 只补跑今天还没有活跃打卡记录的国际版账号，名单与下方状态卡片同源。 -->
+          <button class="primary" id="btnPageDailyChatPending" onclick="doDailyChatPending(this)">未活跃打卡一键打卡</button>
+        </div>
       </div>
-      <div class="card accent">
-        <div class="k">已获取福利总积分</div>
-        <div class="v" id="cnTotalGranted" style="color:var(--accent)">-</div>
+      <div class="cards" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+        <div class="card accent2" id="cardIntlTodayActive">
+          <div class="k">今日活跃打卡状态</div>
+          <div class="v" id="intlTodayActiveState" style="font-size:20px">-</div>
+        </div>
+        <div class="card warn">
+          <div class="k">累计活跃奖励积分</div>
+          <div class="v" id="intlTotalGranted" style="color:var(--warn)">-</div>
+        </div>
+      </div>
+      <div id="intlDailyChatPanel" style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.8;background:var(--panel)">
+        <div id="intlDailyChatSlots" style="color:var(--dim)">今日时段：-</div>
+        <div id="intlDailyChatLive" style="color:var(--dim)"></div>
+        <div id="intlDailyChatPending" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel2)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h3 style="margin:0;font-size:14px">国内版每日福利</h3>
+          <div style="font-size:12px;color:var(--dim);margin-top:3px">Buddy 加油站签到、猫猫旅行、连登管家与抽奖、夜猫子任务；各项每日额度互不占用。</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin(this)">一键国内版签到</button>
+          <button id="btnCatTravel" onclick="triggerCatTravel(this)">猫猫旅行</button>
+          <button id="btnRunStreakBonus" onclick="triggerStreakBonus(this)">连登管家与抽奖</button>
+          <button id="btnRunNightTask" onclick="triggerNightTask(this)">夜猫子任务</button>
+        </div>
+      </div>
+      <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(185px,1fr))">
+        <div class="card accent2" title="Buddy 加油站每日签到活动">
+          <div class="k">本期 Buddy 加油站活动</div>
+          <div class="v" id="cnTodayCheckinState" style="font-size:17px;letter-spacing:-.2px">-</div>
+        </div>
+        <div class="card accent">
+          <div class="k">已获取福利总积分</div>
+          <div class="v" id="cnTotalGranted" style="color:var(--accent)">-</div>
+        </div>
+        <div class="card" title="WorkBuddy 成长计划连续登录活跃天数；达到 7/14/28 天可兑换连登奖励">
+          <div class="k">当前连续登录天数</div>
+          <div class="v" id="stkDays" style="color:var(--accent2)">-</div>
+          <div style="font-size:11px;color:var(--dim);margin-top:4px">WorkBuddy 成长计划</div>
+        </div>
+        <div class="card">
+          <div class="k">补签卡余额</div>
+          <div class="v" id="makeupCards">-</div>
+        </div>
+        <div class="card warn">
+          <div class="k">成长抽奖次数</div>
+          <div class="v" id="lotteryChances" style="color:var(--warn)">-</div>
+        </div>
+        <div class="card accent2">
+          <div class="k">猫猫旅行状态</div>
+          <div class="v" id="catState" style="font-size:19px">-</div>
+        </div>
+        <div class="card">
+          <div class="k">成长能量余额</div>
+          <div class="v" id="nrgBalance">-</div>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- 国内版任务：成长任务、猫猫旅行、连登管家与抽奖。保留单项按钮，
-       另加一个串行的一键总执行入口；失败项继续往后跑，最后汇总失败原因。 -->
+  <!-- 一次性 / 活动福利：成长任务、活动任务与小程序任务。猫猫旅行、连登、
+       抽奖、夜猫子都不在这里，避免一次点击误消耗每日额度。 -->
   <section id="sectionGrowthTasks">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
-        <h2 style="margin:0">国内版任务</h2>
-        <div style="font-size:12px;color:var(--dim)">全自动批量接取、事件上报点亮并领取官方成长积分，以及猫猫日常与打卡</div>
+        <h2 style="margin:0">一次性 / 活动福利</h2>
+        <div style="font-size:12px;color:var(--dim)">批量接取、事件上报并领取成长任务、活动任务与小程序任务奖励；不包含任何每日福利。</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select id="growthAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
@@ -5998,34 +6077,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="growthAutoClaim" checked onchange="saveGrowthAutoClaim(this.checked)"> 自动领取
         </label>
-        <button class="primary" id="btnRunAllCnTasks" onclick="runAllCnTasks(this)">一键执行国内任务</button>
-        <button class="sec mini" id="btnRunTasks" onclick="runGrowthTasks(this)">一键做任务领积分</button>
-        <button id="btnCatTravel" onclick="triggerCatTravel(this)">猫猫旅行</button>
-        <button id="btnRunStreakBonus" onclick="triggerStreakBonus(this)">连登管家与抽奖</button>
-      </div>
-    </div>
-
-    <div class="cards" style="margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(185px,1fr))">
-      <div class="card" title="WorkBuddy 成长计划连续登录活跃天数；达到 7/14/28 天可兑换连登奖励">
-        <div class="k">当前连续登录天数</div>
-        <div class="v" id="stkDays" style="color:var(--accent2)">-</div>
-        <div style="font-size:11px;color:var(--dim);margin-top:4px">WorkBuddy 成长计划</div>
-      </div>
-      <div class="card">
-        <div class="k">补签卡余额</div>
-        <div class="v" id="makeupCards">-</div>
-      </div>
-      <div class="card warn">
-        <div class="k">成长抽奖次数</div>
-        <div class="v" id="lotteryChances" style="color:var(--warn)">-</div>
-      </div>
-      <div class="card accent2">
-        <div class="k">猫猫旅行状态</div>
-        <div class="v" id="catState" style="font-size:19px">-</div>
-      </div>
-      <div class="card">
-        <div class="k">成长能量余额</div>
-        <div class="v" id="nrgBalance">-</div>
+        <button class="primary" id="btnRunTasks" onclick="runGrowthTasks(this)">一键完成一次性任务</button>
       </div>
     </div>
 
@@ -9422,7 +9474,9 @@ async function loadGrowthTasks(){
   try{
     const q = (CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all') ? ('?uid=' + encodeURIComponent(CURRENT_GROWTH_UID)) : '';
     const r = await getJSON('/tasks' + q);
-    const tasks = r.tasks || [];
+    // black_cat 是每日任务，有独立按钮；不放进一次性任务表，避免表内动作
+    // 被误解为会顺带消耗每日额度。
+    const tasks = (r.tasks || []).filter(t => String(t.task_code || '') !== 'black_cat');
     const sum = r.summary || {};
     const accts = r.accounts || [];
     const streak = sum.streak_days || 0;
@@ -9585,8 +9639,27 @@ async function runGrowthTasks(btn, uidOverride){
   }
 }
 
-async function runAllCnTasks(btn, uidOverride){
-  if(btn){ btn.disabled = true; btn.textContent = '国内任务执行中...'; }
+async function runOneTimeTasksForUids(btn, uids){
+  const targets = Array.isArray(uids) ? uids.filter(Boolean) : [uids].filter(Boolean);
+  if(!targets.length) return true;
+  const failures = [];
+  let allOk = true;
+  for(const uid of targets){
+    const ok = await runGrowthTasks(btn, uid);
+    if(ok === false){
+      allOk = false;
+      failures.push(String(uid).slice(0, 8));
+    }
+  }
+  if(failures.length){
+    toast('一次性任务未完成：' + failures.join('、'), 'warn');
+  }
+  return allOk;
+}
+
+async function runAllDailyTasks(btn, uidOverride, opts){
+  opts = opts || {};
+  if(btn){ btn.disabled = true; btn.textContent = '每日任务执行中...'; }
   const results = [];
   const failures = [];
   const step = async (name, fn, button, uid) => {
@@ -9601,30 +9674,37 @@ async function runAllCnTasks(btn, uidOverride){
       failures.push(name + '：' + (e && e.message ? e.message : String(e)));
     }
   };
-  const growthBtn = document.getElementById('btnRunTasks');
   const catBtn = document.getElementById('btnCatTravel');
   const streakBtn = document.getElementById('btnRunStreakBonus');
+  const nightBtn = document.getElementById('btnRunNightTask');
+  const checkinBtn = document.getElementById('btnPageCheckin');
   const targets = Array.isArray(uidOverride)
     ? uidOverride.filter(Boolean)
     : [uidOverride];
   try {
     if(Array.isArray(uidOverride) && !targets.length) return;
+    if(!opts.skipIntl){
+      await step('国际版签到', doDailyChatPending,
+        document.getElementById('btnPageDailyChatPending'), null);
+    }
     for(const uid of targets){
       const suffix = (targets.length > 1 && uid)
         ? '（' + String(uid).slice(0, 8) + '）'
         : '';
-      await step('成长任务' + suffix, runGrowthTasks, growthBtn, uid);
+      await step('国内版签到' + suffix, triggerBuddyCheckin, checkinBtn, uid);
       await step('猫猫旅行' + suffix, triggerCatTravel, catBtn, uid);
       await step('连登管家与抽奖' + suffix, triggerStreakBonus, streakBtn, uid);
+      await step('夜猫子任务' + suffix, triggerNightTask, nightBtn, uid);
     }
     if (failures.length) {
       const done = results.length ? results.join('；') : '没有步骤完成';
-      toast('国内任务执行：' + done + '。失败：' + failures.join('；'), 'warn');
+      toast('每日任务执行：' + done + '。失败：' + failures.join('；'), 'warn');
     } else {
-      toast('国内任务已执行：' + results.join('；'), 'ok');
+      toast('每日任务已执行：' + results.join('；'), 'ok');
     }
+    return failures.length === 0;
   } finally {
-    if(btn){ btn.disabled = false; btn.textContent = '一键执行国内任务'; }
+    if(btn){ btn.disabled = false; btn.textContent = '一键执行每日任务'; }
   }
 }
 
@@ -9674,15 +9754,14 @@ async function triggerCatTravel(btn, uidOverride){
   }
 }
 
-async function triggerBuddyCheckin(btn){
+async function triggerBuddyCheckin(btn, uidOverride){
   if(btn){ btn.disabled = true; }
   const ot = btn ? btn.textContent : '';
   if(btn) btn.textContent = "签到中...";
   try {
     const payload = {};
-    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
-      payload.uid = CURRENT_GROWTH_UID;
-    }
+    const uid = taskUidForRequest(uidOverride);
+    if(uid) payload.uid = uid;
     const r = await postJSON("/accounts/checkin", payload);
     const res = r.results || [];
     let ok = false;
@@ -9719,6 +9798,27 @@ async function triggerStreakBonus(btn, uidOverride){
     return false;
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '连登管家与抽奖'; }
+  }
+}
+
+async function triggerNightTask(btn, uidOverride){
+  if(btn){ btn.disabled = true; btn.textContent = '执行中...'; }
+  try{
+    const payload = {};
+    const uid = taskUidForRequest(uidOverride);
+    if(uid) payload.uid = uid;
+    const r = await postJSON("/tasks/night", payload);
+    const ok = r.ok !== false;
+    toast(r.msg || (ok ? "夜猫子任务执行完成" : "夜猫子任务未完成"),
+      ok ? "ok" : "warn");
+    await loadAccounts();
+    await loadGrowthTasks();
+    return ok;
+  }catch(e){
+    toast("夜猫子任务失败: " + e.message, "bad");
+    return false;
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '夜猫子任务'; }
   }
 }
 
@@ -9816,13 +9916,16 @@ async function doDailyChat(btn){
   try {
     const r = await postJSON("/accounts/daily-chat", {});
     const res = r.results || [];
+    let ok = false;
     if(!res.length) toast("未发现国际版账号", "warn");
     else {
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "活跃打卡成功" : (x.error||x.msg))).join("；");
-      toast("每日活跃: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+      ok = res.some(x => x.ok);
+      toast("每日活跃: " + summary, ok ? "ok" : "warn");
     }
     await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
-  }catch(e){ toast("打卡失败: " + e.message, "bad"); }
+    return ok;
+  }catch(e){ toast("打卡失败: " + e.message, "bad"); return false; }
   finally { btn.disabled = false; btn.textContent = ot; }
 }
 
@@ -9848,19 +9951,24 @@ function pendingDailyChatTip(pending){
  * 全部已打卡时直接提示，不发请求——重复打卡不会多给积分，只会白烧账号额度。 */
 async function doDailyChatPending(btn){
   const pending = pendingDailyChatAccounts();
-  if(!pending.length){ toast("国际版账号今天都已打卡", "ok"); return; }
-  btn.disabled = true; const ot = btn.textContent; btn.textContent = "打卡中...";
+  if(!pending.length){ toast("国际版账号今天都已打卡", "ok"); return true; }
+  if(btn){ btn.disabled = true; }
+  const ot = btn ? btn.textContent : '';
+  if(btn) btn.textContent = "打卡中...";
   try {
     const r = await postJSON("/accounts/daily-chat", {uids: pending.map(a => String(a.uid))});
     const res = r.results || [];
+    let ok = false;
     if(!res.length) toast("未发现待打卡的国际版账号", "warn");
     else {
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "活跃打卡成功" : (x.error||x.msg))).join("；");
-      toast("未活跃打卡: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+      ok = res.some(x => x.ok);
+      toast("未活跃打卡: " + summary, ok ? "ok" : "warn");
     }
     await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
-  }catch(e){ toast("未活跃打卡失败: " + e.message, "bad"); }
-  finally { btn.disabled = false; btn.textContent = ot; }
+    return ok;
+  }catch(e){ toast("未活跃打卡失败: " + e.message, "bad"); return false; }
+  finally { if(btn){ btn.disabled = false; btn.textContent = ot; } }
 }
 
 /* 网页通道打卡：只建网页端会话（官方每日活跃只认网页端对话）。
@@ -11138,7 +11246,9 @@ function accountRow(a){
   const nameAttr = esc(String(a.nickname || '').replace(/["'\\<>]/g, ''));
   const usage = USAGE_BY_ACCOUNT[a.uid] || {};
   const isTokenBad = !!(a.tokenExpired || a.expiresIn === 'expired');
-  const state = !a.enabled
+  const state = a.accountBanned
+              ? '<span class="badge bad" title="上游已封禁该账号（403 / code 11140），已停止派发与自动任务。官方申诉解封后请在面板手动启用；不会自动恢复。">账号封禁</span>'
+              : !a.enabled
               ? (a.tasksEnabled
                  ? '<span class="badge off" title="不接 API 流量，但仍参与签到 / 任务">已停用 · 任务中</span>'
                  : '<span class="badge off">已停用</span>')
@@ -11173,7 +11283,9 @@ function accountRow(a){
   if (a.lastError && a.lastError !== 'HTTP 429 (model throttled)') {
     const httpM = String(a.lastError).match(/HTTP\s+(\d{3})/);
     const codeM = String(errFull).match(/"code"\s*:\s*(\d+)/);
-    const label = httpM
+    const label = codeM && codeM[1] === '11140'
+      ? '账号封禁 · code:11140'
+      : httpM
       ? ('HTTP ' + httpM[1] + (codeM ? ' · code:' + codeM[1] : ''))
       : String(a.lastError).slice(0, 60);
     err = '<div class="acct-err" data-tip="' + esc(errFull) + '">'
@@ -11194,7 +11306,7 @@ function accountRow(a){
   }
   // 账号档位（#505）读自上游计费摘要，包名原样显示（国际版 Free、国内版体验版），
   // 与 workbuddy 官方叫法一致，不自造「免费 / 付费」标签。tier 为空 = 还没读过，
-  // 那是「未知」而不是免费，所以不画任何胶囊（企业号与被风控限制的号也是空）。
+  // 那是「未知」而不是免费，所以不画任何胶囊（企业号与被封禁的号也是空）。
   //
   // 位置放在「版本」格里、区域徽章的正下方：这一格只有一枚区域徽章（实测 76px
   // 宽、内容约 52px），是全表唯一还有余量又不会被别的元素挤到的地方。积分格
@@ -11242,11 +11354,10 @@ function accountRow(a){
     + '<td style="text-align:left" data-label="账号">'
     // 账号名（大一号）+ 备注 chip 同一行；备注从独立一行收进账号后面。
     +   '<div class="acct-name-row">'
-    +     (POOL_SEPARATION_EFFECTIVE
-          ? '<input type="checkbox" class="acct-sel" data-uid="' + uidAttr + '"'
-    +     ' onchange="updateBatchPoolBar()" onclick="event.stopPropagation()"'
-    +     ' style="vertical-align:middle;margin-right:2px" title="勾选后可批量挪号池">'
-          : '')
+    +     '<input type="checkbox" class="acct-sel" data-uid="' + uidAttr + '"'
+    +     (ACCOUNT_SELECTED.has(String(a.uid || '')) ? ' checked' : '')
+    +     ' onchange="toggleAccountSelection(this)" onclick="event.stopPropagation()"'
+    +     ' style="vertical-align:middle;margin-right:2px" title="勾选后可批量导出、启用、停用或删除；开启号池隔离时也可批量挪号池">'
     +     (POOL_SEPARATION_EFFECTIVE
           ? '<span class="badge mini' + ((a.poolScope==='media')?' warn':'') + '"'
     +     ' style="cursor:pointer;margin-right:4px"'
@@ -11391,16 +11502,30 @@ function accountsInView(){
 
 // 纯展示筛选：账号池、禁用汇总和批量操作的输入仍使用 accountsInView()。
 function accountIsHealthy(a){
-  return !!a.enabled && !(a.tokenExpired || a.expiresIn === 'expired')
+  return !!a.enabled && !a.accountBanned && !(a.tokenExpired || a.expiresIn === 'expired')
     && !a.inCooldown && !a.breakerFor && !a.degradeFor
     && !a.reserveBlocked && !a.dailyLimitBlocked && !a.creditLimitReached;
 }
-const ACCOUNT_FILTERS = {query: '', status: '', group: ''};
+const ACCOUNT_FILTERS = {query: '', status: '', group: '', errorCode: ''};
+function accountErrorText(a){
+  return String((a && (a.lastErrorDetail || a.lastError)) || '');
+}
+function accountErrorCode(a){
+  if(a && a.accountBanned) return '11140';
+  const text = accountErrorText(a);
+  const bodyCode = text.match(/"code"\s*:\s*"?(\d+)"?/i);
+  if(bodyCode) return bodyCode[1];
+  const labelCode = text.match(/\bcode\s*[:=]\s*"?(\d+)"?/i);
+  if(labelCode) return labelCode[1];
+  const httpCode = text.match(/\bHTTP\s+(\d{3})\b/i);
+  return httpCode ? httpCode[1] : '';
+}
 function accountMatchesFilters(a){
   const q = ACCOUNT_FILTERS.query.trim().toLowerCase();
   if(q && ![a.nickname, a.note, a.uid].some(v => String(v || '').toLowerCase().includes(q))) return false;
   if(ACCOUNT_FILTERS.group && String(a.group || '') !== ACCOUNT_FILTERS.group) return false;
-  if(ACCOUNT_FILTERS.status === 'disabled') return !a.enabled;
+  if(ACCOUNT_FILTERS.errorCode && accountErrorCode(a) !== ACCOUNT_FILTERS.errorCode) return false;
+  if(ACCOUNT_FILTERS.status === 'disabled') return !a.enabled || !!a.accountBanned;
   const attention = !accountIsHealthy(a);
   if(ACCOUNT_FILTERS.status === 'healthy') return !attention;
   if(ACCOUNT_FILTERS.status === 'attention') return !!attention;
@@ -11412,20 +11537,129 @@ function resetAccountFilters(){
   ACCOUNT_FILTERS.query = '';
   ACCOUNT_FILTERS.status = '';
   ACCOUNT_FILTERS.group = '';
+  ACCOUNT_FILTERS.errorCode = '';
   const q = document.getElementById('accountSearchFilter');
   const s = document.getElementById('accountStatusFilter');
   const g = document.getElementById('accountGroupFilter');
+  const e = document.getElementById('accountErrorFilter');
   if(q) q.value = '';
   if(s) s.value = '';
   if(g) g.value = '';
+  if(e) e.value = '';
 }
 function clearAccountFilters(){
   resetAccountFilters();
+  clearAccountSelection();
   renderAccounts();
 }
 
+const ACCOUNT_SELECTED = new Set();
+
+function clearAccountSelection(){
+  ACCOUNT_SELECTED.clear();
+}
+
+function filteredAccountsForBulk(){
+  // Keep this in lockstep with renderAccounts(): current realm, pool scope,
+  // and every display filter. Selecting a filtered result must never reach
+  // accounts the operator cannot currently see.
+  let list = accountsInView();
+  if(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'){
+    list = list.filter(a => String(a.poolScope || 'text') === POOL_FILTER);
+  }
+  return list.filter(accountMatchesFilters);
+}
+
+function selectFilteredAccounts(btn){
+  const list = filteredAccountsForBulk();
+  if(!list.length){ toast('当前筛选结果没有账号', 'warn'); return; }
+  ACCOUNT_SELECTED.clear();
+  list.forEach(a => ACCOUNT_SELECTED.add(String(a.uid || '')));
+  renderAccounts();
+  toast('已选中筛选结果中的 ' + list.length + ' 个账号', 'ok');
+}
+
+function setAccountErrorFilter(code){
+  ACCOUNT_FILTERS.errorCode = String(code || '');
+  clearAccountSelection();
+  if(ACCOUNT_FILTERS.errorCode){
+    filteredAccountsForBulk().forEach(a =>
+      ACCOUNT_SELECTED.add(String(a.uid || '')));
+  }
+  renderAccounts();
+  if(ACCOUNT_FILTERS.errorCode){
+    toast('错误码 ' + ACCOUNT_FILTERS.errorCode + ' 已勾选 '
+          + ACCOUNT_SELECTED.size + ' 个账号',
+          ACCOUNT_SELECTED.size ? 'ok' : 'warn');
+  }
+}
+
+function toggleAccountSelection(box){
+  const uid = box && box.dataset ? String(box.dataset.uid || '') : '';
+  if(!uid) return;
+  if(box.checked) ACCOUNT_SELECTED.add(uid);
+  else ACCOUNT_SELECTED.delete(uid);
+  const row = box.closest ? box.closest('tr') : null;
+  const name = row && row.querySelector ? row.querySelector('.acct-name') : null;
+  toast((box.checked ? '已勾选 ' : '已取消 ') + (name ? name.textContent : uid.slice(0, 8)),
+        box.checked ? 'ok' : 'warn');
+  updateBatchPoolBar();
+}
+
+function selectedAccountsForBulk(){
+  const visible = new Set(accountsInView().map(a => String(a.uid || '')));
+  return (window.ACCOUNTS || []).filter(a =>
+    visible.has(String(a.uid || '')) && ACCOUNT_SELECTED.has(String(a.uid || '')));
+}
+
+async function deleteSelectedAccounts(btn){
+  const targets = selectedAccountsForBulk();
+  if(!targets.length){ toast('请先勾选要删除的账号', 'warn'); return; }
+  const preview = targets.slice(0, 8)
+    .map(a => (a.nickname || String(a.uid || '').slice(0, 8)))
+    .join('、');
+  const more = targets.length > 8 ? ' 等' : '';
+  if(!confirm('确定删除已勾选的 ' + targets.length + ' 个账号？\n\n'
+      + preview + more + '\n\n只删除当前视图内已勾选的账号；此操作不可撤销。')) return;
+  if(btn) btn.disabled = true;
+  const failures = [];
+  let deleted = 0;
+  try{
+    for(const a of targets){
+      try{
+        const r = await postJSON('/accounts/delete', {uid: a.uid});
+        if(r && r.deleted) deleted += 1;
+        else failures.push(a.nickname || String(a.uid || '').slice(0, 8));
+      }catch(e){
+        failures.push((a.nickname || String(a.uid || '').slice(0, 8))
+          + '：' + (e && e.message ? e.message : String(e)));
+      }
+    }
+    targets.forEach(a => ACCOUNT_SELECTED.delete(String(a.uid || '')));
+    if(typeof CURRENT_GROWTH_UID !== 'undefined'
+        && targets.some(a => a.uid === CURRENT_GROWTH_UID)){
+      CURRENT_GROWTH_UID = 'all';
+    }
+    await loadAccounts();
+    if(typeof loadGrowthTasks === 'function'){
+      await loadGrowthTasks();
+    }
+    if(failures.length){
+      toast('已删除 ' + deleted + ' 个，失败 ' + failures.length + ' 个：'
+        + failures.slice(0, 5).join('；'), 'warn');
+    }else{
+      toast('已删除 ' + deleted + ' 个账号', 'ok');
+    }
+  }finally{
+    if(btn){
+      btn.disabled = false;
+      renderAccounts();
+    }
+  }
+}
+
 // 当前禁用总览：把散落在账号卡片上的停用/限流状态汇总成一张表。
-// 四类来源：①面板手动停用 ②上游账号级冷却 ③上游模型级冷却 ④本地日限额/积分护栏。
+// 四类来源：①面板手动停用 ②上游账号封禁 ③上游模型级冷却 ④本地日限额/积分护栏。
 // 全部读 window.ACCOUNTS，不额外发请求；数据与账号卡片同源，不会互相矛盾。
 // 只描述当前视图（accountsInView）：计数、分组与空状态都从这同一份过滤后的数据
 // 算出来，否则切到国内版时会看到国际版的停用状态（issue #31）。
@@ -11441,11 +11675,15 @@ function disabledRows(){
     const who = (a.nickname || '?') + ' (' + String(a.uid || '').slice(0, 8) + ')';
     const realm = a.realm === 'cn' ? '国内版' : '国际版';
     const detail = a.lastErrorDetail || '';
-    if(!a.enabled){
+    if(a.accountBanned){
+      rows.push({who, realm, scope: '账号', kind: '账号封禁', detail,
+                 reason: '上游已封禁该账号（403 / code 11140）；停止换号重试，请按 WorkBuddy 官方渠道申诉，解封后手动启用',
+                 until: '—（需手动启用）', manual: true});
+    } else if(!a.enabled){
       rows.push({who, realm, scope: '账号', kind: '本地停用', manual: true,
                  reason: '面板手动停用，该账号不参与轮询', until: ''});
     }
-    if(a.inCooldown){
+    if(a.inCooldown && !a.accountBanned){
       const secs = Number(a.cooldownFor || 0);
       const streak = Number(a.softStreak || 0);
       rows.push({who, realm, scope: '账号', kind: '上游限流', detail,
@@ -11518,7 +11756,8 @@ function renderDisabled(){
     box.innerHTML = '<div class="legend" style="margin:0"><span>当前没有禁用的账号或模型。</span></div>';
     return;
   }
-  const badge = k => k === '上游限流' ? 'warn' : (k === '本地停用' || k === '熔断' ? 'bad' : 's');
+  const badge = k => k === '上游限流' ? 'warn'
+    : (k === '本地停用' || k === '熔断' || k === '账号封禁' ? 'bad' : 's');
   box.innerHTML = '<div class="table-wrap"><table class="data-cards"><thead><tr>'
     + '<th style="text-align:left">账号</th>'
     + '<th style="text-align:center;width:76px">版本</th>'
@@ -11712,6 +11951,7 @@ function accountsRenderFp(){
   return [
     window.VIEW_REALM || 'intl', ACCT_PAGE,
     POOL_SEPARATION_EFFECTIVE ? POOL_FILTER : 'all',
+    JSON.stringify([...ACCOUNT_SELECTED].sort()),
     JSON.stringify(SORT_STATE.accounts || null),
     JSON.stringify(ACCOUNT_FILTERS),
     new Date().toDateString(),
@@ -11753,6 +11993,7 @@ function renderAccounts(){
   renderDisabled();
   if(typeof updateTaskPageCheckinCards === 'function') updateTaskPageCheckinCards();
   const box = document.getElementById('accounts');
+  if(!box) return;
   const currentView = (window.VIEW_REALM || "intl");
   let list = accountsInView();
   if(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'){
@@ -11761,7 +12002,7 @@ function renderAccounts(){
   const skipIfSame = arguments[0] === true;
   if(ACCT_PAGE_REALM !== currentView){ ACCT_PAGE_REALM = currentView; ACCT_PAGE = 1; }
   const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status
-    + '\u0001' + ACCOUNT_FILTERS.group + '\u0001'
+    + '\u0001' + ACCOUNT_FILTERS.group + '\u0001' + ACCOUNT_FILTERS.errorCode + '\u0001'
     + (POOL_SEPARATION_EFFECTIVE ? POOL_FILTER : 'all');
   const groupSelect = document.getElementById('accountGroupFilter');
   if(groupSelect){
@@ -11777,6 +12018,15 @@ function renderAccounts(){
   list = list.filter(accountMatchesFilters);
   const filterCount = document.getElementById('accountFilterCount');
   if(filterCount) filterCount.textContent = '显示 ' + list.length + ' / ' + unfilteredCount + ' 个账号';
+  const selectFilteredBtn = document.getElementById('btnSelectFiltered');
+  if(selectFilteredBtn){
+    const filtered = !!(ACCOUNT_FILTERS.query.trim() || ACCOUNT_FILTERS.status
+      || ACCOUNT_FILTERS.group || ACCOUNT_FILTERS.errorCode);
+    selectFilteredBtn.disabled = !list.length || !filtered;
+    selectFilteredBtn.textContent = (list.length && filtered)
+      ? ('全选筛选结果 (' + list.length + ')')
+      : '全选筛选结果';
+  }
   // 排序：停用的永远沉底（备注/权重再高也一样）→ 备注是启用组内的加分项
   // （有备注的账号只在同权重时排前面，不再全局置顶）→ 权重高的在前 →
   // 同权重保持服务端顺序稳定，表格不乱跳。
@@ -11950,6 +12200,7 @@ async function toggleAccount(uid, enable, btn){
 function poolFilter(scope, btn){
   if(!POOL_SEPARATION_EFFECTIVE) return;
   POOL_FILTER = scope === 'media' ? 'media' : (scope === 'text' ? 'text' : 'all');
+  clearAccountSelection();
   ['pfAll','pfText','pfMedia'].forEach(function(id){
     const el = document.getElementById(id);
     if(el) el.classList.toggle('active', el === btn);
@@ -11975,13 +12226,74 @@ function acctSelUids(){
     .filter(Boolean);
 }
 function updateBatchPoolBar(){
-  const n = acctSelUids().length;
+  const n = POOL_SEPARATION_EFFECTIVE
+    ? acctSelUids().length
+    : selectedAccountsForBulk().length;
   const label = document.getElementById('batchPoolCount');
   if(label) label.textContent = n ? ('已选 ' + n + ' 个') : '未勾选';
   ['batchToMedia','batchToText'].forEach(function(id){
     const el = document.getElementById(id);
     if(el) el.disabled = !POOL_SEPARATION_EFFECTIVE || !n;
   });
+  const bulkButtons = [
+    ['btnExportSelected', '导出已选'],
+    ['btnEnableSelected', '启用已选'],
+    ['btnDisableSelected', '停用已选'],
+    ['btnDeleteSelected', '删除已选'],
+  ];
+  bulkButtons.forEach(function(pair){
+    const el = document.getElementById(pair[0]);
+    if(!el) return;
+    el.disabled = !n;
+    el.textContent = n ? (pair[1] + ' (' + n + ')') : pair[1];
+  });
+}
+
+function bulkActionLabel(account){
+  return (account && (account.nickname || String(account.uid || '').slice(0, 8))) || '';
+}
+
+async function exportSelectedAccounts(btn){
+  const targets = selectedAccountsForBulk();
+  if(!targets.length){ toast('请先勾选要导出的账号', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try{
+    const query = targets.map(a => 'uid=' + encodeURIComponent(a.uid)).join('&');
+    const r = await downloadExport('?' + query,
+      targets.length === 1 ? (String(targets[0].uid).slice(0, 8) + '-') : 'selected-');
+    toast('已导出 ' + r.count + ' 个已选账号 → ' + r.name, 'ok');
+  }catch(e){
+    toast('导出已选失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+    updateBatchPoolBar();
+  }
+}
+
+async function setSelectedEnabled(enable, btn){
+  const targets = selectedAccountsForBulk();
+  if(!targets.length){ toast('请先勾选要' + (enable ? '启用' : '停用') + '的账号', 'warn'); return; }
+  const preview = targets.slice(0, 8).map(bulkActionLabel).join('、');
+  const more = targets.length > 8 ? ' 等' : '';
+  const action = enable ? '启用' : '停用';
+  if(!confirm('确定' + action + '已勾选的 ' + targets.length + ' 个账号？\n\n'
+      + preview + more + '\n\n只作用于当前视图内已勾选的账号。'
+      + (enable ? '\n\n启用会同时清除这些账号的封禁标记。' : ''))) return;
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON('/accounts/set-all', {
+      uids: targets.map(a => a.uid),
+      enabled: enable === true,
+    });
+    const changed = (r && r.changed != null) ? r.changed : targets.length;
+    await loadAccounts();
+    toast('已' + action + ' ' + changed + ' 个已选账号', 'ok');
+  }catch(e){
+    toast(action + '已选失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+    updateBatchPoolBar();
+  }
 }
 async function batchPoolScope(scope, btn){
   if(!POOL_SEPARATION_EFFECTIVE){
@@ -12433,12 +12745,16 @@ async function downloadExport(query, fallbackLabel){
   try{ doc = JSON.parse(text); }catch(e){ throw new Error('返回内容不是 JSON'); }
   const stamp = new Date().toISOString().slice(0,19).replace(/[-:T]/g,'');
   const name = 'workbuddy-accounts-' + (fallbackLabel || '') + stamp + '.json';
-  const blob = new Blob([text], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = name;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // 浏览器路径走 Blob；测试 / 无 DOM 宿主则返回同一份文本，由调用方提示即可。
+  if(typeof Blob === 'function' && typeof URL !== 'undefined'
+      && typeof URL.createObjectURL === 'function'){
+    const blob = new Blob([text], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   return {count: doc.count || 0, name: name};
 }
 
@@ -12726,12 +13042,23 @@ async function offerCnTasksAfterImport(uids){
     return a && a.nickname ? a.nickname : uid.slice(0, 8);
   });
   const who = labels.length === 1 ? labels[0] : (labels.length + ' 个国内版账号');
-  if(!confirm('本次导入包含 ' + who + '，是否立即执行国内版任务？\n\n'
-      + '将依次执行成长任务、猫猫旅行、连登管家与抽奖；只处理本次导入的账号。')) return;
+  const oneTime = confirm('本次导入包含 ' + who + '，是否立即执行一次性 / 活动任务？\n\n'
+      + '将执行成长任务、活动任务与小程序任务；只处理本次导入的账号。');
+  const daily = confirm('是否同时执行这些账号的国内版每日任务？\n\n'
+      + '将执行 Buddy 加油站签到、猫猫旅行、连登管家与抽奖、夜猫子任务；'
+      + '只处理本次导入的账号，不会跑国际版签到。');
+  if(!oneTime && !daily) return;
   const tabBtn = document.getElementById('btnNavTasks');
   if(tabBtn) switchMainTab('tasks');
-  toast('正在执行国内版任务：成长任务 → 猫猫旅行 → 连登管家与抽奖', 'ok');
-  await runAllCnTasks(document.getElementById('btnRunAllCnTasks'), uids);
+  if(oneTime){
+    toast('正在执行一次性 / 活动任务：只处理本次导入账号', 'ok');
+    await runOneTimeTasksForUids(document.getElementById('btnRunTasks'), uids);
+  }
+  if(daily){
+    toast('正在执行国内版每日任务：只处理本次导入账号', 'ok');
+    await runAllDailyTasks(document.getElementById('btnRunAllDailyTasks'), uids,
+      {skipIntl: true});
+  }
 }
 
 /* 桌面客户端账号：两步确认（先扫描展示弹窗，再逐条导入） */
@@ -22378,7 +22705,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     gateway: { title: '网关', desc: '模型目录、能力、思考档位与在售倍率。' },
     accounts: { title: '账号', desc: 'WorkBuddy 与 CodeArts 账号、积分和签到记录。' },
     analytics: { title: '用量', desc: 'Token、请求、缓存、成本和剩余额度。' },
-    tasks: { title: '自动化', desc: '后台调度器、国际版签到、国内版签到和国内版任务。' },
+    tasks: { title: '自动化', desc: '后台调度器、一次性 / 活动福利和每日任务。' },
     agents: { title: '智能体', desc: '把本机 AI 客户端一键指向当前网关。' },
     media: { title: '媒体', desc: '图片与视频生成任务、额度、价格和账号分配。' },
     settings: { title: '设置', desc: 'API Key、出口、模型、调度和系统选项。' },

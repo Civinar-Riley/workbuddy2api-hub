@@ -991,9 +991,14 @@ def run_miniprogram_tasks(account, gap=1.0, claim=True):
 
 
 def run_growth_tasks(account, gap=1.0, claim=True):
-    """完整执行批量成长任务点亮与领奖。
+    """执行一次性 / 活动成长任务，不含任何每日福利副作用。
 
     claim=False 只推进进度、不领奖，让用户自己挑时间领取（#507）。
+
+    猫猫旅行、Buddy 盲盒、连登管家、抽奖与夜猫子都属于每日任务，由
+    do_cat_travel() / do_buddy_open() / run_streak_bonus() / run_night_growth()
+    分别执行。这里只处理成长任务清单里的一次性任务和活动任务，避免用户点
+    「一次性任务」时顺带消耗每日额度。
     """
     if account.realm != "cn":
         return {"ok": False, "msg": "国际版不适用国内成长任务中心", "logs": []}
@@ -1009,17 +1014,20 @@ def run_growth_tasks(account, gap=1.0, claim=True):
 
     total_earned = 0
 
-    # 0. auto 类任务（如 first_buddy）不需要接取，且可能是其他任务与猫猫旅行
-    #    的前置：必须先把它们点亮并领奖（first_buddy 的奖励就是 Buddy 实例），
-    #    否则 single 任务接取会报 "prerequisite not met: first_buddy"。
+    # 0. auto 类任务（如 first_buddy）不需要接取，且可能是其他任务的前置：
+    #    必须先把它们点亮并领奖（first_buddy 的奖励就是 Buddy 实例），否则
+    #    single 任务接取会报 "prerequisite not met: first_buddy"。
+    #    夜猫子是每日任务，不在这里处理。
     for t in tasks:
-        if t.get("task_type") == "auto":
+        if (t.get("task_type") == "auto"
+                and t.get("task_code") not in NIGHT_TASK_CODES):
             total_earned += _progress_one(account, t, logs, gap, claim=claim)
 
     # 1. 批量接取未接任务（auto 类不接受接取，unforgeable 无法自动化）
     def _needs_accept(x):
         return (x["status"] == "not_accepted" and not x.get("unforgeable")
-                and x.get("task_type") != "auto")
+                and x.get("task_type") != "auto"
+                and x.get("task_code") not in NIGHT_TASK_CODES)
 
     unaccepted = [t["task_code"] for t in tasks if _needs_accept(t)]
     if unaccepted:
@@ -1054,7 +1062,8 @@ def run_growth_tasks(account, gap=1.0, claim=True):
 
     # 2. 处理每个任务（auto 已在第 0 步处理过）
     for t in tasks:
-        if t.get("task_type") == "auto":
+        if (t.get("task_type") == "auto"
+                or t.get("task_code") in NIGHT_TASK_CODES):
             continue
         total_earned += _progress_one(account, t, logs, gap, claim=claim)
 
@@ -1066,29 +1075,9 @@ def run_growth_tasks(account, gap=1.0, claim=True):
     except Exception as exc:
         logs.append(f"! 小程序成长任务执行异常: {exc}")
 
-    # 3. 顺手检查猫猫旅行与 Buddy 盲盒
-    tr_res = do_cat_travel(account)
-    if tr_res.get("msg"):
-        logs.append(f"猫猫日常: {tr_res.get('msg')}")
-        if tr_res.get("credit"):
-            total_earned += tr_res.get("credit", 0)
-    if tr_res.get("action") == "claim":
-        time.sleep(gap)
-        bo_res = do_buddy_open(account)
-        if bo_res.get("action") == "open":
-            logs.append(f"Buddy 盲盒: {bo_res.get('msg')}")
-        time.sleep(gap)
-        tr2 = do_cat_travel(account)
-        if tr2.get("msg") and tr2.get("action") == "depart":
-            logs.append(f"猫猫日常: {tr2.get('msg')}")
-    else:
-        bo_res = do_buddy_open(account)
-        if bo_res.get("action") == "open":
-            logs.append(f"Buddy 盲盒: {bo_res.get('msg')}")
-
-    # 4. 刷新积分余额
+    # 3. 刷新积分余额。每日福利不在这里执行。
     account.fetch_credits()
-    logs.append(f"🎉 全部完成！本次累计新增到账: +{total_earned} 积分，当前总剩余: {account.credits.get('remain', 0)} 积分")
+    logs.append(f"🎉 一次性 / 活动任务执行完毕！本次累计新增到账: +{total_earned} 积分，当前总剩余: {account.credits.get('remain', 0)} 积分")
     return {"ok": True, "logs": logs, "earned_credit": total_earned, "credits": account.credits}
 
 

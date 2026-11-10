@@ -97,7 +97,7 @@ class FakeAccount(object):
         self.uid = "fake-uid-1234"
         self.realm = realm
         self.tasks_enabled = True
-        self.restricted_until = 0.0
+        self.account_banned = False
         self.expires_at = 0.0
         self.last_error = ""
         self.checkins = 0

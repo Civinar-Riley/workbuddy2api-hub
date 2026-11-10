@@ -60,6 +60,15 @@ check('连续软限流次数进 tooltip', cooled.includes('连续软限流 3 次
 check('只在连踩时才提次数', !row({inCooldown: true, cooldownFor: 60, softStreak: 1})
   .includes('连续软限流'), 'streak=1 不该出现该措辞');
 
+const banned = row({enabled: false, tasksEnabled: false, accountBanned: true,
+  inCooldown: true, cooldownFor: 7200});
+check('11140 账号封禁要有独立徽章', banned.includes('账号封禁'), banned);
+check('11140 账号封禁不能显示为冷却', !banned.includes('冷却'), banned);
+check('11140 账号封禁不能显示为普通停用', !banned.includes('已停用'), banned);
+check('账号封禁优先于普通冷却',
+  row({enabled: false, accountBanned: true, breakerFor: 1800, inCooldown: true})
+    .includes('账号封禁'));
+
 check('小时级剩余时间格式（2h05m 风格）', /降权 1h\d{2}m/.test(row({degradeFor: 6300})),
   row({degradeFor: 6300}));
 
@@ -99,16 +108,29 @@ api.setView('intl');
 api.setAccounts([
   {uid: 'intl-brk-0001', nickname: '熔断号', realm: 'intl', enabled: true, breakerFor: 1800},
   {uid: 'intl-deg-0002', nickname: '降权号', realm: 'intl', enabled: true, degradeFor: 600},
+  {uid: 'intl-ban-0004', nickname: '封禁号', realm: 'intl', enabled: false,
+   tasksEnabled: false, accountBanned: true,
+   inCooldown: true, cooldownFor: 7200},
   {uid: 'intl-ok-0003', nickname: '正常号', realm: 'intl', enabled: true},
 ]);
 const rows = api.disabledRows();
 const kinds = rows.map(r => r.kind);
 check('总览要包含熔断', kinds.includes('熔断'), kinds.join(','));
 check('总览要包含降权', kinds.includes('降权'), kinds.join(','));
+check('总览要包含账号封禁', kinds.includes('账号封禁'), kinds.join(','));
+check('账号封禁不能同时画成上游限流',
+  !rows.some(r => r.who.includes('封禁号') && r.kind === '上游限流'),
+  JSON.stringify(rows));
 const brk = rows.find(r => r.kind === '熔断');
 check('熔断行要写清与账号本身无关', /账号与凭证本身没问题/.test(brk.reason), brk.reason);
 check('熔断行给出恢复时间', !!brk.until, brk.until);
 check('正常账号不出现', !rows.some(r => r.who.includes('正常号')), JSON.stringify(rows));
+const ban = rows.find(r => r.kind === '账号封禁');
+check('账号封禁行必须手动启用', /手动启用/.test(ban.until), ban.until);
+check('账号封禁行提示官方申诉', /官方渠道申诉/.test(ban.reason), ban.reason);
+check('账号封禁不能同时画成本地停用',
+  !rows.some(r => r.who.includes('封禁号') && r.kind === '本地停用'),
+  JSON.stringify(rows));
 check('熔断与降权都只描述当前视图的账号',
   rows.every(r => r.realm === '国际版'), JSON.stringify(rows.map(r => r.realm)));
 

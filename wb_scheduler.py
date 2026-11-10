@@ -447,12 +447,11 @@ class Scheduler:
                 # 账号间随机错峰防并发风控（2~5秒浮动延时，issue #394）
                 time.sleep(random.uniform(2.0, 5.0))
             uid8 = acc.uid[:8] if acc.uid else "?"
-            # 上游账号级风控限制（403 / code 11140）中的账号一律跳过：无人值守
+            # 上游账号级封禁（403 / code 11140）中的账号一律跳过：无人值守
             # 的巡检/打卡再去「试探」一次，只会让同一台设备上的其他账号连坐。
-            # 限制期限是持久化的（wb_accounts.note_restricted），重启后仍然有效。
-            if getattr(acc, "restricted_until", 0.0) > time.time():
-                self.log(f"跳过受限账号 [{uid8}]：上游风控限制剩余 "
-                         f"{int(acc.restricted_until - time.time())}s")
+            # 封禁是持久禁用，只有操作者手动启用才解除。
+            if getattr(acc, "account_banned", False):
+                self.log(f"跳过封禁账号 [{uid8}]：需在面板手动启用")
                 continue
             # 区域级连坐暂停期间（同一窗口内多个账号被限制）整轮都不碰上游。
             try:

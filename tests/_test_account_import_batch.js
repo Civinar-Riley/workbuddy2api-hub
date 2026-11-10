@@ -160,36 +160,58 @@ const byId = id => document.getElementById(id);
   check('账号列表暂未刷新时按导入行识别国内版',
     JSON.stringify(cnFromRows) === JSON.stringify(['cn-row']), JSON.stringify(cnFromRows));
 
-  // 7. 确认框取消时不执行；确认后直接按本次 UID 列表执行三步流水线。
+  // 7. 两个确认框互相独立：一次性和每日任务只按本次 UID 列表执行。
   const offerStart = script.indexOf('async function offerCnTasksAfterImport');
   const offerEnd = script.indexOf('\n/* 桌面客户端账号', offerStart);
   check('能定位导入后任务确认函数', offerStart >= 0 && offerEnd > offerStart);
-  const makeOffer = (answer, calls, toasts) => new Function(
-    'confirm', 'toast', 'switchMainTab', 'runAllCnTasks', 'document', 'window',
+  const makeOffer = (answers, calls, toasts) => new Function(
+    'confirm', 'toast', 'switchMainTab', 'runOneTimeTasksForUids', 'runAllDailyTasks',
+    'document', 'window',
     script.slice(offerStart, offerEnd) + '\nreturn offerCnTasksAfterImport;'
   )(
-    msg => { calls.push({kind: 'confirm', msg: msg}); return answer; },
+    msg => {
+      calls.push({kind: 'confirm', msg: msg});
+      return answers.length ? answers.shift() : false;
+    },
     (msg, kind) => toasts.push({msg: msg, kind: kind}),
     tab => calls.push({kind: 'tab', tab: tab}),
-    async (btn, uids) => calls.push({kind: 'run', uids: uids}),
+    async (btn, uids) => calls.push({kind: 'one-time', uids: uids}),
+    async (btn, uids, opts) => calls.push({kind: 'daily', uids: uids, opts: opts}),
     {getElementById: () => null},
     {ACCOUNTS: [{uid: 'cn-ok', nickname: 'CN One'}]}
   );
   const cancelCalls = [];
-  await makeOffer(false, cancelCalls, [])(['cn-ok']);
-  check('取消确认时不执行任务',
-    cancelCalls.length === 1 && cancelCalls[0].kind === 'confirm', JSON.stringify(cancelCalls));
+  await makeOffer([false, false], cancelCalls, [])(['cn-ok']);
+  check('两个确认都取消时不执行任务',
+    cancelCalls.length === 2 &&
+    cancelCalls.every(x => x.kind === 'confirm'), JSON.stringify(cancelCalls));
+
   const runCalls = [];
   const runToasts = [];
-  await makeOffer(true, runCalls, runToasts)(['cn-ok']);
-  check('确认后直接执行本次导入账号',
-    runCalls.some(x => x.kind === 'run' &&
-      JSON.stringify(x.uids) === JSON.stringify(['cn-ok'])),
+  await makeOffer([true, false], runCalls, runToasts)(['cn-ok']);
+  check('只确认一次性任务时只跑一次性任务',
+    runCalls.some(x => x.kind === 'one-time' &&
+      JSON.stringify(x.uids) === JSON.stringify(['cn-ok'])) &&
+    !runCalls.some(x => x.kind === 'daily'),
     JSON.stringify(runCalls));
-  check('确认提示写明三步流水线',
-    /成长任务、猫猫旅行、连登管家与抽奖/.test(runCalls[0].msg) &&
+  check('一次性确认提示写明任务边界',
+    /成长任务、活动任务与小程序任务/.test(runCalls[0].msg) &&
     /只处理本次导入的账号/.test(runCalls[0].msg),
     runCalls[0].msg);
+
+  const dailyCalls = [];
+  await makeOffer([false, true], dailyCalls, [])(['cn-ok']);
+  check('只确认每日任务时只跑每日任务',
+    dailyCalls.some(x => x.kind === 'daily' &&
+      JSON.stringify(x.uids) === JSON.stringify(['cn-ok']) &&
+      x.opts && x.opts.skipIntl === true) &&
+    !dailyCalls.some(x => x.kind === 'one-time'),
+    JSON.stringify(dailyCalls));
+  check('每日确认提示写明国内版每日步骤',
+    /Buddy 加油站签到、猫猫旅行、连登管家与抽奖、夜猫子任务/.test(
+      dailyCalls[1].msg) &&
+    /不会跑国际版签到/.test(dailyCalls[1].msg),
+    JSON.stringify(dailyCalls));
 
   // 8. 桌面客户端单账号导入同样只对国内账号发起确认。
   check('桌面客户端导入国内账号后复用同一确认流程',

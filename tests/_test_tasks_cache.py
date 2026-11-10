@@ -100,6 +100,11 @@ class FakeUpstream(object):
         self.actions.append(("travel", acc.uid))
         return {"action": "travel", "msg": "ok", "credit": 3}
 
+    def night(self, acc):
+        self.actions.append(("night", acc.uid))
+        return {"ok": True, "earned_credit": 2,
+                "logs": ["night ok"]}
+
 
 def capturing_handler():
     """The lightweight Handler double the other route suites already use."""
@@ -200,12 +205,13 @@ class ActionInvalidationTests(unittest.TestCase):
     def setUp(self):
         self.upstream = FakeUpstream()
         self._orig = (T.fetch_growth_tasks, T.fetch_growth_summary,
-                      T.run_growth_tasks, T.do_cat_travel)
+                      T.run_growth_tasks, T.do_cat_travel, T.run_night_growth)
         self._ttl = P.TASKS_CACHE_TTL
         T.fetch_growth_tasks = self.upstream.tasks
         T.fetch_growth_summary = self.upstream.summary
         T.run_growth_tasks = self.upstream.run_tasks
         T.do_cat_travel = self.upstream.travel
+        T.run_night_growth = self.upstream.night
         self.account = StubAccount("uid-a")
         self._pool = P.POOL
         P.POOL = FakePool([self.account])
@@ -213,7 +219,7 @@ class ActionInvalidationTests(unittest.TestCase):
 
     def tearDown(self):
         (T.fetch_growth_tasks, T.fetch_growth_summary,
-         T.run_growth_tasks, T.do_cat_travel) = self._orig
+         T.run_growth_tasks, T.do_cat_travel, T.run_night_growth) = self._orig
         P.TASKS_CACHE_TTL = self._ttl
         P.POOL = self._pool
         P.invalidate_tasks_cache()
@@ -263,6 +269,14 @@ class ActionInvalidationTests(unittest.TestCase):
         self.assertTrue(response.get("ok"), "旅行动作没有真的跑起来: %r" % response)
         self.assertIn(("travel", "uid-a"), self.upstream.actions)
         self.assert_refetched(warm, "/tasks/travel")
+
+    def test_task_night_invalidates_the_snapshot(self):
+        warm = self.warm()
+        self.upstream.bump()
+        response = self.drive("/tasks/night", {"uid": "uid-a"})
+        self.assertTrue(response.get("ok"), "夜猫子动作没有真的跑起来: %r" % response)
+        self.assertIn(("night", "uid-a"), self.upstream.actions)
+        self.assert_refetched(warm, "/tasks/night")
 
     def test_task_claim_is_per_account_and_refetches(self):
         warm = self.warm()

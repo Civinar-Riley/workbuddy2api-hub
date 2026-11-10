@@ -35,7 +35,7 @@ def make_account(uid, realm="intl"):
     acc = mock.MagicMock()
     acc.uid = uid
     acc.realm = realm
-    acc.restricted_until = 0.0
+    acc.account_banned = False
     acc.can_daily_chat.return_value = True
     acc.daily_chat.return_value = {"ok": True, "msg": "ok"}
     return acc

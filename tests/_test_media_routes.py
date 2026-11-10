@@ -73,6 +73,9 @@ class FakeAccount(object):
 
     def note_restricted(self, detail="", cooldown=None):
         self.notes.append({"restricted": True, "detail": detail})
+        self.enabled = False
+        self.tasks_enabled = False
+        self.account_banned = True
 
 
 class FakePool(object):
@@ -419,6 +422,9 @@ class FailoverTests(MediaRouteCases):
             handler = self.post()
         self.assertEqual(handler.sent[0], 502)
         self.assertTrue(self.account.notes[0].get("restricted"))
+        self.assertTrue(self.account.account_banned)
+        self.assertFalse(self.account.enabled)
+        self.assertFalse(self.account.tasks_enabled)
 
     def test_pool_pause_blocks_before_any_upstream_call(self):
         with mock.patch.object(P, "restriction_hold_remaining", lambda realm, now=None: 120.0), \
