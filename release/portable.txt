@@ -22,6 +22,9 @@
 
 LICENSE
 README.md
+docs/CHANGELOG.md
+docs/OUTBOUND-HEADER-AUDIT.md
+docs/TROUBLESHOOTING-11-128.md
 dashboard.html
 console_tail.py
 ops/aliyun/install-updater.sh

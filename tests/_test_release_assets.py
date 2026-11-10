@@ -266,6 +266,15 @@ class ManifestTests(unittest.TestCase):
                      "start-wb-proxy.command", "start-wb-proxy-lan.sh"):
             self.assertIn(name, listed)
 
+    def test_docs_linked_from_the_packaged_readme_are_listed(self):
+        # README.md is shipped, so a local docs link has to resolve inside the
+        # portable package too. Otherwise the changelog is visible on GitHub but
+        # missing from the archive users actually download.
+        listed = tools.read_manifest()
+        readme = read("README.md")
+        for target in re.findall(r"\]\((docs/[^)#?]+)", readme):
+            self.assertIn(target, listed, "便携包缺少 README 链接的 %s" % target)
+
     def test_every_launcher_script_is_listed(self):
         """启动脚本按前缀全量扫：漏登记一个就在这儿红。
 
