@@ -2446,6 +2446,14 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '国内版 (China) · copilot.tencent.com': 'China · copilot.tencent.com',
     '国内版成长任务与日常福利': 'China growth tasks and daily perks',
     '国内版任务与福利': 'China tasks and perks',
+    '国际版每日签到': 'Daily check-in (Global)',
+    '国内版每日签到': 'Daily check-in (China)',
+    '国内版任务': 'China tasks',
+    '一键国际版签到': 'One-click Global check-in',
+    '一键国内版签到': 'One-click China check-in',
+    '一键执行国内任务': 'Run all China tasks',
+    'Buddy 加油站每日签到；签到与成长任务、猫猫旅行互不占用。': 'Daily Buddy refuel check-in; it is independent of growth tasks and cat travel.',
+    '国内任务执行中...': 'Running China tasks...',
     // 页签名与区块标题：词级词典缺了「福利」，整体只能拼出「Taskand福利」。
     '任务与福利': 'Tasks & rewards',
     '国际版每日活跃福利': 'Daily activity rewards (Global)',
@@ -3579,6 +3587,15 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '猫猫正在旅行途中，请稍后再来查看！': 'The cat is still travelling; check again later!'
   };
   var HANT_PHRASES = {
+    "国际版每日签到": "國際版每日簽到",
+    "国内版每日签到": "國內版每日簽到",
+    "国内版任务": "國內版任務",
+    "一键国际版签到": "一鍵國際版簽到",
+    "一键国内版签到": "一鍵國內版簽到",
+    "一键执行国内任务": "一鍵執行國內任務",
+    "Buddy 加油站每日签到；签到与成长任务、猫猫旅行互不占用。":
+      "Buddy 加油站每日簽到；簽到與成長任務、貓貓旅行互不佔用。",
+    "国内任务执行中...": "國內任務執行中...",
     "全部号池": "全部號池",
     "文本号池": "文字號池",
     "媒体号池": "媒體號池",
@@ -5905,15 +5922,15 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <h2 style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">任务与福利</h2>
     <div style="font-size:12px;color:var(--dim);margin-top:4px">每日活跃打卡、Buddy 加油站、成长任务与福利积分总览。</div>
   </div>
-  <!-- 国际版每日活跃福利 -->
+  <!-- 国际版每日签到（官方名称是每日活跃福利，但入口按签到语义排列） -->
   <section id="sectionIntlTasks" style="margin-bottom:24px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
-        <h2 style="margin:0">国际版每日活跃福利</h2>
+        <h2 style="margin:0">国际版每日签到</h2>
         <div style="font-size:12px;color:var(--dim)">国际版每日轻量会话与网页通道打卡，触发官方发放每日活跃 Bonus Pack (+30/+50 积分)</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="primary" id="btnPageDailyChat" onclick="doDailyChat(this)">每日活跃打卡 (国际版)</button>
+        <button class="primary" id="btnPageDailyChat" onclick="doDailyChat(this)">一键国际版签到</button>
         <!-- 未活跃打卡一键打卡：只补跑今天还没有活跃打卡记录的国际版账号。
              要打的那批与左边「今日活跃打卡状态」卡片悬停时列出的名单完全同源，
              所以不会把已经打过的账号再打一遍、白烧它的额度。 -->
@@ -5939,11 +5956,39 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     </div>
   </section>
 
-  <!-- 国内版专属成长任务与日常福利 -->
+  <!-- 国内版每日签到：只负责 Buddy 加油站，签到与任务执行分开，避免误点一次
+       就同时消耗签到额度和成长任务额度。 -->
+  <section id="sectionCnCheckin" style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0">国内版每日签到</h2>
+        <div style="font-size:12px;color:var(--dim)">Buddy 加油站每日签到；签到与成长任务、猫猫旅行互不占用。</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="cnCheckinAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
+          <option value="all">全部国内账号 (批量)</option>
+        </select>
+        <button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin(this)">一键国内版签到</button>
+      </div>
+    </div>
+    <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+      <div class="card accent2" title="Buddy 加油站每日签到活动">
+        <div class="k">本期 Buddy 加油站活动</div>
+        <div class="v" id="cnTodayCheckinState" style="font-size:17px;letter-spacing:-.2px">-</div>
+      </div>
+      <div class="card accent">
+        <div class="k">已获取福利总积分</div>
+        <div class="v" id="cnTotalGranted" style="color:var(--accent)">-</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 国内版任务：成长任务、猫猫旅行、连登管家与抽奖。保留单项按钮，
+       另加一个串行的一键总执行入口；失败项继续往后跑，最后汇总失败原因。 -->
   <section id="sectionGrowthTasks">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
-        <h2 style="margin:0">国内版任务与福利</h2>
+        <h2 style="margin:0">国内版任务</h2>
         <div style="font-size:12px;color:var(--dim)">全自动批量接取、事件上报点亮并领取官方成长积分，以及猫猫日常与打卡</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -5953,18 +5998,14 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="growthAutoClaim" checked onchange="saveGrowthAutoClaim(this.checked)"> 自动领取
         </label>
-        <button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin(this)">Buddy 加油站签到</button>
-        <button class="primary" id="btnRunTasks" onclick="runGrowthTasks(this)">一键做任务领积分</button>
+        <button class="primary" id="btnRunAllCnTasks" onclick="runAllCnTasks(this)">一键执行国内任务</button>
+        <button class="sec mini" id="btnRunTasks" onclick="runGrowthTasks(this)">一键做任务领积分</button>
         <button id="btnCatTravel" onclick="triggerCatTravel(this)">猫猫旅行</button>
         <button id="btnRunStreakBonus" onclick="triggerStreakBonus(this)">连登管家与抽奖</button>
       </div>
     </div>
 
     <div class="cards" style="margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(185px,1fr))">
-      <div class="card accent2" title="Buddy 加油站每日签到活动">
-        <div class="k">本期 Buddy 加油站活动</div>
-        <div class="v" id="cnTodayCheckinState" style="font-size:17px;letter-spacing:-.2px">-</div>
-      </div>
       <div class="card" title="WorkBuddy 成长计划连续登录活跃天数；达到 7/14/28 天可兑换连登奖励">
         <div class="k">当前连续登录天数</div>
         <div class="v" id="stkDays" style="color:var(--accent2)">-</div>
@@ -5985,10 +6026,6 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
       <div class="card">
         <div class="k">成长能量余额</div>
         <div class="v" id="nrgBalance">-</div>
-      </div>
-      <div class="card accent">
-        <div class="k">已获取福利总积分</div>
-        <div class="v" id="cnTotalGranted" style="color:var(--accent)">-</div>
       </div>
     </div>
 
@@ -9331,6 +9368,10 @@ try {
 
 async function switchGrowthAccount(uid){
   CURRENT_GROWTH_UID = uid;
+  ["growthAcctSelect", "cnCheckinAcctSelect"].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el && el.value !== uid) el.value = uid;
+  });
   await loadGrowthTasks();
 }
 
@@ -9380,8 +9421,9 @@ async function loadGrowthTasks(){
     const energy = sum.energy || 0;
     const tr = sum.travel || {};
 
-    const sel = document.getElementById("growthAcctSelect");
-    if(sel){
+    ["growthAcctSelect", "cnCheckinAcctSelect"].forEach(function(id){
+      const sel = document.getElementById(id);
+      if(!sel) return;
       if(accts.length){
         const opts = ['<option value="all"' + (CURRENT_GROWTH_UID === 'all' ? ' selected' : '') + '>全部国内账号 (批量)</option>']
           .concat(accts.map(a => '<option value="' + esc(a.uid) + '"' + (CURRENT_GROWTH_UID === a.uid ? ' selected' : '') + '>' + esc(a.nickname) + ' (' + esc(a.uid.slice(0,6)) + ')</option>'))
@@ -9390,7 +9432,7 @@ async function loadGrowthTasks(){
       } else {
         sel.innerHTML = '<option value="">无国内版账号</option>';
       }
-    }
+    });
     if(!accts.length){
       if(typeof updateTaskPageCheckinCards === 'function') updateTaskPageCheckinCards();
       const elStk = document.getElementById("stkDays"); if(elStk) elStk.textContent = '-';
@@ -9492,9 +9534,9 @@ async function loadGrowthTasks(){
 }
 
 async function runGrowthTasks(btn){
-  btn.disabled = true;
-  const oldText = btn.textContent;
-  btn.textContent = '任务执行中...';
+  if(btn){ btn.disabled = true; }
+  const oldText = btn ? btn.textContent : '';
+  if(btn) btn.textContent = '任务执行中...';
   const logBox = document.getElementById("taskLogBox");
   if(logBox){
     logBox.style.display = 'block';
@@ -9515,14 +9557,58 @@ async function runGrowthTasks(btn){
     }
     await loadAccounts();
     await loadGrowthTasks();
+    if(r.ok === false){
+      const msg = r.msg || '成长任务未完成';
+      if(logBox) logBox.innerHTML += '<div style="color:var(--warn)">' + esc(msg) + '</div>';
+      toast('成长任务执行失败: ' + msg, 'bad');
+      return false;
+    }
     const sumC = r.credit_added != null ? ('，共增加 +' + r.credit_added + ' 积分') : '';
     toast("成长任务流水执行完成" + sumC + "！");
+    return true;
   }catch(e){
     if(logBox) logBox.innerHTML += '<div style="color:var(--warn)">执行出错: ' + esc(e.message) + '</div>';
-    alert("任务执行失败: " + e.message);
+    toast('成长任务执行失败: ' + e.message, 'bad');
+    return false;
   }finally{
-    btn.disabled = false;
-    btn.textContent = oldText;
+    if(btn){
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
+}
+
+async function runAllCnTasks(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '国内任务执行中...'; }
+  const results = [];
+  const failures = [];
+  const step = async (name, fn, button) => {
+    try {
+      const ok = await fn(button);
+      if(ok === false){
+        failures.push(name + '：未完成');
+      } else {
+        results.push(name + '：完成');
+      }
+    } catch (e) {
+      failures.push(name + '：' + (e && e.message ? e.message : String(e)));
+    }
+  };
+  const growthBtn = document.getElementById('btnRunTasks');
+  const catBtn = document.getElementById('btnCatTravel');
+  const streakBtn = document.getElementById('btnRunStreakBonus');
+  try {
+    await step('成长任务', runGrowthTasks, growthBtn);
+    await step('猫猫旅行', triggerCatTravel, catBtn);
+    await step('连登管家与抽奖', triggerStreakBonus, streakBtn);
+    if (failures.length) {
+      const done = results.length ? results.join('；') : '没有步骤完成';
+      toast('国内任务执行：' + done + '。失败：' + failures.join('；'), 'warn');
+    } else {
+      toast('国内任务已执行：' + results.join('；'), 'ok');
+    }
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '一键执行国内任务'; }
   }
 }
 
@@ -9560,18 +9646,23 @@ async function triggerCatTravel(btn){
       payload.uid = CURRENT_GROWTH_UID;
     }
     const r = await postJSON("/tasks/travel", payload);
-    toast(r.msg || (r.ok ? "猫猫旅行结算完成" : "操作失败"), r.ok ? "ok" : "warn");
+    const ok = r.ok !== false;
+    toast(r.msg || (ok ? "猫猫旅行结算完成" : "操作失败"), ok ? "ok" : "warn");
     await loadAccounts();
     await loadGrowthTasks();
+    return ok;
   }catch(e){
     toast("猫猫旅行失败: " + e.message, "bad");
+    return false;
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '猫猫旅行'; }
   }
 }
 
 async function triggerBuddyCheckin(btn){
-  btn.disabled = true; const ot = btn.textContent; btn.textContent = "签到中...";
+  if(btn){ btn.disabled = true; }
+  const ot = btn ? btn.textContent : '';
+  if(btn) btn.textContent = "签到中...";
   try {
     const payload = {};
     if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all'){
@@ -9579,14 +9670,20 @@ async function triggerBuddyCheckin(btn){
     }
     const r = await postJSON("/accounts/checkin", payload);
     const res = r.results || [];
+    let ok = false;
     if(!res.length) toast("未发现国内版账号", "warn");
     else {
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "签到成功 (+100积分)" : (x.error||x.msg))).join("；");
-      toast("Buddy 加油站签到: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+      ok = res.some(x => x.ok);
+      toast("Buddy 加油站签到: " + summary, ok ? "ok" : "warn");
     }
     await loadAccounts(); await loadGrowthTasks();
-  }catch(e){ toast("签到失败: " + e.message, "bad"); }
-  finally { btn.disabled = false; btn.textContent = ot; }
+    return ok;
+  }catch(e){
+    toast("签到失败: " + e.message, "bad");
+    return false;
+  }
+  finally { if(btn){ btn.disabled = false; btn.textContent = ot; } }
 }
 
 async function triggerStreakBonus(btn){
@@ -9597,12 +9694,15 @@ async function triggerStreakBonus(btn){
       payload.uid = CURRENT_GROWTH_UID;
     }
     const r = await postJSON("/tasks/streak-bonus", payload);
-    const msg = r.msg || (r.ok ? "连登管家与抽奖执行完成" : "操作未完成");
-    toast(msg, r.ok ? "ok" : "warn");
+    const ok = r.ok !== false;
+    const msg = r.msg || (ok ? "连登管家与抽奖执行完成" : "操作未完成");
+    toast(msg, ok ? "ok" : "warn");
     await loadAccounts();
     await loadGrowthTasks();
+    return ok;
   }catch(e){
     toast("连登管家执行失败: " + e.message, "bad");
+    return false;
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '连登管家与抽奖'; }
   }
@@ -22207,7 +22307,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     gateway: { title: '网关', desc: '模型目录、能力、思考档位与在售倍率。' },
     accounts: { title: '账号', desc: 'WorkBuddy 与 CodeArts 账号、积分和签到记录。' },
     analytics: { title: '用量', desc: 'Token、请求、缓存、成本和剩余额度。' },
-    tasks: { title: '自动化', desc: '每日活跃、成长任务和后台调度器。' },
+    tasks: { title: '自动化', desc: '后台调度器、国际版签到、国内版签到和国内版任务。' },
     agents: { title: '智能体', desc: '把本机 AI 客户端一键指向当前网关。' },
     media: { title: '媒体', desc: '图片与视频生成任务、额度、价格和账号分配。' },
     settings: { title: '设置', desc: 'API Key、出口、模型、调度和系统选项。' },
