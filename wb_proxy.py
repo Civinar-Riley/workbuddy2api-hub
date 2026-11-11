@@ -2728,6 +2728,7 @@ _STATS_TTL = float(os.environ.get("WB_STATS_TTL", 15))
 # reads rows that arrived since the last scan.
 # ---------------------------------------------------------------------------
 _daily_usage = {"day": "", "totals": None, "credits": None, "models": None,
+                "keytokens": None,
                 "offset": 0, "at": 0.0,
                 # See _scan_daily_usage's caller: (size, dev, inode) of the log
                 # the cached offset was taken against, plus the 64 bytes just
@@ -2748,6 +2749,9 @@ def _daily_state_copy(source):
         "tokens": dict(source.get("totals") or {}),
         "credits": dict(source.get("credits") or {}),
         "models": {k: dict(v) for k, v in (source.get("models") or {}).items()},
+        # key 维度的同日用量（API Key 日限量用）。与 uid 视图是同一批行的
+        # 两种折叠方式，多这一项不增加任何 I/O。
+        "keytokens": dict(source.get("keytokens") or {}),
     }
 
 
@@ -2782,10 +2786,15 @@ def _scan_daily_usage(offset, state):
             # consumed request, and its token counts are incomplete.
             if row_outcome(row) == "client_aborted":
                 continue
+            tokens = row.get("total_tokens") or 0
+            # key 维度累加必须先于 uid 判空：400 失败行没有 account 字段
+            # （全库仅 24.3% 的失败行带账号），但它一定有 key。
+            kid = row.get("key")
+            if kid:
+                state["keytokens"][kid] = state["keytokens"].get(kid, 0) + tokens
             uid = row.get("account")
             if not uid:
                 continue
-            tokens = row.get("total_tokens") or 0
             state["tokens"][uid] = state["tokens"].get(uid, 0) + tokens
             credit = row.get("credit") or 0
             if credit:
@@ -2817,7 +2826,7 @@ def daily_usage_stats(ttl=None):
         if c["day"] == day and c["totals"] is not None:
             state = _daily_state_copy(c)
         else:
-            state = {"tokens": {}, "credits": {}, "models": {}}
+            state = {"tokens": {}, "credits": {}, "models": {}, "keytokens": {}}
         offset = int(c["offset"] or 0)
         log_key = _usage_log_key(USAGE_LOG)
         # Resume the cached fold only when the bytes it counted are provably
@@ -2836,7 +2845,7 @@ def daily_usage_stats(ttl=None):
                            and c.get("tail") is not None
                            and _log_offset_holds(c["key"], log_key, offset)
                            and _log_tail_signature(offset, USAGE_LOG) == c["tail"]):
-            state = {"tokens": {}, "credits": {}, "models": {}}
+            state = {"tokens": {}, "credits": {}, "models": {}, "keytokens": {}}
             offset = 0
         try:
             state, offset = _scan_daily_usage(offset, state)
@@ -2849,7 +2858,9 @@ def daily_usage_stats(ttl=None):
         # call can prove this prefix still holds the same bytes.
         _daily_usage.update({"day": day, "totals": state["tokens"],
                              "credits": state["credits"],
-                             "models": state["models"], "offset": offset,
+                             "models": state["models"],
+                             "keytokens": state["keytokens"],
+                             "offset": offset,
                              "key": _usage_log_key(USAGE_LOG),
                              "tail": _log_tail_signature(offset, USAGE_LOG),
                              "at": time.time()})
@@ -11665,6 +11676,9 @@ def runtime_settings_view():
             "realm": entry.get("realm") or "",
             "models": list(entry.get("models") or []),
             "accounts": list(entry.get("accounts") or []),
+            # daily_token_limit 只存不显会让面板把日限量画成 0，用户以为没设过，
+            # 再保存一次就把真实值写回 0（与 #592 同类的坑）。
+            "daily_token_limit": int(entry.get("daily_token_limit") or 0),
             "enabled": entry.get("enabled", True) is not False,
             "masked": (raw[:4] + "*" * 6 + raw[-4:]) if len(raw) > 8 else "*" * len(raw),
             "source": entry.get("source") or "panel",
@@ -23617,6 +23631,16 @@ class Handler(BaseHTTPRequestHandler):
                     concurrency_limit = item.get("concurrency_limit")
                 else:
                     concurrency_limit = stored.get("concurrency_limit")
+                # 日 token 限量（单位 M）。同一规则：请求体没带就沿用已存值，
+                # 否则老面板一保存就把用户的日限量清成 0（#592 同款坑）。
+                if "daily_token_limit" in item:
+                    daily_token_limit = item.get("daily_token_limit")
+                else:
+                    daily_token_limit = stored.get("daily_token_limit")
+                try:
+                    daily_token_limit = max(0, int(daily_token_limit or 0))
+                except (TypeError, ValueError):
+                    daily_token_limit = 0
                 created_at = item.get("created_at") or (stored.get("created_at") if entry_id in existing else None) or time.strftime("%Y/%m/%d %H:%M")
                 cleaned.append({
                     "id": entry_id,
@@ -23626,6 +23650,7 @@ class Handler(BaseHTTPRequestHandler):
                     "models": models,
                     "accounts": accounts,
                     "concurrency_limit": concurrency_limit,
+                    "daily_token_limit": daily_token_limit,
                     "enabled": enabled,
                     "created_at": created_at,
                 })
@@ -26983,6 +27008,34 @@ class Handler(BaseHTTPRequestHandler):
             aliases = {}
         _apply_model_aliases(payload, aliases)
         _apply_background_model_alias(payload)
+        # 日 token 限量（单位 M，0/缺省 = 不限）。放在并发槽位之前判断：
+        # 已经被限的 key 不该先排队等 WB_CHAT_SLOT_WAIT 秒再被拒。
+        # 用量来自 _daily_usage 的 keytokens 视图（默认 15s 缓存）。
+        _daily_limit_m = 0
+        try:
+            _daily_limit_m = int((self.key_entry or {}).get("daily_token_limit") or 0)
+        except (TypeError, ValueError):
+            _daily_limit_m = 0
+        if _daily_limit_m > 0:
+            _quota_hit = False
+            try:
+                _stats = daily_usage_stats()
+                if _stats is not None:
+                    _used = int((_stats.get("keytokens") or {}).get(self._key_id(), 0) or 0)
+                    if _used >= _daily_limit_m * 1000000:
+                        _quota_hit = True
+            except Exception as _qexc:
+                log("daily quota check failed: %s" % (_qexc,))
+            if _quota_hit:
+                key_name = (self.key_entry or {}).get("name") or self._key_id() or "当前 Key"
+                message = ("Daily token quota exhausted for API key '%s' "
+                           "(%d M per day used); it resets at local midnight"
+                           % (key_name, _daily_limit_m))
+                record_error(payload.get("model") or "unknown", 403, message,
+                             stream=payload.get("stream"), key=self._key_id())
+                if is_messages_route:
+                    return self._anthropic_error(403, message, "permission_error")
+                return self._error(403, message, "permission_error")
         # Check per-key concurrency limit (#359)
         key_ok, cur_key_conc, max_key_conc = _acquire_key_slot(self.key_entry)
         if not key_ok:
