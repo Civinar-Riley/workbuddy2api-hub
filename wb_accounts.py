@@ -63,10 +63,6 @@ WEB_TURN_ATTEMPTS = 3
 WEB_BUDGET_DEFAULT = 600
 #: 剩余预算低于这个值就不再开新的一轮：一轮至少要能等到会话真的跑起来。
 WEB_BUDGET_MIN_ROUND = 30
-#: 桌面腿（轻量对话）在首选模型冷却时顺延用的免费模型。网页腿不看这份名单 ——
-#: 那边的回退就是面板上的候选序列。
-DAILY_CHAT_DESKTOP_FALLBACKS = ("hy3", "hy4-preview-f", "hy4-preview",
-                                "glm-5.3-flash")
 #: 还没跑到 turn 就失败（建会话 5xx、取沙箱失败）时的退避基数（秒）。
 #: 那几轮只花掉几百毫秒、不消耗任何等待预算，背靠背重试等于把全部尝试挤进
 #: 同一个上游故障窗口（issue #558：8 个账号 × 6 次尝试全落进约 100 秒的抖动）。
@@ -862,6 +858,50 @@ def _clean_candidates(models):
         seen.add(name)
         ordered.append(name)
     return ordered
+
+
+def _nested_error_code(value):
+    """First numeric upstream ``code`` in a JSON object, including error.data."""
+    if not isinstance(value, dict):
+        return None
+    for key in ("code", "errorCode", "error_code"):
+        raw = value.get(key)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return int(raw)
+        if isinstance(raw, str) and raw.strip().isdigit():
+            return int(raw.strip())
+    for key in ("error", "data", "detail"):
+        found = _nested_error_code(value.get(key))
+        if found is not None:
+            return found
+    return None
+
+
+def _daily_chat_model_fallback_allowed(status, detail):
+    """Whether a failed daily-activity desktop request should try the next model.
+
+    Authentication, account bans, and content-policy rejections stay terminal.
+    Quota/rate/model-availability failures are exactly what the free-model
+    fallback is for.
+    """
+    text = str(detail or "")
+    lower = text.lower()
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = None
+    code = _nested_error_code(payload)
+    if code == 11140 or status == 401:
+        return False
+    if code in (14018, 6004, 6005):
+        return True
+    if status in (402, 408, 429) or (isinstance(status, int) and status >= 500):
+        return True
+    return any(token in lower for token in (
+        "insufficient credit", "credits exhausted", "credit exhausted",
+        "quota", "rate limit", "frequency limit", "model not found",
+        "no such model", "invalid model", "unsupported model",
+        "额度", "积分", "限流", "模型不存在", "不支持该模型"))
 
 
 def _model_credit_rank(model, realm):
@@ -2344,12 +2384,9 @@ class Account(object):
         cooling down or capped falls through to the next candidate instead of
         failing the activity.
         """
-        candidates = self.web_fallback_models() or [DAILY_CHAT_MODEL]
-        if len(candidates) < 2:
-            # 桌面腿历史上会在首选模型冷却 / 达限时顺延到其它免费模型。候选序列
-            # 只配了一个（或没配）时保留这份顺延；网页腿的轮数仍只看候选序列。
-            candidates = candidates + [model for model in DAILY_CHAT_DESKTOP_FALLBACKS
-                                       if model not in candidates]
+        candidates = self.daily_chat_candidates()
+        if not candidates:
+            return ""
         now = time.time()
         with self._throttle_lock:
             for cand in candidates:
@@ -2359,18 +2396,14 @@ class Account(object):
                     return cand
         return candidates[0]
 
-    def web_fallback_models(self):
-        """The ordered model candidates the web leg walks through.
+    def daily_chat_candidates(self):
+        """Ordered candidates shared by both daily-activity legs.
 
-        An explicit list in the panel wins and is used **in that order** - it is
-        the operator's priority, not a suggestion. Only the automatic mode (no
-        list configured) sorts by catalogue multiplier, so a free model runs
-        before a cheap paid one and that one before an expensive one.
-
-        This replaces the old pair of settings (`daily_chat_model` for the
-        preferred model plus a separate fallback switch and combination): with
-        both set, the fallback branch took every model from the combination and
-        the preferred model never ran at all.
+        An explicit panel list always wins and is never reordered. In automatic
+        mode the ``daily_chat_prefer_flash`` switch decides whether Flash runs
+        before the free catalogue models or is skipped entirely. Free models
+        come from the live per-realm catalogue, so a newly free model appears
+        without a gateway release.
         """
         configured = []
         if self.path:
@@ -2378,9 +2411,31 @@ class Account(object):
                 os.path.dirname(self.path))
         if configured:
             return _clean_candidates(configured)
-        # 自动模式只有内置的免费模型一个候选：候选序列就是回退，没配就是不回退。
-        # 旧实现在这里额外塞进各区域的免费模型，只因为那套「回退组合」必须有人填。
-        return [DAILY_CHAT_MODEL]
+        import wb_proxy
+        candidates = []
+        prefer_flash = True
+        if self.path:
+            prefer_flash = wb_settings.daily_chat_prefer_flash(
+                os.path.dirname(self.path))
+        if prefer_flash:
+            candidates.append(DAILY_CHAT_MODEL)
+        candidates.extend(wb_proxy.free_model_candidates(self.realm))
+        return _clean_candidates(candidates)
+
+    def web_fallback_models(self):
+        """The ordered model candidates the web leg walks through.
+
+        An explicit list in the panel wins and is used **in that order** - it is
+        the operator's priority, not a suggestion. Only the automatic mode (no
+        list configured) uses the Flash preference switch plus the free models
+        in the live catalogue order.
+
+        This replaces the old pair of settings (`daily_chat_model` for the
+        preferred model plus a separate fallback switch and combination): with
+        both set, the fallback branch took every model from the combination and
+        the preferred model never ran at all.
+        """
+        return self.daily_chat_candidates()
 
     def daily_chat_web_prompt(self):
         """The prompt this turn sends on the web channel.
@@ -2444,7 +2499,12 @@ class Account(object):
         返回里带 attempts（实际跑了几轮）、models_tried、model，其余字段与
         _daily_chat_web_once 一致。
         """
-        models = self.web_fallback_models() or [self.daily_chat_model()]
+        models = self.web_fallback_models()
+        if not models:
+            return {"ok": False,
+                    "error": "自动模式没有可用的免费模型；请开启“优先 DeepSeek Flash”"
+                             "或在面板中指定候选模型",
+                    "retryable": False}
         turn_cap, rounds = self.daily_chat_web_policy()
         budget = self.daily_chat_budget()
         deadline = time.time() + budget if budget > 0 else None
@@ -2578,6 +2638,9 @@ class Account(object):
         if wait_seconds is None:
             wait_seconds = WEB_TURN_TIMEOUT
         model = model or self.daily_chat_model()
+        if not model:
+            return {"ok": False, "retryable": False,
+                    "error": "没有可用的每日活跃候选模型"}
         chosen_prompt = prompt or self.daily_chat_web_prompt()
         body = {
             "prompt": chosen_prompt,
@@ -2840,9 +2903,17 @@ class Account(object):
                           "limit": False}
         conversation = (payload.get("data") or {}).get("id")
         if payload.get("code") not in (0, None) or not conversation:
+            code = payload.get("code")
+            msg = str(payload.get("msg") or "")
+            text = ("%s %s" % (code, msg)).lower()
+            retryable = code in (14018, 6004, 6005) or any(
+                token in text for token in (
+                    "credit", "quota", "limit", "model not found",
+                    "no such model", "invalid model", "额度", "积分",
+                    "限流", "不存在"))
             return None, {"message": "code=%s msg=%s" % (payload.get("code"),
                                                          payload.get("msg")),
-                          "retryable": False, "limit": False}
+                          "retryable": retryable, "limit": False}
         return conversation, None
 
     def daily_chat(self, web=None, trigger="unknown"):
@@ -2874,9 +2945,46 @@ class Account(object):
 
     def _daily_chat_upstream(self, web=None):
         """每日活跃对话的实际流程；返回形状见 daily_chat。"""
+        candidates = self.daily_chat_candidates()
+        if not candidates:
+            return {
+                "ok": False,
+                "error": "自动模式没有可用的免费模型；请开启“优先 DeepSeek Flash”"
+                         "或在面板中指定候选模型",
+            }
+        tried = []
+        last = None
+        for candidate in candidates:
+            tried.append(candidate)
+            result = self._daily_chat_desktop_once(candidate)
+            if result.get("ok") or result.get("restricted"):
+                result["models_tried"] = tried
+                result["model"] = candidate
+                if result.get("ok"):
+                    return self._daily_chat_web_step(result, web=web)
+                return result
+            last = result
+            if not result.get("retryable"):
+                result["models_tried"] = tried
+                result["model"] = candidate
+                return result
+            # Keep the account from immediately selecting the same failed
+            # model at the next scheduler slot. 6004 has its own persistent cap
+            # handling in the normal request path; this short cooldown is only
+            # for the lightweight daily leg.
+            self.note_error("daily activity model fallback", model=candidate,
+                            cooldown=60, detail=result.get("error") or "")
+        if last is not None:
+            last["models_tried"] = tried
+            last["model"] = tried[-1]
+            return last
+        return {"ok": False, "error": "每日活跃没有可尝试的模型"}
+
+    def _daily_chat_desktop_once(self, candidate):
+        """One desktop-identity attempt; the web leg runs after this succeeds."""
         import wb_proxy
         url = self.chat_base_url() + wb_proxy.CHAT_PATH
-        model = wb_proxy.intl_model_alias(self.daily_chat_model(), self.realm)
+        model = wb_proxy.intl_model_alias(candidate, self.realm)
         headers = self.headers("chat", model=model)
         body = {
             "model": model,
@@ -2909,56 +3017,7 @@ class Account(object):
                 self.fetch_credits()
             except Exception:
                 pass
-            result = {"ok": True, "msg": "每日活跃对话成功完成"}
-            web_ok = True
-            if web is None:
-                web = bool(self.path) and wb_settings.daily_chat_web(os.path.dirname(self.path))
-            if web:
-                res = self.daily_chat_web(trigger=None)
-                result["web"] = res
-                web_ok = bool(res.get("ok"))
-                if web_ok:
-                    # 重试过就把轮数带上：光看「成功」分不清是首轮就跑完，还是
-                    # 前几轮超时、多等了一轮才跑完（后者是慢，不是没跑）。
-                    tries = res.get("attempts") or 1
-                    retried = "（重试 %d 次后）" % (tries - 1) if tries > 1 else ""
-                    result["msg"] = ("每日活跃对话成功完成（网页通道%s %s：%d 段输出，%d ms）"
-                                     % (retried, res.get("status") or "completed",
-                                        res.get("chunks") or 0, res.get("elapsed_ms") or 0))
-                else:
-                    # 桌面腿成功不等于当天打卡完成：计入官方「每日活跃」的只有网页腿
-                    # （#75/#59/#90）。面板与活动历史按 ok 画成功/失败，网页腿失败却
-                    # 报成功的话，「今天这 30/50 积分没到账」在界面上一直看不见。
-                    tries = res.get("attempts") or 1
-                    suffix = "（已重试 %d 次）" % (tries - 1) if tries > 1 else ""
-                    result["ok"] = False
-                    result["error"] = "网页通道失败：%s%s" % (res.get("error"), suffix)
-                    result["msg"] = "每日活跃对话未完成（网页通道失败：%s%s）" % (
-                        res.get("error"), suffix)
-                    # 沙箱入口证书校验失败（#645）不属于「这一轮没跑完」，重试同一轮
-                    # 永远不会成功；而成长连登只需要一条 POST /v2/report 就能点亮。
-                    # 开关打开时改走活跃上报，把当天算完成（默认关，行为不变）。
-                    fallback_on = (bool(self.path)
-                                   and wb_settings.daily_chat_web_fallback_activity(
-                                       os.path.dirname(self.path)))
-                    if fallback_on and is_tls_verify_text(res.get("error")):
-                        fb = self.report_activity()
-                        result["web_fallback"] = fb
-                        if fb.get("ok"):
-                            web_ok = True
-                            result["ok"] = True
-                            result.pop("error", None)
-                            result["msg"] = (
-                                "每日活跃对话：网页通道证书校验失败，已回退对话活跃上报（%s）"
-                                % (fb.get("msg") or ""))
-            # 只有真正计入官方「每日活跃」的网页通道成功了才算今天做过：网页腿失败时
-            # 若照写 lastDailyChat，当天后续巡检会直接跳过该账号，那天的 30/50 积分静默
-            # 丢掉且不再重试。web=False（没开网页通道）时维持原语义：桌面腿成功即算完成。
-            if web_ok:
-                self.last_daily_chat = time.strftime("%Y-%m-%d %H:%M:%S")
-                if self.path and os.path.exists(os.path.dirname(self.path)):
-                    self.save(os.path.dirname(self.path))
-            return result
+            return {"ok": True, "msg": "每日活跃对话成功完成"}
         except urllib.error.HTTPError as exc:
             try:
                 err = exc.read().decode("utf-8", "replace")
@@ -2980,9 +3039,55 @@ class Account(object):
                     self.save(os.path.dirname(self.path))
                 return {"ok": False, "restricted": True,
                         "error": f"HTTP 403 / 11140: {err[:100]}"}
-            return {"ok": False, "error": f"HTTP {exc.code}: {err[:100]}"}
+            return {"ok": False, "error": f"HTTP {exc.code}: {err[:100]}",
+                    "retryable": _daily_chat_model_fallback_allowed(exc.code, err)}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": str(exc), "retryable": True}
+
+    def _daily_chat_web_step(self, result, web=None):
+        """Run the web leg once after the desktop leg succeeds."""
+        if web is None:
+            web = bool(self.path) and wb_settings.daily_chat_web(
+                os.path.dirname(self.path))
+        web_ok = True
+        if web:
+            res = self.daily_chat_web(trigger=None)
+            result["web"] = res
+            web_ok = bool(res.get("ok"))
+            if web_ok:
+                tries = res.get("attempts") or 1
+                retried = "（重试 %d 次后）" % (tries - 1) if tries > 1 else ""
+                result["msg"] = (
+                    "每日活跃对话成功完成（网页通道%s %s：%d 段输出，%d ms）"
+                    % (retried, res.get("status") or "completed",
+                       res.get("chunks") or 0, res.get("elapsed_ms") or 0))
+            else:
+                tries = res.get("attempts") or 1
+                suffix = "（已重试 %d 次）" % (tries - 1) if tries > 1 else ""
+                result["ok"] = False
+                result["error"] = "网页通道失败：%s%s" % (
+                    res.get("error"), suffix)
+                result["msg"] = "每日活跃对话未完成（网页通道失败：%s%s）" % (
+                    res.get("error"), suffix)
+                # 证书失败改走活跃上报：默认关闭，打开时只对证书类错误生效。
+                fallback_on = (bool(self.path)
+                               and wb_settings.daily_chat_web_fallback_activity(
+                                   os.path.dirname(self.path)))
+                if fallback_on and is_tls_verify_text(res.get("error")):
+                    fb = self.report_activity()
+                    result["web_fallback"] = fb
+                    if fb.get("ok"):
+                        web_ok = True
+                        result["ok"] = True
+                        result.pop("error", None)
+                        result["msg"] = (
+                            "每日活跃对话：网页通道证书校验失败，已回退对话活跃上报（%s）"
+                            % (fb.get("msg") or ""))
+        if web_ok:
+            self.last_daily_chat = time.strftime("%Y-%m-%d %H:%M:%S")
+            if self.path and os.path.exists(os.path.dirname(self.path)):
+                self.save(os.path.dirname(self.path))
+        return result
 
     def checkin(self, trigger="unknown"):
         """国内版每日签到。

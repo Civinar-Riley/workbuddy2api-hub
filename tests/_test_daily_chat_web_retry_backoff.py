@@ -81,11 +81,12 @@ class RetryBackoffTests(unittest.TestCase):
 
     def test_create_failures_sleep_between_rounds(self):
         acc = make_account("create")
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         sleeps, rounds, res = self.run_rounds(acc, [CREATE_FAIL] * 3)
         self.assertFalse(res["ok"])
-        # 自动模式只有一个候选 = 两轮（第二轮留给「会话只是慢」）。
-        self.assertEqual(len(rounds), wb_accounts.WEB_MIN_ROUNDS)
-        self.assertEqual(sleeps, [5.0])
+        self.assertEqual(len(rounds), expected)
+        self.assertEqual(sleeps, [5.0, 10.0][:expected - 1])
 
     def test_backoff_doubles_and_stops_at_the_cap(self):
         acc = make_account("capped", rounds=5)
@@ -123,10 +124,22 @@ class RetryBackoffTests(unittest.TestCase):
         self.assertEqual(len(rounds), 1)
         self.assertEqual(sleeps, [])
 
+    def test_credit_rejection_switches_to_the_next_candidate(self):
+        acc = make_account("credit-reject", models=["deepseek-v4.1-flash", "hy3"])
+        reject = {"ok": False, "error": "code=14018 msg=credits exhausted",
+                  "retryable": True, "phase": "create"}
+        sleeps, rounds, res = self.run_rounds(acc, [reject, {"ok": True}])
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(len(rounds), 2)
+        self.assertEqual(res.get("models_tried"), ["deepseek-v4.1-flash", "hy3"])
+        self.assertEqual(sleeps, [5.0])
+
     def test_zero_base_disables_the_backoff(self):
         acc = make_account("disabled")
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         sleeps, rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3, base=0.0)
-        self.assertEqual(len(rounds), wb_accounts.WEB_MIN_ROUNDS)
+        self.assertEqual(len(rounds), expected)
         self.assertEqual(sleeps, [])
 
     def test_model_fallback_rounds_also_back_off(self):
@@ -155,26 +168,32 @@ class RetryBackoffSettingTests(unittest.TestCase):
 
     def test_setting_overrides_the_builtin_default(self):
         acc = make_account("setting-2")
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         wb_settings.set_daily_chat_web_retry_backoff(
             os.path.dirname(acc.path), 2)
         sleeps, _rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3)
-        self.assertEqual(sleeps, [2.0])
+        self.assertEqual(sleeps, [2.0, 4.0][:expected - 1])
 
     def test_setting_zero_disables_the_backoff(self):
         acc = make_account("setting-0")
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         wb_settings.set_daily_chat_web_retry_backoff(
             os.path.dirname(acc.path), 0)
         sleeps, rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3)
-        self.assertEqual(len(rounds), wb_accounts.WEB_MIN_ROUNDS)
+        self.assertEqual(len(rounds), expected)
         self.assertEqual(sleeps, [])
 
     def test_setting_larger_than_the_cap_is_not_clamped_away(self):
         # 单次上限取 max(30, base)，否则操作者把基数调大后会被悄悄压回去。
         acc = make_account("setting-40")
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         wb_settings.set_daily_chat_web_retry_backoff(
             os.path.dirname(acc.path), 40)
         sleeps, _rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3)
-        self.assertEqual(sleeps, [40.0])
+        self.assertEqual(sleeps, [40.0, 40.0][:expected - 1])
 
     def test_unset_setting_falls_back_to_the_builtin_default(self):
         acc = make_account("setting-unset")

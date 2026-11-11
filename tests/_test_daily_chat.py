@@ -384,12 +384,14 @@ class WebChannelTests(unittest.TestCase):
         self.assertEqual(waits, [120, 120, 120])
 
     def test_at_least_two_rounds_without_a_candidate_list(self):
-        """自动模式（没有候选列表）也至少跑两轮：第二轮留给「会话只是慢」。"""
+        """自动模式按实际候选序列跑，至少两轮。"""
         acc = self.account_in("web-auto-rounds")
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         res, waits = self.run_web(acc)
         self.assertFalse(res.get("ok"), res)
-        self.assertEqual(res.get("attempts"), wb_accounts.WEB_MIN_ROUNDS)
-        self.assertEqual(waits, [120, 120])
+        self.assertEqual(res.get("attempts"), expected)
+        self.assertEqual(waits, [120] * expected)
 
     def test_a_tiny_budget_still_reports_a_verdict(self):
         """预算小到连一轮都放不下：不发请求，直接给「预算不足」的结论。
@@ -417,9 +419,11 @@ class WebChannelTests(unittest.TestCase):
     def test_the_round_wait_is_clamped_by_the_budget(self):
         """单轮等待 = min(单轮上限, 剩余预算)，所以预算比上限小时每轮都按预算等。"""
         acc = self.account_in("web-budget-clamp", budget=60, timeout=120)
+        expected = max(wb_accounts.WEB_MIN_ROUNDS,
+                       len(acc.daily_chat_candidates()))
         res, waits = self.run_web(acc)
         self.assertFalse(res.get("ok"), res)
-        self.assertEqual(waits, [60, 60])
+        self.assertEqual(waits, [60] * expected)
 
     def test_a_business_rejection_is_not_retried(self):
         """建会话被业务拒绝（非 0 code）时重试没有意义，只跑一轮。"""
@@ -477,13 +481,15 @@ class WebChannelTests(unittest.TestCase):
 
     def test_the_budget_settings_default_and_round_trip(self):
         directory = os.path.join(_TMP.name, "web-budget-settings")
-        # 默认：单账号预算 600 秒，候选序列为空（自动），至少两轮。
+        # 默认：单账号预算 600 秒，候选序列为空（自动），轮数随候选数。
         self.assertEqual(wb_settings.daily_chat_budget(directory),
                          wb_settings.DAILY_CHAT_BUDGET_DEFAULT)
         self.assertEqual(wb_settings.daily_chat_models(directory), [])
         acc = self.account_in("web-budget-default")
         self.assertEqual(acc.daily_chat_budget(), wb_accounts.WEB_BUDGET_DEFAULT)
-        self.assertEqual(acc.daily_chat_web_policy()[1], wb_accounts.WEB_MIN_ROUNDS)
+        self.assertEqual(
+            acc.daily_chat_web_policy()[1],
+            max(wb_accounts.WEB_MIN_ROUNDS, len(acc.daily_chat_candidates())))
         # 写读往返。
         self.assertEqual(wb_settings.set_daily_chat_budget(directory, 900), 900)
         self.assertEqual(wb_settings.daily_chat_budget(directory), 900)
@@ -579,7 +585,127 @@ class CnCheckinTests(unittest.TestCase):
         acc.model_cooldowns["deepseek-v4.1-flash"] = time.time() + 600
         picked = acc.daily_chat_model()
         self.assertNotEqual(picked, "deepseek-v4.1-flash")
-        self.assertIn(picked, ["hy3", "hy4-preview-f", "hy4-preview", "glm-5.3-flash"])
+        self.assertIn(picked, ["hy3", "hy4free"])
+
+    def test_prefer_flash_switch_defaults_on_and_round_trips(self):
+        directory = os.path.join(_TMP.name, "prefer-flash-setting")
+        self.assertTrue(wb_settings.daily_chat_prefer_flash(directory))
+        self.assertFalse(wb_settings.set_daily_chat_prefer_flash(directory, False))
+        self.assertFalse(wb_settings.daily_chat_prefer_flash(directory))
+        self.assertTrue(wb_settings.set_daily_chat_prefer_flash(directory, True))
+        self.assertTrue(wb_settings.daily_chat_prefer_flash(directory))
+        with open(wb_settings.settings_path(directory), "w", encoding="utf-8") as fh:
+            json.dump({"daily_chat_prefer_flash": "false"}, fh)
+        self.assertTrue(wb_settings.daily_chat_prefer_flash(directory))
+        with self.assertRaises(ValueError):
+            wb_settings.set_daily_chat_prefer_flash(directory, "false")
+
+    def test_auto_candidates_put_flash_first_then_free_models(self):
+        directory = os.path.join(_TMP.name, "prefer-flash-on")
+        os.makedirs(directory, exist_ok=True)
+        acc = wb_accounts.Account(
+            {"uid": "u-auto-on", "accessToken": "t", "realm": "intl"},
+            path=os.path.join(directory, "acc.json"))
+        with mock.patch("wb_proxy.free_model_candidates",
+                        return_value=["hy4free", "hy3"]):
+            self.assertEqual(acc.daily_chat_candidates(),
+                             ["deepseek-v4.1-flash", "hy4free", "hy3"])
+
+    def test_switching_prefer_flash_off_uses_only_free_models(self):
+        directory = os.path.join(_TMP.name, "prefer-flash-off")
+        os.makedirs(directory, exist_ok=True)
+        wb_settings.set_daily_chat_prefer_flash(directory, False)
+        acc = wb_accounts.Account(
+            {"uid": "u-auto-off", "accessToken": "t", "realm": "intl"},
+            path=os.path.join(directory, "acc.json"))
+        with mock.patch("wb_proxy.free_model_candidates",
+                        return_value=["hy4free", "hy3"]):
+            self.assertEqual(acc.daily_chat_candidates(), ["hy4free", "hy3"])
+
+    def test_an_explicit_candidate_list_wins_over_the_switch(self):
+        directory = os.path.join(_TMP.name, "prefer-flash-explicit")
+        os.makedirs(directory, exist_ok=True)
+        wb_settings.set_daily_chat_models(directory, ["hy3", "glm-5.3-flash"])
+        wb_settings.set_daily_chat_prefer_flash(directory, False)
+        acc = wb_accounts.Account(
+            {"uid": "u-explicit", "accessToken": "t", "realm": "intl"},
+            path=os.path.join(directory, "acc.json"))
+        with mock.patch("wb_proxy.free_model_candidates",
+                        return_value=["hy4free"]):
+            self.assertEqual(acc.daily_chat_candidates(),
+                             ["hy3", "glm-5.3-flash"])
+
+    def test_desktop_leg_switches_model_on_quota_failure(self):
+        directory = os.path.join(_TMP.name, "desktop-fallback")
+        os.makedirs(directory, exist_ok=True)
+        acc = wb_accounts.Account(
+            {"uid": "u-desktop-fallback", "accessToken": "t", "realm": "intl"},
+            path=os.path.join(directory, "acc.json"))
+        seen = []
+
+        def fake(candidate):
+            seen.append(candidate)
+            if candidate == wb_accounts.DAILY_CHAT_MODEL:
+                return {"ok": False, "error": "code=14018",
+                        "retryable": True}
+            return {"ok": True, "msg": "ok"}
+
+        with mock.patch.object(acc, "daily_chat_candidates",
+                               return_value=[wb_accounts.DAILY_CHAT_MODEL, "hy3"]), \
+                mock.patch.object(acc, "_daily_chat_desktop_once",
+                                  side_effect=fake):
+            res = acc._daily_chat_upstream(web=False)
+        self.assertTrue(res.get("ok"), res)
+        self.assertEqual(seen, [wb_accounts.DAILY_CHAT_MODEL, "hy3"])
+        self.assertEqual(res.get("models_tried"),
+                         [wb_accounts.DAILY_CHAT_MODEL, "hy3"])
+
+    def test_web_leg_runs_once_after_desktop_fallback(self):
+        directory = os.path.join(_TMP.name, "web-once")
+        os.makedirs(directory, exist_ok=True)
+        acc = wb_accounts.Account(
+            {"uid": "u-web-once", "accessToken": "t", "realm": "intl"},
+            path=os.path.join(directory, "acc.json"))
+        desktop_seen = []
+        web_seen = []
+
+        def desktop(candidate):
+            desktop_seen.append(candidate)
+            if candidate == wb_accounts.DAILY_CHAT_MODEL:
+                return {"ok": False, "error": "code=14018",
+                        "retryable": True}
+            return {"ok": True, "msg": "desktop ok"}
+
+        def web_step(result, web=None):
+            web_seen.append((result.get("model"), web))
+            result["ok"] = False
+            result["error"] = "web failed"
+            return result
+
+        with mock.patch.object(acc, "daily_chat_candidates",
+                               return_value=[wb_accounts.DAILY_CHAT_MODEL, "hy3"]), \
+                mock.patch.object(acc, "_daily_chat_desktop_once",
+                                  side_effect=desktop), \
+                mock.patch.object(acc, "_daily_chat_web_step",
+                                  side_effect=web_step):
+            res = acc._daily_chat_upstream(web=True)
+        self.assertFalse(res.get("ok"), res)
+        self.assertEqual(desktop_seen, [wb_accounts.DAILY_CHAT_MODEL, "hy3"])
+        self.assertEqual(web_seen, [("hy3", True)])
+
+    def test_disabling_flash_with_no_free_models_fails_without_a_request(self):
+        directory = os.path.join(_TMP.name, "no-free-models")
+        os.makedirs(directory, exist_ok=True)
+        wb_settings.set_daily_chat_prefer_flash(directory, False)
+        acc = wb_accounts.Account(
+            {"uid": "u-no-free", "accessToken": "t", "realm": "intl"},
+            path=os.path.join(directory, "acc.json"))
+        with mock.patch("wb_proxy.free_model_candidates", return_value=[]), \
+                mock.patch.object(acc, "_daily_chat_desktop_once",
+                                  side_effect=AssertionError("must not request")):
+            res = acc._daily_chat_upstream(web=False)
+        self.assertFalse(res.get("ok"), res)
+        self.assertIn("没有可用的免费模型", res.get("error", ""))
 
 
 if __name__ == "__main__":

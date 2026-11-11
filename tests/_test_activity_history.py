@@ -441,7 +441,9 @@ class CallSiteAuditTests(unittest.TestCase):
             self.assertIn(task, source, name)
 
     def test_the_nested_web_call_is_marked_as_already_recorded(self):
-        source = inspect.getsource(wb_accounts.Account._daily_chat_upstream)
+        # Desktop fallback and web execution are separate phases: the web leg
+        # runs once after a desktop candidate succeeds, not once per candidate.
+        source = inspect.getsource(wb_accounts.Account._daily_chat_web_step)
         self.assertIn("daily_chat_web(trigger=None)", source)
 
 

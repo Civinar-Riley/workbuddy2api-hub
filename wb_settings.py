@@ -2647,6 +2647,7 @@ DAILY_CHAT_RANDOM_MINUTES = (5, 55)
 DAILY_CHAT_RANDOM_KEY = "daily_chat_random"
 DAILY_CHAT_STARTUP_CATCHUP_KEY = "daily_chat_startup_catchup"
 DAILY_CHAT_WEB_FALLBACK_ACTIVITY_KEY = "daily_chat_web_fallback_activity"
+DAILY_CHAT_PREFER_FLASH_KEY = "daily_chat_prefer_flash"
 
 
 def _clean_models(value):
@@ -2711,6 +2712,26 @@ def set_daily_chat_models(accounts_dir, models):
             data.pop("daily_chat_models", None)
         save(accounts_dir, data)
     return cleaned
+
+
+def daily_chat_prefer_flash(accounts_dir):
+    """自动候选是否先试 DeepSeek Flash；默认开。
+
+    这是自动模式的选择策略，不会覆盖操作者手工配置的 daily_chat_models。
+    手改成非布尔值时按默认（开）处理，避免一份坏配置让每日活跃没有候选。
+    """
+    value = load(accounts_dir).get(DAILY_CHAT_PREFER_FLASH_KEY)
+    return value is not False
+
+
+def set_daily_chat_prefer_flash(accounts_dir, enabled):
+    if not isinstance(enabled, bool):
+        raise ValueError("daily_chat_prefer_flash must be true or false")
+    with _lock:
+        data = load(accounts_dir)
+        data[DAILY_CHAT_PREFER_FLASH_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
 
 
 def daily_chat_budget(accounts_dir, default=None):

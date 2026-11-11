@@ -42,6 +42,10 @@ check('每日任务区块有总入口',
 check('国际版签到仍在每日任务区块',
   /<button class="primary" id="btnPageDailyChat" onclick="doDailyChat\(this\)">一键国际版签到<\/button>/.test(daily) &&
   /id="btnPageDailyChatPending"[^>]*onclick="doDailyChatPending\(this\)"/.test(daily));
+check('优先 Flash 开关位于国际版每日签到区块',
+  /id="taskDailyChatPreferFlash"[^>]*checked[^>]*onchange="saveDailyChatPreferFlash\(this\)"/.test(daily));
+check('设置页不再重复显示优先 Flash 开关',
+  !html.includes('id="setDailyChatPreferFlash"'));
 check('国内版签到仍在每日任务区块',
   /<button class="primary" id="btnPageCheckin" onclick="triggerBuddyCheckin\(this\)">一键国内版签到<\/button>/.test(daily));
 check('猫猫旅行是每日任务单项入口',
@@ -76,6 +80,34 @@ check('两个国内账号下拉框双向同步',
 check('调度器保留独立的立即巡检按钮',
   /id="btnTriggerSched" onclick="triggerSchedulerNow\(this\)"/.test(html));
 
+/* ---- 任务页开关：立即保存，失败时回滚界面 ------------------------------- */
+const flashStart = script.indexOf('function applyDailyChatPreferFlash');
+const flashEnd = script.indexOf('\nasync function loadGrowthTasks', flashStart);
+assert.ok(flashStart >= 0 && flashEnd > flashStart,
+  '找不到优先 Flash 开关逻辑，测试需要更新');
+
+const flashElements = {
+  taskDailyChatPreferFlash: {checked: true, disabled: false},
+  taskDailyChatPreferFlashState: {textContent: '', style: {}},
+};
+const flashDocument = {getElementById: id => flashElements[id] || null};
+const flashWindow = {CURRENT_SETTINGS: {daily_chat_prefer_flash: true}};
+let flashPosts = [];
+let flashToasts = [];
+let flashFail = false;
+const flashPostJSON = async (url, body) => {
+  flashPosts.push({url: url, body: body});
+  if(flashFail) throw new Error('network down');
+  return {ok: true};
+};
+const flashToast = (msg, kind) => { flashToasts.push({msg: msg, kind: kind}); };
+const flashFactory = new Function(
+  'document', 'window', 'postJSON', 'toast',
+  script.slice(flashStart, flashEnd) +
+  '\nreturn {applyDailyChatPreferFlash, saveDailyChatPreferFlash};'
+);
+const flashApi = flashFactory(flashDocument, flashWindow, flashPostJSON, flashToast);
+
 /* ---- 每日总执行：某一步返回 false 时仍继续，并正确汇总 ------------------ */
 const start = script.indexOf('async function runAllDailyTasks');
 const end = script.indexOf('\nfunction saveGrowthAutoClaim', start);
@@ -107,6 +139,30 @@ const runAll = factory(document, toast, doDailyChatPending,
   triggerBuddyCheckin, triggerCatTravel, triggerStreakBonus, triggerNightTask);
 
 (async () => {
+  flashApi.applyDailyChatPreferFlash(false);
+  check('任务页开关按后端值回填',
+    flashElements.taskDailyChatPreferFlash.checked === false &&
+    /关闭/.test(flashElements.taskDailyChatPreferFlashState.textContent));
+  flashElements.taskDailyChatPreferFlash.checked = false;
+  await flashApi.saveDailyChatPreferFlash(flashElements.taskDailyChatPreferFlash);
+  check('任务页开关立即保存到 /settings/save',
+    flashPosts.length === 1 &&
+    flashPosts[0].url === '/settings/save' &&
+    flashPosts[0].body.daily_chat_prefer_flash === false,
+    JSON.stringify(flashPosts));
+  check('保存成功后同步本地设置状态',
+    flashWindow.CURRENT_SETTINGS.daily_chat_prefer_flash === false &&
+    flashToasts.length === 1 && flashToasts[0].kind === 'ok');
+
+  flashPosts = [];
+  flashToasts = [];
+  flashFail = true;
+  flashElements.taskDailyChatPreferFlash.checked = true;
+  await flashApi.saveDailyChatPreferFlash(flashElements.taskDailyChatPreferFlash);
+  check('保存失败时开关回滚并提示失败',
+    flashElements.taskDailyChatPreferFlash.checked === false &&
+    flashToasts.length === 1 && flashToasts[0].kind === 'bad');
+
   await runAll({disabled: false, textContent: '一键执行每日任务'}, ['uid-a']);
   check('失败步骤不会中断后续步骤',
     JSON.stringify(calls) === JSON.stringify([

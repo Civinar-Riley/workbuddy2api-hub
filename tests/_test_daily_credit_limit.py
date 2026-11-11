@@ -310,6 +310,56 @@ class FreeModelViewTests(unittest.TestCase):
         self.assertFalse(P.credits_is_free(""))
         self.assertFalse(P.credits_is_free(None))
 
+    def test_live_catalog_free_models_are_included(self):
+        old = P._models_cache.get("intl")
+        P._models_cache["intl"] = {
+            "at": time.time(),
+            "data": [
+                ("hy4free", {"credits": "x0.00"}),
+                ("deepseek-v4.1-flash-sg", {"credits": "x0.11"}),
+            ],
+        }
+        P._free_models_cache.update({"at": 0.0, "data": None})
+        try:
+            view = P.free_models_by_realm()
+            self.assertIn("hy4free", view["intl"])
+            self.assertNotIn("deepseek-v4.1-flash-sg", view["intl"])
+            self.assertEqual(P.free_model_candidates("intl")[0], "hy4free")
+            self.assertNotIn("deepseek-v4.1-flash",
+                             P.free_model_candidates("intl"))
+        finally:
+            if old is None:
+                P._models_cache.pop("intl", None)
+            else:
+                P._models_cache["intl"] = old
+            P._free_models_cache.update({"at": 0.0, "data": None})
+
+    def test_archived_remote_catalog_is_used_when_live_cache_is_cold(self):
+        old_models = P._models_cache.get("intl")
+        old_dir = P.CATALOG_CACHE_DIR
+        directory = os.path.join(_TMP, "catalog-archive")
+        os.makedirs(directory, exist_ok=True)
+        payload = {
+            "agents": {"cli": {"models": ["hy4free", "hy3"]}},
+            "models": [
+                {"id": "hy4free", "credits": "x0.00"},
+                {"id": "hy3", "credits": "x0.00"},
+            ],
+        }
+        with open(os.path.join(directory, "product-config-intl.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        P._models_cache.pop("intl", None)
+        P.CATALOG_CACHE_DIR = directory
+        P._free_models_cache.update({"at": 0.0, "data": None})
+        try:
+            self.assertEqual(P.free_model_candidates("intl"), ["hy4free", "hy3"])
+        finally:
+            P.CATALOG_CACHE_DIR = old_dir
+            if old_models is not None:
+                P._models_cache["intl"] = old_models
+            P._free_models_cache.update({"at": 0.0, "data": None})
+
 
 if __name__ == "__main__":
     unittest.main()

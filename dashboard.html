@@ -2552,6 +2552,12 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '保活失败: ': 'Keep-alive failed: ',
     '① 时段': '1. Slots',
     '② 候选模型': '2. Model candidates',
+    '优先 DeepSeek Flash，失败切免费模型':
+      'Prefer DeepSeek Flash, then fall back to free models',
+    '(已启用 · 先 Flash 后免费)': '(on · Flash first, then free)',
+    '(关闭 · 直接使用免费模型)': '(off · free models only)',
+    '开启时先试 deepseek-v4.1-flash，失败后按当前渠道目录顺序切换免费模型；关闭时直接使用免费模型。手工指定的候选序列不受此开关影响。':
+      'When on, try deepseek-v4.1-flash first, then free models in the current channel catalog order; when off, use free models directly. A manually selected candidate list is not affected.',
     '③ 预算': '3. Budget',
     '恢复随机': 'Back to random',
     '恢复自动': 'Back to automatic',
@@ -3606,6 +3612,9 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
   };
   var HANT_PHRASES = {
     "每日任务": "每日任務",
+    "优先 DeepSeek Flash，失败切免费模型": "優先 DeepSeek Flash，失敗切免費模型",
+    "已启用 · 先 Flash 后免费": "已啟用 · 先 Flash 後免費",
+    "关闭 · 直接使用免费模型": "關閉 · 直接使用免費模型",
     "一次性 / 活动福利": "一次性 / 活動福利",
     "国际版每日签到": "國際版每日簽到",
     "国内版每日福利": "國內版每日福利",
@@ -5998,6 +6007,16 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
           <button class="primary" id="btnPageDailyChatPending" onclick="doDailyChatPending(this)">未活跃打卡一键打卡</button>
         </div>
       </div>
+      <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:var(--panel)">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;flex-wrap:wrap">
+          <input id="taskDailyChatPreferFlash" type="checkbox" checked onchange="saveDailyChatPreferFlash(this)" style="width:16px;height:16px">
+          <strong style="font-size:13px">优先 DeepSeek Flash，失败切免费模型</strong>
+          <em id="taskDailyChatPreferFlashState" style="font-style:normal;font-size:12px;color:var(--dim)"></em>
+        </label>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">
+          开启时先试 deepseek-v4.1-flash，失败后按当前渠道目录顺序切换免费模型；关闭时直接使用免费模型。手工指定的候选序列不受此开关影响。
+        </div>
+      </div>
       <div class="cards" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
         <div class="card accent2" id="cardIntlTodayActive">
           <div class="k">今日活跃打卡状态</div>
@@ -7109,7 +7128,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
             <div id="setDailyChatModelPickList" style="max-height:220px;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px 8px"></div>
           </div>
           <div style="font-size:12px;color:var(--dim);margin-top:6px">
-            按顺序试：第一个是首选，失败换下一个；留空 = 自动（首选模型 + 该区域免费模型，按倍率排序）。
+            按顺序试：第一个是首选，失败换下一个；留空 = 自动（按任务页「优先 DeepSeek Flash」设置决定是否先试 Flash，再使用当前渠道免费模型）。
             建会话失败（14220）与模型无关，多加候选只是多打几次。
           </div>
         </div>
@@ -9463,6 +9482,39 @@ async function loadIntlTasks(){
     if(typeof updateTaskPageCheckinCards === 'function') updateTaskPageCheckinCards();
   }catch(e){
     console.error('loadIntlTasks error:', e);
+  }
+}
+
+function applyDailyChatPreferFlash(enabled){
+  const input = document.getElementById('taskDailyChatPreferFlash');
+  if(input) input.checked = !!enabled;
+  const state = document.getElementById('taskDailyChatPreferFlashState');
+  if(state){
+    state.textContent = enabled
+      ? '(已启用 · 先 Flash 后免费)' : '(关闭 · 直接使用免费模型)';
+    state.style.color = enabled ? 'var(--accent2)' : 'var(--dim)';
+  }
+}
+
+async function saveDailyChatPreferFlash(input){
+  const enabled = !!(input && input.checked);
+  applyDailyChatPreferFlash(enabled);
+  if(input) input.disabled = true;
+  try{
+    await postJSON('/settings/save', {
+      daily_chat_prefer_flash: enabled,
+    });
+    if(window.CURRENT_SETTINGS){
+      window.CURRENT_SETTINGS.daily_chat_prefer_flash = enabled;
+    }
+    toast(enabled
+      ? '已启用：先试 DeepSeek Flash，失败切免费模型'
+      : '已关闭：直接使用免费模型', 'ok');
+  }catch(e){
+    applyDailyChatPreferFlash(!enabled);
+    toast('保存优先 Flash 设置失败: ' + e.message, 'bad');
+  }finally{
+    if(input) input.disabled = false;
   }
 }
 
@@ -15792,6 +15844,8 @@ async function loadSettings(showToast, opts){
           : '-';
       }
       // ② 候选模型：有序，第一个是首选。
+      const dailyChatPreferFlash = data.daily_chat_prefer_flash !== false;
+      applyDailyChatPreferFlash(dailyChatPreferFlash);
       renderDailyChatModelList(Array.isArray(data.daily_chat_models) ? data.daily_chat_models : []);
       // ③ 预算：单账号总预算、单轮上限、并发、建会话退避。
       const dailyChatBudgetDefault = Number(data.daily_chat_budget_default || 600);
@@ -16861,7 +16915,7 @@ async function renderDailyChatModelList(selected){
   const box = document.getElementById('setDailyChatModelList');
   if(!box) return;
   if(!DAILY_CHAT_MODEL_SELECTED.length){
-    box.innerHTML = '<div style="font-size:12px;color:var(--dim)">自动模式：只用首选模型，失败时按目录倍率挑下一个免费模型。</div>';
+    box.innerHTML = '<div style="font-size:12px;color:var(--dim)">自动模式：按“优先 DeepSeek Flash”开关决定是否先试 Flash，失败后按当前渠道目录顺序切换免费模型。</div>';
     return;
   }
   const models = await loadDailyChatModels();

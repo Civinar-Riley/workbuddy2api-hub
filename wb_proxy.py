@@ -4180,11 +4180,11 @@ def credits_is_free(value):
 def free_models_by_realm():
     """realm -> set of model ids the catalogue marks free ("x0.00").
 
-    Built from the bundled snapshot and the desktop cache file - both local
-    reads, no network - and cached for a minute so the request path pays
-    nothing. The daily credit guard uses it to tell paid models from free
-    ones, per realm: the same id can be free on one exit and paid on the
-    other.
+    Built from the bundled snapshot, the desktop cache file, and the live
+    ``_models_cache`` entry when it exists - all local reads, no network - and
+    cached for a minute so the request path pays nothing. The daily credit
+    guard uses it to tell paid models from free ones, per realm: the same id
+    can be free on one exit and paid on the other.
     """
     now = time.time()
     data = _free_models_cache.get("data")
@@ -4205,8 +4205,67 @@ def free_models_by_realm():
             for mid, item in (cached[1] or {}).items():
                 if isinstance(item, dict) and credits_is_free(item.get("credits")):
                     free.add(str(mid))
+        # The live /v3/config result can contain a newly free model that neither
+        # the bundled snapshot nor the desktop cache file knows yet (hy4free).
+        live = (_models_cache.get(realm) or {}).get("data") or []
+        for mid, item in live:
+            if isinstance(item, dict) and credits_is_free(item.get("credits")):
+                free.add(str(mid))
         out[realm] = free
     _free_models_cache.update({"at": now, "data": out})
+    return out
+
+
+def free_model_candidates(realm="intl"):
+    """Ordered free chat models for automatic daily-activity fallback.
+
+    The live catalogue is the source of truth; the desktop cache and bundled
+    snapshot only fill gaps. ``deepseek-v4.1-flash`` is deliberately excluded:
+    the intl alias sends it to the paid ``-sg`` build now, so it is the
+    preferred model rather than a free fallback. The same applies to every
+    ``-sg`` variant and to anything whose catalogue price is not x0.00.
+    """
+    r = realm if realm in ("intl", "cn") else "intl"
+    preferred = wb_accounts.DAILY_CHAT_MODEL
+    excluded = {preferred.lower(), (preferred + "-sg").lower()}
+    sources = []
+    live = (_models_cache.get(r) or {}).get("data") or []
+    if live:
+        sources.append(live)
+    cached = read_cached_remote_catalog(r)
+    if cached:
+        sources.append(list((cached[1] or {}).items()))
+    # The gateway's own last successful /v3/config copy. It is not part of the
+    # /v1/models read path, but it is the freshest local evidence on a headless
+    # install where the desktop app is absent and the 300s cache is cold.
+    try:
+        with open(catalog_cache_path(r), encoding="utf-8") as fh:
+            archived = parse_remote_catalog(json.load(fh))
+        if archived:
+            sources.append(list((archived[1] or {}).items()))
+    except Exception:
+        pass
+    sources.append(getattr(
+        wb_catalog, "STATIC_CN_MODELS" if r == "cn" else "STATIC_INTL_MODELS",
+        getattr(wb_catalog, "STATIC_MODELS", [])))
+    out = []
+    seen = set()
+    for source in sources:
+        for entry in source or []:
+            if isinstance(entry, tuple):
+                mid, item = entry
+            else:
+                mid = (entry or {}).get("id") if isinstance(entry, dict) else None
+                item = entry
+            mid = str(mid or "").strip()
+            if not mid or mid in seen or not is_chat_model(mid):
+                continue
+            if mid.lower() in excluded or mid.lower().endswith("-sg"):
+                continue
+            if not isinstance(item, dict) or not credits_is_free(item.get("credits")):
+                continue
+            seen.add(mid)
+            out.append(mid)
     return out
 
 
@@ -11681,6 +11740,8 @@ def runtime_settings_view():
         # （它们的值仍然被读取，用于把老部署的配置换算成预算与候选序列）。
         "daily_chat_models": wb_settings.daily_chat_models(ACCOUNTS_DIR),
         "daily_chat_models_max": wb_settings.DAILY_CHAT_MODELS_MAX,
+        "daily_chat_prefer_flash":
+            wb_settings.daily_chat_prefer_flash(ACCOUNTS_DIR),
         "daily_chat_budget": wb_settings.daily_chat_budget(
             ACCOUNTS_DIR, default=wb_accounts.WEB_BUDGET_DEFAULT),
         "daily_chat_budget_default": wb_accounts.WEB_BUDGET_DEFAULT,
@@ -12576,6 +12637,7 @@ def fetch_models(realm=None):
                 file_mtime = None
         with _lock:
             _models_cache[r] = {"at": time.time(), "data": entries}
+            _free_models_cache.update({"at": 0.0, "data": None})
             _catalog_meta[r] = {"source": source, "fetched_at": time.time(),
                                 "file_mtime": file_mtime}
         return entries
@@ -13028,6 +13090,7 @@ def refresh_catalog(realm):
         note_bundled_reasoning(realm, live, entries)
         with _lock:
             _models_cache[realm] = {"at": time.time(), "data": entries}
+            _free_models_cache.update({"at": 0.0, "data": None})
             _catalog_meta[realm] = {"source": "remote", "fetched_at": time.time(),
                                     "file_mtime": None}
     log("catalog refresh: %s updated from the product-config endpoint (%d models)"
@@ -23929,6 +23992,14 @@ class Handler(BaseHTTPRequestHandler):
                     "invalid_request_error")
             reply["daily_chat_models"] = \
                 wb_settings.set_daily_chat_models(ACCOUNTS_DIR, raw)
+        if "daily_chat_prefer_flash" in payload:
+            raw = payload.get("daily_chat_prefer_flash")
+            if not isinstance(raw, bool):
+                return self._error(
+                    400, "daily_chat_prefer_flash must be true or false",
+                    "invalid_request_error")
+            wb_settings.set_daily_chat_prefer_flash(ACCOUNTS_DIR, raw)
+            reply["daily_chat_prefer_flash"] = raw
         if "daily_chat_budget" in payload:
             # Whole seconds, 0 = no budget. This is the only time bound of the
             # whole web activity, so wb_settings owns the range check and the
