@@ -925,13 +925,27 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   /* 账号工具栏：打卡按钮（每日活跃/Buddy 加油站）与「添加」同一行并靠右，
      不再单独占一整行。 */
   #accountsBody .toolbar .tb-checkin{margin-left:auto;flex-shrink:0}
-  /* 批量操作那一组 6 个按钮：一行摆不下时每个按钮被压成竖排文字（「一 / 键 /
-     分 / 配 / 代 / 理」）。窄屏改成两列网格，6 个按钮排成 3 行 2 列，按钮
-     文字保持横排可读。只作用于这一个 .tb-bulk 组，其它工具栏按钮不受影响。 */
+  /* 批量操作那一组 10 个按钮：一行摆不下时每个按钮被压成竖排文字（「分 / 配 /
+     代 / 理」）。窄屏改成两列网格，按钮文字保持横排可读。 */
   #accountsBody .toolbar .tb-bulk{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
     gap:6px;padding:0;background:transparent;border:none;width:100%}
   #accountsBody .toolbar .tb-bulk button.sec{width:100%;min-height:36px;padding:6px 10px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 号池组：下拉 + 计数 + 两个「移入」按钮排在同一行。原来下拉独占一行、
+     两个按钮再各占半行，把账号列表多推了两行下去。 */
+  #accountsBody .toolbar .tb-pool{display:grid;
+    grid-template-columns:minmax(0,1.2fr) auto minmax(0,1fr) minmax(0,1fr);
+    align-items:center;gap:6px;width:100%;padding:4px}
+  /* 自绘下拉把原生 select 包进 .cs-wrap，真正上屏的是 .cs-trigger（默认比按钮
+     矮 9px）。把包装层拉满格宽、触发器钉 36px，同一行里的控件才落在一条基线
+     上。 */
+  #accountsBody .toolbar .tb-pool .cs-wrap{display:block;width:100%;min-width:0;
+    max-width:100%}
+  #accountsBody .toolbar .tb-pool .cs-trigger{height:36px;box-sizing:border-box}
+  #accountsBody .toolbar .tb-pool .pool-filter-select{width:100%;min-width:0;
+    min-height:36px}
+  #accountsBody .toolbar .tb-pool button.sec{width:100%;min-width:0;min-height:36px;
+    padding:6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* Forms stack */
   #pageSettings section > div[style*="display:flex"]{flex-wrap:wrap}
   #pageSettings input:not([type=checkbox]), #pageSettings select{min-height:40px;font-size:13px}
@@ -2053,8 +2067,6 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '默认关闭：所有账号都能服务文本与图片 / 视频；开启后才按号池标签限制派发。':
       'Off by default: every account can serve text, image and video. Turn it on to enforce pool labels.',
     '未勾选': 'None selected',
-    '勾选移入媒体池': 'Move selected to media pool',
-    '勾选移回文本池': 'Move selected to text pool',
     '号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换': 'Pool: text accounts serve chat only; media accounts serve image / video only. Click to switch.',
     '勾选后可批量挪号池': 'Tick to move this account between pools in bulk',
     '先勾选要挪号池的账号': 'Select the accounts to move first',
@@ -3664,8 +3676,6 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "默认关闭：所有账号都能服务文本与图片 / 视频；开启后才按号池标签限制派发。":
       "預設關閉：所有帳號都能服務文字與圖片 / 影片；開啟後才依號池標籤限制派發。",
     "未勾选": "未勾選",
-    "勾选移入媒体池": "勾選移入媒體池",
-    "勾选移回文本池": "勾選移回文字池",
     "号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换":
       "號池：文字號池只跑對話，媒體號池只跑圖片 / 影片。點一下切換",
     "勾选后可批量挪号池": "勾選後可批次挪號池",
@@ -5928,13 +5938,17 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" id="btnDisableSelected" onclick="setSelectedEnabled(false, this)" title="只停用当前勾选的账号，不会影响未勾选账号" disabled>停用已选</button>
     <button class="sec" id="btnDeleteSelected" onclick="deleteSelectedAccounts(this)" title="删除当前勾选的账号；只作用于当前视图与当前号池，不会删除未勾选账号" disabled>删除已选</button>
     </div>
-    <div class="tb-group tb-pool" id="poolToolsGroup" hidden>
-    <button class="sec" id="pfAll" onclick="poolFilter('all', this)">全部号池</button>
-    <button class="sec" id="pfText" onclick="poolFilter('text', this)">文本号池</button>
-    <button class="sec" id="pfMedia" onclick="poolFilter('media', this)">媒体号池</button>
+    <!-- 号池筛选与「移入」按钮始终可用：poolScope 是账号的归属标记，隔离关着
+         时它不限制派发，但仍然是可查、可改的。 -->
+    <div class="tb-group tb-pool" id="poolToolsGroup">
+    <select id="poolFilterSelect" class="mini-select pool-filter-select" onchange="poolFilter(this.value)" title="按号池筛选账号" aria-label="按号池筛选账号">
+      <option value="all">全部号池</option>
+      <option value="text">文本号池</option>
+      <option value="media">媒体号池</option>
+    </select>
     <span id="batchPoolCount" style="font-size:12px;color:var(--dim);align-self:center">未勾选</span>
-    <button class="sec" id="batchToMedia" onclick="batchPoolScope('media', this)" title="把勾选的账号批量移入媒体号池（只跑图片 / 视频）" disabled>勾选移入媒体池</button>
-    <button class="sec" id="batchToText" onclick="batchPoolScope('text', this)" title="把勾选的账号批量移回文本号池（恢复文本模型）" disabled>勾选移回文本池</button>
+    <button class="sec" id="batchToMedia" onclick="batchPoolScope('media', this)" title="把勾选的账号批量移入媒体号池（只跑图片 / 视频）" disabled>移入媒体池</button>
+    <button class="sec" id="batchToText" onclick="batchPoolScope('text', this)" title="把勾选的账号批量移回文本号池（恢复文本模型）" disabled>移入文本池</button>
     </div>
   </div>
     <div id="accounts"></div>
@@ -11428,13 +11442,13 @@ function accountRow(a){
     +     (ACCOUNT_SELECTED.has(String(a.uid || '')) ? ' checked' : '')
     +     ' onchange="toggleAccountSelection(this)" onclick="event.stopPropagation()"'
     +     ' style="vertical-align:middle;margin-right:2px" title="勾选后可批量导出、启用、停用或删除；开启号池隔离时也可批量挪号池">'
-    +     (POOL_SEPARATION_EFFECTIVE
-          ? '<span class="badge mini' + ((a.poolScope==='media')?' warn':'') + '"'
+    // 号池标签始终显示：它是账号的归属标记，也是「移入媒体池 / 移入文本池」的
+    // 结果回显。隔离关着时它只表示归属，不限制派发。
+    +     '<span class="badge mini' + ((a.poolScope==='media')?' warn':'') + '"'
     +     ' style="cursor:pointer;margin-right:4px"'
     +     ' title="号池：文本号池只跑对话，媒体号池只跑图片 / 视频。点一下切换"'
     +     ' onclick="toggleAccountPoolScope(&quot;' + uidAttr + '&quot;,' + ((a.poolScope==='media')?'false':'true') + ')">'
     +     ((a.poolScope==='media')?'媒体号池':'文本号池') + '</span>'
-          : '')
     +     '<span class="acct-name" title="' + esc(a.nickname) + '">' + esc(a.nickname) + '</span>'
     // 静态 API Key 账号：没有登录身份，也没有签到/成长体系，标出来省得当成
     // 普通 OAuth 号去点「重新登录」。悬停给出脱敏后的凭证，方便对上是哪一把。
@@ -11634,7 +11648,7 @@ function filteredAccountsForBulk(){
   // and every display filter. Selecting a filtered result must never reach
   // accounts the operator cannot currently see.
   let list = accountsInView();
-  if(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'){
+  if(POOL_FILTER !== 'all'){
     list = list.filter(a => String(a.poolScope || 'text') === POOL_FILTER);
   }
   return list.filter(accountMatchesFilters);
@@ -12007,7 +12021,6 @@ let ACCT_TOTAL_PAGES = 1;
 let ACCT_PAGE_REALM = null;
 let ACCT_PAGE_FILTER = null;
 let POOL_FILTER = 'all';
-let POOL_SEPARATION_EFFECTIVE = false;
 // 账号表上次真正画进 DOM 的内容指纹（同最近请求表的 lastRecentFp）：轮询拿回来
 // 的数据没变就整段跳过，不重拼 HTML、不重排。
 let lastAccountsFp = null;
@@ -12019,8 +12032,7 @@ function accountsRenderFp(){
   // （今日活动列）、视图区域、页码、表头排序、筛选条件、本地日期（「今日」口径）。
   // 筛选也进指纹：不靠「改筛选一定无参调用 renderAccounts()」这条约定兜底。
   return [
-    window.VIEW_REALM || 'intl', ACCT_PAGE,
-    POOL_SEPARATION_EFFECTIVE ? POOL_FILTER : 'all',
+    window.VIEW_REALM || 'intl', ACCT_PAGE, POOL_FILTER,
     JSON.stringify([...ACCOUNT_SELECTED].sort()),
     JSON.stringify(SORT_STATE.accounts || null),
     JSON.stringify(ACCOUNT_FILTERS),
@@ -12066,14 +12078,14 @@ function renderAccounts(){
   if(!box) return;
   const currentView = (window.VIEW_REALM || "intl");
   let list = accountsInView();
-  if(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'){
+  if(POOL_FILTER !== 'all'){
     list = list.filter(a => String(a.poolScope || 'text') === POOL_FILTER);
   }
   const skipIfSame = arguments[0] === true;
   if(ACCT_PAGE_REALM !== currentView){ ACCT_PAGE_REALM = currentView; ACCT_PAGE = 1; }
   const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status
     + '\u0001' + ACCOUNT_FILTERS.group + '\u0001' + ACCOUNT_FILTERS.errorCode + '\u0001'
-    + (POOL_SEPARATION_EFFECTIVE ? POOL_FILTER : 'all');
+    + POOL_FILTER;
   const groupSelect = document.getElementById('accountGroupFilter');
   if(groupSelect){
     const groups = Array.from(new Set(list.map(a => String(a.group || '')).filter(Boolean))).sort();
@@ -12268,26 +12280,21 @@ async function toggleAccount(uid, enable, btn){
     if(btn) btn.disabled = false;
   }
 }
-function poolFilter(scope, btn){
-  if(!POOL_SEPARATION_EFFECTIVE) return;
+function poolFilter(scope){
   POOL_FILTER = scope === 'media' ? 'media' : (scope === 'text' ? 'text' : 'all');
+  const sel = document.getElementById('poolFilterSelect');
+  if(sel) sel.value = POOL_FILTER;
   clearAccountSelection();
-  ['pfAll','pfText','pfMedia'].forEach(function(id){
-    const el = document.getElementById(id);
-    if(el) el.classList.toggle('active', el === btn);
-  });
   ACCT_PAGE = 1;
   renderAccounts();
 }
-function applyPoolSeparationUi(effective){
-  POOL_SEPARATION_EFFECTIVE = effective === true;
-  if(!POOL_SEPARATION_EFFECTIVE) POOL_FILTER = 'all';
-  const group = document.getElementById('poolToolsGroup');
-  if(group) group.hidden = !POOL_SEPARATION_EFFECTIVE;
-  ['pfAll','pfText','pfMedia'].forEach(function(id){
-    const el = document.getElementById(id);
-    if(el) el.classList.toggle('active', id === 'pfAll' || POOL_FILTER === id.slice(2).toLowerCase());
-  });
+function applyPoolSeparationUi(){
+  // 号池筛选与「移入媒体池 / 移入文本池」始终可用：poolScope 是账号的归属
+  // 标记，隔离关着时它不限制派发，但仍然是可查、可改的。隔离开关只影响派发
+  // 行为（由服务端判定），不决定这些控件是否上屏——这里只把下拉的显示值与
+  // 当前筛选同步一次。
+  const sel = document.getElementById('poolFilterSelect');
+  if(sel) sel.value = POOL_FILTER;
   updateBatchPoolBar();
 }
 // 勾选集合的真源是 ACCOUNT_SELECTED（不是 DOM 的 :checked）：翻页、轮询整表
@@ -12309,14 +12316,12 @@ function acctScopeUids(){
   };
 }
 function updateBatchPoolBar(){
-  const n = POOL_SEPARATION_EFFECTIVE
-    ? acctSelUids().length
-    : selectedAccountsForBulk().length;
+  const n = acctSelUids().length;
   const label = document.getElementById('batchPoolCount');
   if(label) label.textContent = n ? ('已选 ' + n + ' 个') : '未勾选';
   ['batchToMedia','batchToText'].forEach(function(id){
     const el = document.getElementById(id);
-    if(el) el.disabled = !POOL_SEPARATION_EFFECTIVE || !n;
+    if(el) el.disabled = !n;
   });
   const bulkButtons = [
     ['btnExportSelected', '导出已选'],
@@ -12379,10 +12384,8 @@ async function setSelectedEnabled(enable, btn){
   }
 }
 async function batchPoolScope(scope, btn){
-  if(!POOL_SEPARATION_EFFECTIVE){
-    toast('请先启用「文本 / 媒体号池隔离」', 'warn');
-    return;
-  }
+  // 只挪勾选的账号：号池归属是一次明确的指派，没有勾选就无从下手（不像刷新
+  // / 测试 / 启停那样有「当前筛选结果」这个自然默认）。
   const uids = acctSelUids();
   if(!uids.length){ toast('先勾选要挪号池的账号', 'warn'); return; }
   if(btn) btn.disabled = true;
@@ -16035,7 +16038,7 @@ async function loadSettings(showToast, opts){
           poolSeparationState.style.color = poolSeparation ? 'var(--accent2)' : 'var(--dim)';
         }
       }
-      applyPoolSeparationUi(poolSeparationEffective);
+      applyPoolSeparationUi();
       const holdSec = typeof data.restriction_hold_seconds === 'number' ? data.restriction_hold_seconds : 1800;
       const holdInput = document.getElementById('setRestrictionHoldSeconds');
       if(holdInput) holdInput.value = holdSec;
@@ -17320,7 +17323,7 @@ async function savePoolSeparation(btn){
     toast(value ? '已启用：按号池标签限制派发'
                 : '已关闭：所有账号都可服务文本与媒体', 'ok');
     if(typeof loadSettings === 'function') await loadSettings();
-    else applyPoolSeparationUi(value);
+    else applyPoolSeparationUi();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
   } finally {
