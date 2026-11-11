@@ -299,6 +299,51 @@ table.activity-table td[data-label="结果"]{white-space:nowrap}
 .badge.warn{color:#a0691c;background:rgba(183,121,31,.14);border-color:rgba(183,121,31,.35)}
 .badge.bad{color:#a03c32;background:rgba(181,71,59,.14);border-color:rgba(181,71,59,.35)}
 .badge.mini{padding:1px 6px;font-size:10px}
+/* 自动化页的账号选择器：原生 <select> 的弹层宽度跟着输入框走，昵称 + uid +
+   积分一长就被截断；这里换成四列自绘面板（账号 / 剩余积分 / 任务 / 今日签到）。
+   flex:0 1 auto + min-width：宽度不够时这里是**收缩**，而不是整块换行掉到下面
+   （长标签用省略号截断）。 */
+
+.acct-picker{position:relative;display:inline-flex;flex:0 1 auto;min-width:150px;max-width:min(340px,36vw)}
+.acct-trigger{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);
+  font-family:inherit;cursor:pointer;box-shadow:none}
+.acct-trigger:hover{border-color:var(--line-hover)}
+.acct-trigger-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.acct-caret{color:var(--dim);font-size:10px;flex:none}
+/* fixed 而不是 absolute：坐标只认视口，由 placeGrowthMenu() 现算，四边都夹在
+   视口内。打开时还会被挂到 document.body 上（见 mountGrowthMenu），否则会被内容区
+   / 左侧 sticky 导航的层叠上下文压住 —— 那正是「账号列被遮挡」的根因。
+   z-index 取到顶层，任何 sticky 栏、卡片、弹层都盖不住它。 */
+.acct-menu{display:none;position:fixed;z-index:9999;overflow:auto;overscroll-behavior:contain;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-md)}
+.acct-menu.open{display:block}
+.acct-menu-head,.acct-row{display:grid;grid-template-columns:minmax(140px,1.5fr) 92px 74px 82px;gap:8px;
+  align-items:center;padding:6px 10px;font-size:12px}
+.acct-menu-head{position:sticky;top:0;z-index:1;background:var(--panel);color:var(--dim);font-size:11px;
+  border-bottom:1px solid var(--line)}
+.acct-menu-head span:not(:first-child){text-align:right}
+.acct-row{cursor:pointer;border-bottom:1px solid var(--line)}
+.acct-row:last-child{border-bottom:none}
+.acct-row:hover{background:var(--panel2)}
+/* 当前选中的账号：底色 + 左侧强调色竖条，滚动到哪儿都能一眼认出来。 */
+.acct-row.active{
+  background:var(--panel2);
+  background:color-mix(in srgb, var(--accent) 18%, var(--panel));
+  box-shadow:inset 3px 0 0 var(--accent);
+  font-weight:600;
+}
+.acct-row.active:hover{
+  background:color-mix(in srgb, var(--accent) 26%, var(--panel));
+}
+.acct-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.acct-row .num{text-align:right;font-variant-numeric:tabular-nums}
+@media (max-width:640px){
+  .acct-menu{width:92vw}
+  .acct-menu-head{display:none}
+  .acct-row{grid-template-columns:1fr auto;row-gap:2px}
+  .acct-row .nm{grid-column:1/-1}
+}
 .cool-list{display:flex;flex-direction:column;align-items:stretch;gap:2px;margin-top:3px;max-width:100%;overflow:hidden;min-width:0}
 .cool-pill{display:inline-block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:600;
   color:#a0691c;background:rgba(183,121,31,.14);border:1px solid rgba(183,121,31,.35);white-space:nowrap}
@@ -5983,14 +6028,23 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
        入口；一键执行每日任务只是把它们串起来，不改变单项语义。 -->
   <section id="sectionDailyTasks" style="margin-bottom:24px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-      <div>
+      <div style="flex:0 1 auto;min-width:120px">
         <h2 style="margin:0">每日任务</h2>
         <div style="font-size:12px;color:var(--dim)">国际版每日签到与国内版每日福利；按天刷新，可单项执行，也可一键跑完。</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select id="cnCheckinAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
-          <option value="all">全部国内账号 (批量)</option>
-        </select>
+      <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;flex:0 0 auto;justify-content:flex-end">
+        <!-- 账号选择器：原生 <select> 的弹层宽度跟输入框走，长标签会被直接截断，
+             这里换成自绘面板，四列对齐（账号 / 剩余积分 / 任务 / 今日签到）。 -->
+        <div class="acct-picker" id="cnCheckinAcctPicker">
+          <button type="button" class="acct-trigger" id="cnCheckinAcctTrigger" onclick="toggleGrowthPicker('daily', event)" aria-haspopup="listbox" aria-expanded="false">
+            <span class="acct-trigger-label" id="cnCheckinAcctCurrent">全部国内账号 (批量)</span>
+            <span class="acct-caret">▾</span>
+          </button>
+          <div class="acct-menu" id="cnCheckinAcctMenu" role="listbox" aria-label="选择国内版账号（每日福利）">
+            <div class="acct-menu-head"><span>账号</span><span>剩余积分</span><span>任务</span><span>今日签到</span></div>
+            <div id="cnCheckinAcctList"></div>
+          </div>
+        </div>
         <button class="primary" id="btnRunAllDailyTasks" onclick="runAllDailyTasks(this)">一键执行每日任务</button>
       </div>
     </div>
@@ -6085,14 +6139,21 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
        抽奖、夜猫子都不在这里，避免一次点击误消耗每日额度。 -->
   <section id="sectionGrowthTasks">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-      <div>
+      <div style="flex:0 1 auto;min-width:120px">
         <h2 style="margin:0">一次性 / 活动福利</h2>
         <div style="font-size:12px;color:var(--dim)">批量接取、事件上报并领取成长任务、活动任务与小程序任务奖励；不包含任何每日福利。</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select id="growthAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
-          <option value="all">全部国内账号 (批量)</option>
-        </select>
+      <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;flex:0 0 auto;justify-content:flex-end">
+        <div class="acct-picker" id="growthAcctPicker">
+          <button type="button" class="acct-trigger" id="growthAcctTrigger" onclick="toggleGrowthPicker('growth', event)" aria-haspopup="listbox" aria-expanded="false">
+            <span class="acct-trigger-label" id="growthAcctCurrent">全部国内账号 (批量)</span>
+            <span class="acct-caret">▾</span>
+          </button>
+          <div class="acct-menu" id="growthAcctMenu" role="listbox" aria-label="选择国内版账号（一次性任务）">
+            <div class="acct-menu-head"><span>账号</span><span>剩余积分</span><span>任务</span><span>今日签到</span></div>
+            <div id="growthAcctList"></div>
+          </div>
+        </div>
         <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="growthAutoClaim" checked onchange="saveGrowthAutoClaim(this.checked)"> 自动领取
         </label>
@@ -9447,10 +9508,8 @@ function taskUidForRequest(uidOverride){
 
 async function switchGrowthAccount(uid){
   CURRENT_GROWTH_UID = uid;
-  ["growthAcctSelect", "cnCheckinAcctSelect"].forEach(function(id){
-    const el = document.getElementById(id);
-    if(el && el.value !== uid) el.value = uid;
-  });
+  closeGrowthPickers();
+  renderGrowthTriggerLabels();
   await loadGrowthTasks();
 }
 
@@ -9458,6 +9517,290 @@ async function switchGrowthAccount(uid){
  * not send it, so fall back to `enabled`. */
 function taskActive(a){
   return !!a && (a.tasksEnabled !== undefined ? !!a.tasksEnabled : !!a.enabled);
+}
+
+/* ── 自动化页的账号选择器 ─────────────────────────────────────────────
+ * 原生 <select> 的弹层宽度跟着输入框走，昵称 + uid 一长就被截断；也看不出账号
+ * 今天有没有领 Buddy 加油站的 100 积分签到奖励、成长任务做到第几个了。这里换成
+ * 自绘面板，四列对齐：账号 / 剩余积分 / 任务 / 今日签到。
+ *
+ * 三份数据都来自 /tasks 的 accounts[]（服务端读账号本地缓存，零上游请求）；
+ * 缺任务进度的账号由 fillGrowthProgress() 分批向 /tasks/progress 补，回来原地
+ * 改写对应行的进度格，不重建面板（保住滚动位置）。
+ *
+ * 两处账号选择器（每日任务 / 一次性任务）共用同一份选中状态和同一份数据，
+ * 只是 DOM 不同，所以集中写在这份清单里，渲染与定位都按它循环。 */
+const GROWTH_PROGRESS = new Map();   // uid -> {done, total}
+const GROWTH_CREDITS = new Map();    // uid -> 剩余积分
+const GROWTH_ACCOUNTS = new Map();   // uid -> 账号
+let GROWTH_FILL_GEN = 0;
+
+const GROWTH_PICKERS = [
+  { key: 'growth', wrap: 'growthAcctPicker', trigger: 'growthAcctTrigger',
+    current: 'growthAcctCurrent', menu: 'growthAcctMenu', list: 'growthAcctList' },
+  { key: 'daily', wrap: 'cnCheckinAcctPicker', trigger: 'cnCheckinAcctTrigger',
+    current: 'cnCheckinAcctCurrent', menu: 'cnCheckinAcctMenu', list: 'cnCheckinAcctList' }
+];
+let GROWTH_PICKER_OPEN = '';
+
+function growthPickerOf(key){
+  return GROWTH_PICKERS.find(function(picker){ return picker.key === key; }) || null;
+}
+
+function growthCreditOf(a){
+  const raw = GROWTH_CREDITS.has(a.uid) ? GROWTH_CREDITS.get(a.uid) : a.credits_remain;
+  if(raw === null || raw === undefined || raw === '') return null;
+  const value = Number(raw);
+  return isFinite(value) ? value : null;
+}
+
+function growthCheckinOf(a){
+  if(a.checkin_today === true) return true;
+  if(a.checkin_today === false) return false;
+  return null;   // 企业号 / 老数据：签到不适用或未知
+}
+
+function growthCheckinBadge(a){
+  const state = growthCheckinOf(a);
+  if(state === true) return '<span class="badge ok mini">已签</span>';
+  if(state === false) return '<span class="badge warn mini">未签</span>';
+  return '<span class="badge mini">—</span>';
+}
+
+function growthProgressText(uid){
+  const prog = GROWTH_PROGRESS.get(uid);
+  return (prog && prog.total) ? (prog.done + '/' + prog.total) : '—';
+}
+
+function growthAccountRow(a){
+  const credit = growthCreditOf(a);
+  const nickname = String(a.nickname || a.uid || '');
+  return '<div class="acct-row' + (CURRENT_GROWTH_UID === a.uid ? ' active' : '') + '" data-uid="' + esc(a.uid) + '" role="option" onclick="pickGrowthAccount(this.dataset.uid)">'
+    + '<span class="nm" title="' + esc(nickname) + '">' + esc(nickname) + ' <span style="color:var(--dim)">(' + esc(String(a.uid).slice(0, 6)) + ')</span></span>'
+    + '<span class="num">' + (credit === null ? '—' : fmt(credit)) + '</span>'
+    + '<span class="num t-progress">' + growthProgressText(a.uid) + '</span>'
+    + '<span style="justify-self:end">' + growthCheckinBadge(a) + '</span>'
+    + '</div>';
+}
+
+function growthAllRow(accts){
+  let total = 0, hasCredit = false, checked = 0, known = 0;
+  accts.forEach(a => {
+    const credit = growthCreditOf(a);
+    if(credit !== null){ total += credit; hasCredit = true; }
+    const state = growthCheckinOf(a);
+    if(state !== null){ known += 1; if(state) checked += 1; }
+  });
+  const badge = known
+    ? '<span class="badge ' + (checked >= known ? 'ok' : 'warn') + ' mini">签到 ' + checked + '/' + known + '</span>'
+    : '<span class="badge mini">—</span>';
+  return '<div class="acct-row' + (CURRENT_GROWTH_UID === 'all' ? ' active' : '') + '" data-uid="all" role="option" onclick="pickGrowthAccount(\'all\')">'
+    + '<span class="nm"><b>全部国内账号</b> <span style="color:var(--dim)">(批量)</span></span>'
+    + '<span class="num">' + (hasCredit ? fmt(total) : '—') + '</span>'
+    + '<span class="num t-progress">—</span>'
+    + '<span style="justify-self:end">' + badge + '</span>'
+    + '</div>';
+}
+
+function growthCurrentLabel(){
+  /* 触发器只放「号码 (uid6)」：积分 / 任务 / 签到只在下拉列表里看。
+     带上这些信息会把控件撑宽，一选具体账号就把整行工具挤坏。 */
+  if(CURRENT_GROWTH_UID === 'all') return '全部国内账号 (批量)';
+  const account = GROWTH_ACCOUNTS.get(CURRENT_GROWTH_UID);
+  if(!account) return '选择账号';
+  return String(account.nickname || account.uid) + ' (' + String(account.uid).slice(0, 6) + ')';
+}
+
+function renderGrowthTriggerLabels(){
+  const label = growthCurrentLabel();
+  GROWTH_PICKERS.forEach(function(picker){
+    const el = document.getElementById(picker.current);
+    if(el) el.textContent = label;
+  });
+}
+
+function renderGrowthAccounts(accts){
+  GROWTH_ACCOUNTS.clear();
+  accts.forEach(a => {
+    GROWTH_ACCOUNTS.set(a.uid, a);
+    if(a.tasks_total) GROWTH_PROGRESS.set(a.uid, {done: a.tasks_done || 0, total: a.tasks_total});
+    const credit = growthCreditOf(a);
+    if(credit !== null) GROWTH_CREDITS.set(a.uid, credit);
+  });
+  const body = accts.length
+    ? growthAllRow(accts) + accts.map(growthAccountRow).join('')
+    : '<div class="acct-row" style="cursor:default"><span class="nm" style="color:var(--dim)">无国内版账号</span></div>';
+  GROWTH_PICKERS.forEach(function(picker){
+    const list = document.getElementById(picker.list);
+    if(list) list.innerHTML = body;
+  });
+  renderGrowthTriggerLabels();
+}
+
+/* 进度补齐后只改那一行的进度格，不重建整个面板（保住滚动位置）。 */
+function updateGrowthOption(uid){
+  GROWTH_PICKERS.forEach(function(picker){
+    const list = document.getElementById(picker.list);
+    if(!list) return;
+    const row = Array.prototype.find.call(
+      list.querySelectorAll('.acct-row'),
+      el => el.dataset.uid === uid
+    );
+    if(!row) return;
+    const cell = row.querySelector('.t-progress');
+    if(cell) cell.textContent = growthProgressText(uid);
+  });
+  if(CURRENT_GROWTH_UID === uid) renderGrowthTriggerLabels();
+}
+
+/* 面板本身是 position:fixed（坐标按视口算），但只要它还留在内容区里，z-index
+   就只在内容区自己的层叠上下文里生效：左侧导航是 position:sticky + z-index:40
+   的独立层叠上下文，会直接盖住面板左半边的「账号」列。打开时把它挂到 body 上，
+   彻底脱离内容区，z-index 才算全局有效。 */
+function mountGrowthMenu(menu){
+  if(!menu) return null;
+  if(menu.parentElement !== document.body) document.body.appendChild(menu);
+  return menu;
+}
+
+/* 内容区左边界：面板永远不许压到左侧导航底下（那是最常见的「账号列被遮挡」）。 */
+function growthMenuMinLeft(){
+  const side = document.getElementById('nextSidebar');
+  if(side && side.offsetParent !== null){
+    const r = side.getBoundingClientRect();
+    if(r.width > 0 && r.right > 0) return r.right + 8;
+  }
+  return 12;
+}
+
+/* 面板坐标现算：四边都夹在视口内（且不越过左侧导航），纵向只挑空间更大的一侧，
+   高度取该侧真实可用值，超出的部分在面板内部滚动，保证「完整展示」不被裁。 */
+function placeGrowthMenu(picker){
+  const menu = document.getElementById(picker.menu);
+  const trigger = document.getElementById(picker.trigger);
+  if(!menu || !trigger) return;
+  const rect = trigger.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const margin = 12, gap = 6;
+  const minLeft = Math.max(margin, growthMenuMinLeft());
+  const maxRight = vw - margin;
+  // 宽度：四列排开优先 560，可用宽度不够就压缩，不出现横向滚出屏幕
+  const width = Math.min(560, Math.max(240, maxRight - minLeft));
+  // 横向：默认右对齐触发器，再夹进 [minLeft, maxRight - width]
+  const left = Math.max(minLeft, Math.min(rect.right - width, maxRight - width));
+  // 纵向：只挑空间更大的一侧；maxHeight 取该侧真实可用值（不再强撑 160px 顶穿视口）
+  const below = vh - rect.bottom - gap - margin;
+  const above = rect.top - gap - margin;
+  const openUp = below < 240 && above > below;
+  const maxHeight = Math.max(120, Math.floor(openUp ? above : below));
+  menu.style.width = Math.round(width) + 'px';
+  menu.style.maxHeight = maxHeight + 'px';
+  menu.style.left = Math.round(left) + 'px';
+  if(openUp){
+    menu.style.top = 'auto';
+    menu.style.bottom = Math.round(vh - rect.top + gap) + 'px';
+  } else {
+    menu.style.bottom = 'auto';
+    menu.style.top = Math.round(rect.bottom + gap) + 'px';
+  }
+}
+
+/* 面板高度受限、列表又长时，把当前选中行滚进可视区（表头是 sticky 的，要扣掉它）。 */
+function scrollGrowthMenuToActive(menu){
+  if(!menu) return;
+  const active = menu.querySelector('.acct-row.active');
+  if(!active) return;
+  const head = menu.querySelector('.acct-menu-head');
+  const headH = (head && getComputedStyle(head).display !== 'none') ? head.offsetHeight : 0;
+  const mr = menu.getBoundingClientRect();
+  const ar = active.getBoundingClientRect();
+  if(ar.top < mr.top + headH) menu.scrollTop -= (mr.top + headH - ar.top) + 4;
+  else if(ar.bottom > mr.bottom) menu.scrollTop += (ar.bottom - mr.bottom) + 4;
+}
+
+function toggleGrowthPicker(key, evt){
+  if(evt) evt.stopPropagation();
+  const picker = growthPickerOf(key);
+  if(!picker) return;
+  const menu = document.getElementById(picker.menu);
+  const trigger = document.getElementById(picker.trigger);
+  if(!menu) return;
+  const willOpen = GROWTH_PICKER_OPEN !== key;
+  closeGrowthPickers();
+  if(!willOpen) return;
+  GROWTH_PICKER_OPEN = key;
+  mountGrowthMenu(menu);
+  menu.classList.add('open');      // 先显示再量，offsetHeight 才是真实值
+  placeGrowthMenu(picker);
+  scrollGrowthMenuToActive(menu);
+  if(trigger) trigger.setAttribute('aria-expanded', 'true');
+}
+
+function closeGrowthPickers(){
+  GROWTH_PICKERS.forEach(function(picker){
+    const menu = document.getElementById(picker.menu);
+    const trigger = document.getElementById(picker.trigger);
+    if(menu) menu.classList.remove('open');
+    if(trigger) trigger.setAttribute('aria-expanded', 'false');
+  });
+  GROWTH_PICKER_OPEN = '';
+}
+
+function pickGrowthAccount(uid){
+  closeGrowthPickers();
+  if(!uid || uid === CURRENT_GROWTH_UID) return;
+  switchGrowthAccount(uid);
+}
+
+document.addEventListener('click', function(evt){
+  const picker = growthPickerOf(GROWTH_PICKER_OPEN);
+  if(!picker) return;
+  const menu = document.getElementById(picker.menu);
+  if(menu && menu.contains(evt.target)) return;   // 点击面板内部（表头/空白）不关闭
+  const wrap = document.getElementById(picker.wrap);
+  if(wrap && wrap.contains(evt.target)) return;   // 触发器自己会切换
+  closeGrowthPickers();
+});
+document.addEventListener('keydown', function(evt){
+  if(evt.key === 'Escape') closeGrowthPickers();
+});
+window.addEventListener('resize', function(){
+  const picker = growthPickerOf(GROWTH_PICKER_OPEN);
+  if(picker) placeGrowthMenu(picker);
+});
+window.addEventListener('scroll', function(evt){
+  const picker = growthPickerOf(GROWTH_PICKER_OPEN);
+  if(!picker) return;
+  const menu = document.getElementById(picker.menu);
+  // 面板内部滚动（长列表）不重算坐标，否则会把用户正滚的列表拉回去
+  const t = evt.target;
+  if(menu && t && t !== document && t !== window && t.nodeType === 1 && menu.contains(t)) return;
+  placeGrowthMenu(picker);
+}, true);
+
+/* 只补没有进度的账号：每批 6 个，批间让 120ms，服务端 3 并发问上游。
+ * 换账号/离开页面会重建下拉并递增代次号，旧批次回来直接丢弃。 */
+async function fillGrowthProgress(accts){
+  const gen = ++GROWTH_FILL_GEN;
+  const missing = accts.filter(a => {
+    const prog = GROWTH_PROGRESS.get(a.uid);
+    return !(prog && prog.total);
+  }).map(a => a.uid);
+  for(let i = 0; i < missing.length; i += 6){
+    let r = null;
+    try{
+      r = await getJSON('/tasks/progress?uids=' + encodeURIComponent(missing.slice(i, i + 6).join(',')));
+    }catch(e){
+      // 单批失败不阻塞后面的批次，下次进页面再补。
+    }
+    if(gen !== GROWTH_FILL_GEN) return;
+    ((r && r.items) || []).forEach(item => {
+      if(!item || !item.uid || !item.total) return;
+      GROWTH_PROGRESS.set(item.uid, {done: item.done || 0, total: item.total});
+      updateGrowthOption(item.uid);
+    });
+    if(i + 6 < missing.length) await new Promise(res => setTimeout(res, 120));
+  }
 }
 
 async function loadIntlTasks(){
@@ -9535,18 +9878,8 @@ async function loadGrowthTasks(){
     const energy = sum.energy || 0;
     const tr = sum.travel || {};
 
-    ["growthAcctSelect", "cnCheckinAcctSelect"].forEach(function(id){
-      const sel = document.getElementById(id);
-      if(!sel) return;
-      if(accts.length){
-        const opts = ['<option value="all"' + (CURRENT_GROWTH_UID === 'all' ? ' selected' : '') + '>全部国内账号 (批量)</option>']
-          .concat(accts.map(a => '<option value="' + esc(a.uid) + '"' + (CURRENT_GROWTH_UID === a.uid ? ' selected' : '') + '>' + esc(a.nickname) + ' (' + esc(a.uid.slice(0,6)) + ')</option>'))
-          .join('');
-        sel.innerHTML = opts;
-      } else {
-        sel.innerHTML = '<option value="">无国内版账号</option>';
-      }
-    });
+    renderGrowthAccounts(accts);
+    if(accts.length) fillGrowthProgress(accts);
     if(!accts.length){
       if(typeof updateTaskPageCheckinCards === 'function') updateTaskPageCheckinCards();
       const elStk = document.getElementById("stkDays"); if(elStk) elStk.textContent = '-';
