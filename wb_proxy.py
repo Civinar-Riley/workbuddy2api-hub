@@ -11945,8 +11945,7 @@ def affinity_route(messages):
             # 不同的地方，又只占一轮的 token，哈希开销可忽略。system 提示相同
             # 时它同样稳定（同一会话每轮都能算出同一个键）。
             head = msgs[:3]
-        blob = json.dumps(head, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        digest = hashlib.sha256(blob).hexdigest()[:16]
+        digest = _affinity_digest(head)
         key = "pfx-" + digest
         if AFFINITY_MAX_MSGS > 0 and len(msgs) > AFFINITY_MAX_MSGS:
             if AFFINITY_PAGE_SIZE > 1:
@@ -11968,6 +11967,110 @@ def affinity_route(messages):
 def derive_affinity_key(messages):
     """Conversation key only; see affinity_route for the pool page."""
     return affinity_route(messages)[0]
+
+
+def _affinity_digest(head):
+    """sha256[:16] of a message head; shared by affinity_route and the prebind."""
+    blob = json.dumps(head, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def affinity_prefix_key(messages, head=2):
+    """'pfx-<digest>' for the first `head` messages, as affinity_route derives it."""
+    if not messages:
+        return None
+    return "pfx-" + _affinity_digest(messages[:head])
+
+
+#: 单发 /v1/messages 落到几个号上。0 = 关闭（回落现状：被首条 user 文本打散到整池）。
+MSGSTAT_SHARDS = int(os.environ.get("WB_MSGSTAT_SHARDS", "0") or 0)
+#: 亲和键每天换一次盐：同一 (key, 模型, system, tools) 组合的 conversation id
+#: 每天重新开一桶，避免上游把几千个不相干的单发调用聚成同一条会话。
+MSGSTAT_DAILY_SALT = os.environ.get(
+    "WB_MSGSTAT_DAILY_SALT", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _msgstat_text(message):
+    content = (message or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                parts.append(str(part))
+        return "".join(parts)
+    if content is None:
+        return ""
+    return json.dumps(content, ensure_ascii=False, sort_keys=True)
+
+
+def msgstat_affinity_key(key_id, chat):
+    """Stable affinity key for a one-shot /v1/messages call, or None.
+
+    A single-shot call is [system, user] and is never streamed; the user text
+    differs on every call, so the prefix-derived key (affinity_route) differs
+    too and every call round-robins onto a cold account. The upstream prompt
+    cache is per account, so a cold account re-pays the whole system prefix.
+
+    Hash only the parts that stay stable for one client configuration instead,
+    and bucket the volatile tail over MSGSTAT_SHARDS so a few accounts stay
+    warm. Returns None (prefix affinity) for anything that looks like a real
+    conversation: streamed, or already past the first continuation.
+    """
+    if MSGSTAT_SHARDS <= 0 or not isinstance(chat, dict):
+        return None
+    msgs = chat.get("messages") or []
+    if chat.get("stream") or len(msgs) > 3 or len(msgs) < 2:
+        return None
+    names = []
+    for tool in (chat.get("tools") or []):
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        name = fn.get("name") if isinstance(fn, dict) else None
+        names.append(str(name or ""))
+    stable = _affinity_digest({
+        "k": key_id or "",
+        "m": chat.get("model") or "",
+        "s": _msgstat_text(msgs[0]),
+        "t": sorted(names),
+    })
+    volatile = hashlib.sha256(
+        json.dumps(msgs[1:], ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:8]
+    key = "msgstat-%s-%d" % (stable, int(volatile, 16) % MSGSTAT_SHARDS)
+    if MSGSTAT_DAILY_SALT:
+        key += "-" + time.strftime("%Y-%m-%d")
+    return key
+
+
+def prebind_prefix_second_turn(chat):
+    """Turn 2 hashes msgs[:3] while turn 1 bound msgs[:2]; carry the account over.
+
+    Without this the second turn is always a new affinity key, so it lands on a
+    cold account and re-pays the whole prefix. Only the first continuation is
+    touched: later turns already agree with turn 2.
+    """
+    if POOL is None or not affinity_stable_key_enabled():
+        return
+    msgs = chat.get("messages") if isinstance(chat, dict) else None
+    if not msgs or len(msgs) != 4:
+        return
+    old, new = affinity_prefix_key(msgs, 2), affinity_prefix_key(msgs, 3)
+    if not old or not new or old == new:
+        return
+    try:
+        uid = POOL.affinity.get(old)
+    except Exception:
+        uid = None
+    if uid:
+        try:
+            POOL.affinity.bind(new, uid)
+        except Exception:
+            pass
+
+
 def prompt_fingerprint(messages):
     """Privacy-safe fingerprint of the outgoing prompt.
     Cache hits need a byte-identical prefix, so these hashes answer "is my
@@ -26589,6 +26692,14 @@ class Handler(BaseHTTPRequestHandler):
         model = chat_req.get("model") or "unknown"
         want_stream = bool(chat_req.get("stream"))
         session_key = extract_session_key(self.headers, chat_req)
+        if not session_key:
+            # 单发调用（stream=false、msgs<=3）：亲和键不含易变的首条 user 文本，
+            # 否则每次都是「新会话」，被 affinity_route 轮询换号，而上游 prompt
+            # cache 是按账号存的 —— 换一个号就整段重付一次。
+            session_key = msgstat_affinity_key(self._key_id(), chat_req)
+            if not session_key:
+                # 真会话（流式 / 已续轮）仍走前缀亲和，顺手把第 2 轮绑定过继。
+                prebind_prefix_second_turn(chat_req)
         t_start = time.time()
         fp = prompt_fingerprint(chat_req.get("messages"))
         try:
