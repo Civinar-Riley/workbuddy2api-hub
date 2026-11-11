@@ -9806,6 +9806,30 @@ async function triggerCatTravel(btn, uidOverride){
   }
 }
 
+/* 签到回执的展示文案。后端 state：checked = 本次真签成；already = 今天早就签过
+ * 了，上游原话是「今天已签到，请明天再来」——这时候一个积分都没加，绝不能再说
+ * 「签到成功 (+100积分)」，否则重复点击看起来像是"还能再签一次"。
+ * 两个签到入口（页面上的 / 账号区旧按钮）共用这一份文案。 */
+function checkinResultText(x){
+  const who = x.nickname || String(x.uid || '').slice(0, 6);
+  if(!x.ok) return who + ': ' + (x.error || x.msg || '签到失败');
+  if(x.state === 'already') return who + ': 今天已签到，无需重复';
+  const credit = checkinCreditOf(x);
+  return who + ': 签到成功' + (credit ? ' (+' + credit + ' 积分)' : '');
+}
+
+/* 只认上游真回来的积分数字；取不到就不显示，绝不硬编码 100。 */
+function checkinCreditOf(x){
+  const data = x && x.data;
+  if(!data || typeof data !== 'object') return null;
+  const keys = ['credit', 'today_credit', 'todayCredit', 'addCredit', 'reward'];
+  for(let i = 0; i < keys.length; i++){
+    const n = Number(data[keys[i]]);
+    if(Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 async function triggerBuddyCheckin(btn, uidOverride){
   if(btn){ btn.disabled = true; }
   const ot = btn ? btn.textContent : '';
@@ -9819,9 +9843,10 @@ async function triggerBuddyCheckin(btn, uidOverride){
     let ok = false;
     if(!res.length) toast("未发现国内版账号", "warn");
     else {
-      const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "签到成功 (+100积分)" : (x.error||x.msg))).join("；");
+      const fresh = res.some(x => x.ok && x.state !== 'already');
       ok = res.some(x => x.ok);
-      toast("Buddy 加油站签到: " + summary, ok ? "ok" : "warn");
+      toast("Buddy 加油站签到: " + res.map(checkinResultText).join("；"),
+            fresh ? "ok" : (ok ? "info" : "warn"));
     }
     await loadAccounts(); await loadGrowthTasks();
     return ok;
@@ -9955,8 +9980,10 @@ async function doCheckin(btn){
     const res = r.results || [];
     if(!res.length) toast("未发现国内版账号", "warn");
     else {
-      const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "签到成功" : (x.error||x.msg))).join("；");
-      toast("每日签到: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+      const fresh = res.some(x => x.ok && x.state !== 'already');
+      const anyOk = res.some(x => x.ok);
+      toast("每日签到: " + res.map(checkinResultText).join("；"),
+            fresh ? "ok" : (anyOk ? "info" : "warn"));
     }
     await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
   }catch(e){ toast("签到失败: " + e.message, "bad"); }
