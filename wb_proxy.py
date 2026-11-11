@@ -25122,14 +25122,21 @@ class Handler(BaseHTTPRequestHandler):
         """
         target = str(payload.get("product") or "").strip().lower()
         uid = payload.get("uid")
+        uids = payload.get("uids")
         realm = payload.get("realm")
 
         if target not in wb_identity.VALID_PRODUCTS:
             return self._error(400, "product must be 'workbuddy', 'vscode', or 'cli'",
                                "invalid_request_error")
+        if "uids" in payload and not isinstance(uids, list):
+            return self._error(400, "uids must be a list", "invalid_request_error")
 
         if uid:
             targets = [POOL.get(uid)]
+        elif isinstance(uids, list):
+            # 面板的「切换所有出站身份」在有勾选时只切勾选的号，没有勾选时按当前
+            # 筛选结果点名（空列表 = 什么都不切，不退化成全池）。
+            targets = [POOL.get(u) for u in dict.fromkeys(str(x) for x in uids if x)]
         elif realm and realm != "all":
             targets = [a for a in POOL.accounts if a.realm == realm]
         else:
@@ -25781,7 +25788,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_accounts_refresh(self, payload):
         uid = payload.get("uid")
-        targets = [POOL.get(uid)] if uid else list(POOL.accounts)
+        uids = payload.get("uids")
+        if "uids" in payload and not isinstance(uids, list):
+            return self._error(400, "uids must be a list", "invalid_request_error")
+        if uid:
+            targets = [POOL.get(uid)]
+        elif isinstance(uids, list):
+            # 面板的批量刷新会把「勾选的账号」或「当前筛选结果」的 uid 直接点名，
+            # 空列表就是什么都不刷，不退化成全池。
+            targets = [POOL.get(u) for u in dict.fromkeys(str(x) for x in uids if x)]
+        else:
+            targets = list(POOL.accounts)
         group = str(payload.get("group") or "").strip()
         if group:
             targets = [a for a in targets if a is not None and a.group == group]
@@ -25873,8 +25890,18 @@ class Handler(BaseHTTPRequestHandler):
         if realm not in ("intl", "cn"):
             realm = CURRENT_REALM
         model = payload.get("model") or TEST_MODEL_DEFAULT
-        targets = [a for a in (POOL.accounts if POOL else [])
-                   if a.realm == realm and a.enabled]
+        uids = payload.get("uids")
+        if "uids" in payload and not isinstance(uids, list):
+            return self._error(400, "uids must be a list", "invalid_request_error")
+        if isinstance(uids, list):
+            # 面板的「测试」在有勾选时只测勾选的号、没有勾选时按当前筛选结果点名。
+            # 点名的账号不受 realm / enabled 过滤：勾选本身就是明确的选择，停用的
+            # 号也要能被测一次（测通会顺手清掉熔断计数）。空列表 = 什么都不测。
+            targets = [POOL.get(u) for u in dict.fromkeys(str(x) for x in uids if x)]
+            targets = [a for a in targets if a is not None]
+        else:
+            targets = [a for a in (POOL.accounts if POOL else [])
+                       if a.realm == realm and a.enabled]
         texts, _ = _ensure_pools()
         targets = [a for a in targets
                    if texts is None or texts.allows(a)]

@@ -25,17 +25,18 @@ assert.ok(/class="tb-group tb-bulk"/.test(html),
   '批量操作那一组缺少 .tb-bulk 标记，窄屏网格规则会落到所有 tb-group 上');
 assert.ok(/#accountsBody \.toolbar \.tb-bulk\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/
     .test(html),
-  '窄屏下 .tb-bulk 应改成两列网格（6 个按钮排成 3 行 2 列）');
+  '窄屏下 .tb-bulk 应改成两列网格');
 assert.ok(/#accountsBody \.toolbar \.tb-bulk button\.sec\{[^}]*white-space:nowrap/.test(html),
   '网格里的按钮必须 white-space:nowrap，否则名称又被压成竖排');
 
-// 6 个按钮都在这一组里：一键分配代理 / 一键切换所有出站身份 / 全部启用 /
-// 全部停用 / 当前分组启用 / 当前分组停用。
+// 批量按钮都在这一组里：分配代理 / 切换所有出站身份 / 启用 / 停用 /
+// 当前分组启用 / 当前分组停用 / 导出已选 / 启用已选 / 停用已选 / 删除已选。
 const bulkAt = html.indexOf('class="tb-group tb-bulk"');
 assert.ok(bulkAt > 0, '找不到 .tb-bulk 组');
 const bulkBlock = html.slice(bulkAt, html.indexOf('</div>', bulkAt));
-for (const label of ['一键分配代理', '一键切换所有出站身份', '全部启用', '全部停用',
-                     '当前分组启用', '当前分组停用']) {
+for (const label of ['分配代理', '切换所有出站身份', '启用', '停用',
+                     '当前分组启用', '当前分组停用',
+                     '导出已选', '启用已选', '停用已选', '删除已选']) {
   assert.ok(bulkBlock.includes(label), '批量操作组里缺少「' + label + '」');
 }
 

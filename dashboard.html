@@ -2309,7 +2309,23 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '出站身份：': 'Outbound identity:',
     '分配代理出口给未绑定账号': 'Assign proxy exits to unbound accounts',
     '一键分配代理': 'Assign proxy exits',
+    '分配代理': 'Assign proxy exits',
     '一键切换所有出站身份：': 'Switch all outbound identities: ',
+    '切换所有出站身份：': 'Switch all outbound identities: ',
+    '勾选的 ': 'the selected ',
+    '当前筛选的 ': 'the currently filtered ',
+    ' 个账号': ' account(s)',
+    ' 个账号的积分': ' account(s) of credits',
+    '已刷新': 'Refreshed ',
+    '将把': 'Switch the outbound identity of ',
+    '的出站身份切换为 ': ' to ',
+    '当前没有可刷新的账号': 'No accounts to refresh',
+    '当前没有可测试的账号。': 'No accounts to test.',
+    '当前没有可操作的账号': 'No accounts to operate on',
+    '当前没有可切换的账号': 'No accounts to switch',
+    '当前没有可分配代理的账号': 'No accounts to assign proxy exits to',
+    '这批账号都已绑定代理出口': 'Every account in this set already has a proxy exit',
+    '分配代理失败: ': 'Assigning proxy exits failed: ',
     '混合': 'mixed',
     '分钟': 'minutes',
     '分钟)': 'min)',
@@ -2530,7 +2546,6 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '剩余 / 总 ': 'Remaining / total ',
     '模型': 'Models',
     '冷却': 'Cooling',
-    '停用': 'Disabled',
     '正常': 'Healthy',
     '冷却中': 'Cooling down',
     '已停用': 'Disabled',
@@ -3797,7 +3812,10 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "出站身份：": "出站身份：",
     "分配代理出口给未绑定账号": "分配代理出口給未繫結帳號",
     "一键分配代理": "一鍵分配代理",
+    "分配代理": "分配代理",
     "一键切换所有出站身份：": "一鍵切換所有出站身份：",
+    "切换所有出站身份：": "切換所有出站身份：",
+    "当前没有可切换的账号": "目前沒有可切換的帳號",
     "分钟": "分鐘",
     "分钟)": "分鐘)",
     "分钟取一次价": "分鐘取一次價",
@@ -5894,15 +5912,15 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" onclick="exportAccounts(this)">导出</button>
     </div>
     <div class="tb-group">
-    <button class="sec" onclick="fetchCredits(this)">一键刷新积分</button>
-    <button class="sec" onclick="refreshAccounts(this)" title="逐个刷新所有账号的上游访问凭证（相当于对每个账号点一次「刷新凭证」）">一键刷新凭证</button>
-    <button class="sec" onclick="testAccounts(this)" title="逐个真发一条最小请求，并同时检查本机到上游的网络：能分清「账号坏了」和「本机断网了」，测试通过还会清掉该账号的熔断/降权计数">一键测试</button>
+    <button class="sec" onclick="fetchCredits(this)" title="有勾选时只刷新勾选的账号，没有勾选时刷新当前筛选结果的全部账号">刷新积分</button>
+    <button class="sec" onclick="refreshAccounts(this)" title="逐个刷新上游访问凭证（相当于对每个账号点一次「刷新凭证」）；有勾选时只刷新勾选的账号，没有勾选时刷新当前筛选结果的全部账号">刷新凭证</button>
+    <button class="sec" onclick="testAccounts(this)" title="逐个真发一条最小请求，并同时检查本机到上游的网络：能分清「账号坏了」和「本机断网了」，测试通过还会清掉该账号的熔断/降权计数；有勾选时只测勾选的账号，没有勾选时测当前筛选结果的全部账号">测试</button>
     </div>
     <div class="tb-group tb-bulk">
-    <button class="sec" onclick="autoAssignSlots(this)" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">一键分配代理</button>
-    <button class="sec" id="btnProductAll" onclick="cycleAllProducts(this)" title="把全部账号（含另一个版本）的出站身份切到下一个：WB → VSC → CLI">一键切换所有出站身份：<span id="productAllLabel">WB</span></button>
-    <button class="sec" onclick="setAll(true, this)">全部启用</button>
-    <button class="sec" onclick="setAll(false, this)">全部停用</button>
+    <button class="sec" onclick="autoAssignSlots(this)" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响。有勾选时只处理勾选的账号">分配代理</button>
+    <button class="sec" id="btnProductAll" onclick="cycleAllProducts(this)" title="把目标账号的出站身份切到下一个：WB → VSC → CLI。有勾选时只切勾选的账号，没有勾选时切当前筛选结果的全部账号">切换所有出站身份：<span id="productAllLabel">WB</span></button>
+    <button class="sec" onclick="setAll(true, this)" title="有勾选时只启用勾选的账号，没有勾选时启用当前筛选结果的全部账号">启用</button>
+    <button class="sec" onclick="setAll(false, this)" title="有勾选时只停用勾选的账号，没有勾选时停用当前筛选结果的全部账号">停用</button>
     <button class="sec" onclick="setCurrentGroup(true, this)">当前分组启用</button>
     <button class="sec" onclick="setCurrentGroup(false, this)">当前分组停用</button>
     <button class="sec" id="btnExportSelected" onclick="exportSelectedAccounts(this)" title="只导出当前勾选的账号，可再次导入到其他实例" disabled>导出已选</button>
@@ -8593,7 +8611,7 @@ function renderCodeartsCards(r){
     + card("积分", fmtCredits(credits), creditSub)
     + card("模型", (r.models || []).length, "CodeArts 目录")
     + card("冷却", (st.cooling != null) ? st.cooling : 0, "到点自动恢复")
-    + card("停用", (st.disabled != null) ? st.disabled : 0, "手动/上游");
+    + card("已停用", (st.disabled != null) ? st.disabled : 0, "手动/上游");
 }
 
 function codeartsSlotSelectHtml(a){
@@ -12217,22 +12235,23 @@ async function loadAccounts(poll, opts){
 }
 
 async function fetchCredits(btn){
+  const scope = acctScopeUids();
+  if(!scope.uids.length){
+    if(btn){ btn.disabled = false; btn.textContent = '刷新积分'; }
+    toast('当前没有可刷新的账号', 'warn');
+    return;
+  }
   if(btn){ btn.disabled = true; btn.textContent = '刷新中...'; }
-  const currentView = (window.VIEW_REALM || "intl");
-  const group = String(ACCOUNT_FILTERS.group || '').trim();
-  const viewName = group ? ('分组「' + group + '」') : (currentView === 'cn' ? '国内版' : '国际版');
   try{
-    const payload = {realm: currentView};
-    if(group) payload.group = group;
-    const r = await postJSON('/accounts/credits', payload);
+    const r = await postJSON('/accounts/credits', {uids: scope.uids});
     await loadAccounts();
     refresh();
     const count = (r.results || []).length;
-    toast('已成功刷新当前' + viewName + ' ' + count + ' 个账号的积分', 'ok');
+    toast('已刷新' + (scope.selected ? '勾选的 ' : '当前筛选的 ') + count + ' 个账号的积分', 'ok');
   }catch(e){
     toast('刷新积分失败: ' + e.message, 'bad');
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = '一键刷新积分'; }
+    if(btn){ btn.disabled = false; btn.textContent = '刷新积分'; }
   }
 }
 const queryCredits = fetchCredits;
@@ -12271,11 +12290,23 @@ function applyPoolSeparationUi(effective){
   });
   updateBatchPoolBar();
 }
+// 勾选集合的真源是 ACCOUNT_SELECTED（不是 DOM 的 :checked）：翻页、轮询整表
+// 重画之后仍能算出「已勾选」，也天然限定在当前视图内。
 function acctSelUids(){
-  if(!POOL_SEPARATION_EFFECTIVE) return [];
-  return Array.from(document.querySelectorAll('#accounts .acct-sel:checked'))
-    .map(function(el){ return el.dataset.uid; })
+  return selectedAccountsForBulk().map(function(a){ return String(a.uid || ''); })
     .filter(Boolean);
+}
+// 批量操作的作用范围：有勾选就是勾选的号，没有勾选就是「当前筛选结果」。
+// 与 filteredAccountsForBulk() 同一口径（视图 + 号池 + 搜索 / 状态 / 分组 /
+// 错误码），但不分页——按钮文案是「全部」，只作用于当前页会让人以为漏了。
+function acctScopeUids(){
+  const picked = acctSelUids();
+  if(picked.length) return {uids: picked, selected: true};
+  return {
+    uids: filteredAccountsForBulk().map(function(a){ return String(a.uid || ''); })
+      .filter(Boolean),
+    selected: false,
+  };
 }
 function updateBatchPoolBar(){
   const n = POOL_SEPARATION_EFFECTIVE
@@ -12539,8 +12570,8 @@ async function switchProduct(uid, btn){ return setAccountProduct(uid, 'workbuddy
 // （含另一个版本），所以这里只负责挑下一个身分、并把当前身分显示在按钮上。
 const PRODUCT_ORDER = ['workbuddy', 'vscode', 'cli'];
 const PRODUCT_SHORT = {workbuddy: 'WB', vscode: 'VSC', cli: 'CLI'};
-function allProductsUniform(){
-  const list = window.ACCOUNTS || [];
+function allProductsUniform(list){
+  list = list || window.ACCOUNTS || [];
   if(!list.length) return null;
   const first = list[0].product || 'workbuddy';
   return list.every(a => (a.product || 'workbuddy') === first) ? first : null;
@@ -12554,18 +12585,26 @@ function updateProductAllButton(){
   label.textContent = cur ? PRODUCT_SHORT[cur] : '混合';
 }
 async function cycleAllProducts(btn){
-  const list = window.ACCOUNTS || [];
-  if(!list.length){ toast('还没有账号', 'bad'); return; }
-  const cur = allProductsUniform();
-  // cur 为 null（各账号身分不一致）时落到第一项，等于「统一成 WB」。
+  // 作用于「勾选的账号」，没有勾选时作用于当前筛选结果的全部账号。按钮上显示的
+  // 当前身分也按同一批账号算，否则会显示成整池的口径。
+  const scope = acctScopeUids();
+  if(!scope.uids.length){ toast('当前没有可切换的账号', 'bad'); return; }
+  const want = new Set(scope.uids);
+  const list = (window.ACCOUNTS || []).filter(a => want.has(String(a.uid || '')));
+  if(!list.length){ toast('当前没有可切换的账号', 'bad'); return; }
+  const cur = allProductsUniform(list);
+  // cur 为 null（这批账号身分不一致）时落到第一项，等于「统一成 WB」。
   const next = PRODUCT_ORDER[(PRODUCT_ORDER.indexOf(cur) + 1) % PRODUCT_ORDER.length];
   const label = PRODUCT_SHORT[next];
-  if(!confirm('将把全部账号的出站身份切换为 ' + label + '？（含另一个版本）')) return;
+  const target = scope.selected
+    ? ('勾选的 ' + list.length + ' 个账号')
+    : ('当前筛选的 ' + list.length + ' 个账号');
+  if(!confirm('将把' + target + '的出站身份切换为 ' + label + '？')) return;
   if(btn) btn.disabled = true;
   try{
-    await postJSON('/accounts/product', {product: next});
+    await postJSON('/accounts/product', {product: next, uids: list.map(a => a.uid)});
     await loadAccounts();
-    toast('已把全部账号的出站身份切换为 ' + label, 'ok');
+    toast('已把' + target + '的出站身份切换为 ' + label, 'ok');
   }catch(e){
     toast('切换失败: ' + e.message, 'bad');
   }finally{
@@ -12637,18 +12676,24 @@ function closeTestAll(){
 }
 
 async function testAccounts(btn){
+  const scope = acctScopeUids();
   if(btn){ btn.disabled = true; btn.textContent = '测试中...'; }
   openTestAll();
+  if(!scope.uids.length){
+    if(btn){ btn.disabled = false; btn.textContent = '测试'; }
+    const body = document.getElementById('testAllBody');
+    if(body) body.innerHTML = '<p class="hint">当前没有可测试的账号。</p>';
+    toast('当前没有可测试的账号。', 'warn');
+    return;
+  }
   try{
-    const payload = {realm: window.VIEW_REALM};
-    if(ACCOUNT_FILTERS.group) payload.group = ACCOUNT_FILTERS.group;
-    const r = await postJSON('/accounts/test', payload);
+    const r = await postJSON('/accounts/test', {realm: window.VIEW_REALM, uids: scope.uids});
     renderTestAll(r);
     const s = r.summary || {};
     if(s.networkDown){
       toast('本机网络不通：' + ((r.network || {}).error || 'DNS/路由失败') + '（账号未被计入熔断）', 'bad');
     } else {
-      toast('一键测试: ' + (s.passed || 0) + '/' + (s.tested || 0) + ' 通过 (' + (s.elapsed_ms || 0) + 'ms)',
+      toast('测试: ' + (s.passed || 0) + '/' + (s.tested || 0) + ' 通过 (' + (s.elapsed_ms || 0) + 'ms)',
             (s.failed ? 'warn' : 'ok'));
     }
     await loadAccounts();
@@ -12656,7 +12701,7 @@ async function testAccounts(btn){
     const body = document.getElementById('testAllBody');
     if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">测试请求失败: ' + esc(e.message) + '</p>';
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = '一键测试'; }
+    if(btn){ btn.disabled = false; btn.textContent = '测试'; }
   }
 }
 
@@ -12713,11 +12758,15 @@ function renderTestAll(r){
   body.innerHTML = html;
 }
 async function refreshAccounts(btn){
+  const scope = acctScopeUids();
+  if(!scope.uids.length){
+    if(btn){ btn.disabled = false; btn.textContent = '刷新凭证'; }
+    toast('当前没有可刷新的账号', 'warn');
+    return;
+  }
   if(btn){ btn.disabled = true; btn.textContent = '刷新中...'; }
   try{
-    const payload = {};
-    if(ACCOUNT_FILTERS.group) payload.group = ACCOUNT_FILTERS.group;
-    const r = await postJSON('/accounts/refresh', payload);
+    const r = await postJSON('/accounts/refresh', {uids: scope.uids});
     const results = r.results || [];
     const okc = results.filter(x=>x.ok).length;
     const bad = results.filter(x=>!x.ok);
@@ -12729,15 +12778,20 @@ async function refreshAccounts(btn){
   }catch(e){
     toast('刷新失败: ' + e.message, 'bad');
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = '一键刷新凭证'; }
+    if(btn){ btn.disabled = false; btn.textContent = '刷新凭证'; }
   }
 }
 async function setAll(enable, btn){
+  // 有勾选就是勾选的号，没有勾选就是当前筛选结果的全部账号（与刷新 / 测试 /
+  // 切换身分同一套作用范围）。
+  const scope = acctScopeUids();
+  if(!scope.uids.length){ toast('当前没有可操作的账号', 'warn'); return; }
   if(btn) btn.disabled = true;
   try{
-    await postJSON('/accounts/set-all', {enabled: enable});
+    await postJSON('/accounts/set-all', {enabled: enable, uids: scope.uids});
     await loadAccounts();
-    toast(enable ? '已全部启用所有账号' : '已全部停用所有账号', 'ok');
+    toast((enable ? '已启用' : '已停用') + (scope.selected ? '勾选的 ' : '当前筛选的 ')
+          + scope.uids.length + ' 个账号', 'ok');
   }catch(e){
     toast('批量操作失败: ' + e.message, 'bad');
   }finally{
@@ -19109,8 +19163,14 @@ async function autoAssignSlots(btn){
   try{
     const fresh = await getJSON('/accounts?realm=all');
     window.ACCOUNTS = fresh.accounts || [];
-    const unbound = (window.ACCOUNTS || []).filter(a => a.enabled && !a.proxySlot);
-    if(!unbound.length){ toast('所有已启用账号都已绑定代理出口', 'ok'); return; }
+    // 作用范围与其它批量按钮一致：有勾选只处理勾选的号，没有勾选处理当前筛选
+    // 结果。already-bound 的账号仍然跳过，这里不是重分配器。
+    const scope = acctScopeUids();
+    const want = new Set(scope.uids);
+    if(!scope.uids.length){ toast('当前没有可分配代理的账号', 'warn'); return; }
+    const unbound = (window.ACCOUNTS || [])
+      .filter(a => want.has(String(a.uid || '')) && a.enabled && !a.proxySlot);
+    if(!unbound.length){ toast('这批账号都已绑定代理出口', 'ok'); return; }
     const slots = PROXY_SLOTS.filter(s => s.enabled !== false);
     if(!slots.length){ toast('没有启用的代理槽，请先在「设置 → 账号代理槽」添加并保存', 'warn'); return; }
     toast('开始为 ' + unbound.length + ' 个未绑定账号分配代理出口', 'ok');
@@ -19132,9 +19192,9 @@ async function autoAssignSlots(btn){
     if(failed) toast('代理分配完成：成功 ' + ok + ' 个，失败 ' + failed + ' 个', failed === unbound.length ? 'bad' : 'warn');
     else toast('已为 ' + ok + ' 个未绑定账号分配代理出口', 'ok');
   }catch(e){
-    toast('一键分配代理失败: ' + e.message, 'bad');
+    toast('分配代理失败: ' + e.message, 'bad');
   }finally{
-    if(button){ button.disabled = false; button.textContent = originalText || '一键分配代理'; }
+    if(button){ button.disabled = false; button.textContent = originalText || '分配代理'; }
   }
 }
 

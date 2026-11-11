@@ -127,13 +127,15 @@ assert.ok(/if\(tab === 'accounts' && !_accountsSeparateTab\) tab = window\.__NEX
 // 按钮在账号工具栏里，紧跟「一键分配代理」
 assert.ok(/id="btnProductAll"[^>]*onclick="cycleAllProducts\(this\)"/.test(html),
   '账号工具栏缺少「一键切换所有出站身份」按钮');
-assert.ok(/一键分配代理<\/button>\s*<button class="sec" id="btnProductAll"/.test(html),
-  '按钮应排在「一键分配代理」之后');
+assert.ok(/分配代理<\/button>\s*<button class="sec" id="btnProductAll"/.test(html),
+  '按钮应排在「分配代理」之后');
 // 当前身分要有个能定位的节点，不能只留一段裸文本（否则 JS 改不动它）
 assert.ok(html.includes('<span id="productAllLabel">'), '按钮上的当前身分缺少可定位节点');
-// 批量靠「不带 uid」：带上 uid 就退化成单账号切换
-assert.ok(/postJSON\('\/accounts\/product', \{product: next\}\)/.test(script),
-  '批量切换只应提交 product，不能带 uid');
+// 作用范围由 acctScopeUids() 决定（有勾选取勾选，否则当前筛选结果），因此提交
+// 时必须带 uids 点名；不带 uids 会退化成全池切换。
+assert.ok(/postJSON\('\/accounts\/product', \{product: next, uids: list\.map\(a => a\.uid\)\}\)/
+    .test(script),
+  '批量切换应提交 product + uids 点名');
 // 身分取值与轮转顺序必须与服务端 wb_identity.VALID_PRODUCTS 一致
 assert.ok(/PRODUCT_ORDER = \['workbuddy', 'vscode', 'cli'\]/.test(script),
   '轮转顺序应与服务端身分取值一致');

@@ -176,21 +176,16 @@ check(/html:not\(\[data-console-layout="on"\]\):not\(\[data-ui="next"\]\) \.cons
 check(!/html:not\(\[data-console-layout="on"\]\) \.console-filterbar\s*\{display:none!important\}/.test(html),
   '旧布局的筛选栏隐藏规则不应误伤新导航');
 
-// 号池控件只在隔离实际生效时出现；关闭时既不能露按钮，也不能让隐藏的
-// POOL_FILTER 继续过滤账号（与 #850 同一类问题）。
-check(/id="poolToolsGroup"[^>]*\bhidden\b/.test(html),
-  '号池工具组默认应隐藏');
-check(/\.tb-group\[hidden\]\{display:none!important\}/.test(html),
-  '.tb-group 的 display 必须让 hidden 真正隐藏，不能把号池按钮露出来');
-check(/function applyPoolSeparationUi\(effective\)/.test(script),
-  '缺少号池工具组显隐与状态重置');
-check(/if\(!POOL_SEPARATION_EFFECTIVE\) POOL_FILTER = 'all'/.test(script),
-  '关闭隔离时应清空号池筛选');
-check(/if\(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'\)/.test(script),
-  '关闭隔离时 renderAccounts 不应按 poolScope 过滤');
-check(/class="acct-sel"/.test(script) &&
-      /POOL_SEPARATION_EFFECTIVE[\s\S]{0,260}媒体号池/.test(script),
-  '账号勾选框应始终可用；关闭隔离时只隐藏号池徽章和号池按钮');
+// 批量作用范围不再跟号池隔离开关走：勾选本身就是明确的选择，没有勾选时按
+// 当前筛选结果，两者都与「隔离是否开启」无关。
+check(/function acctScopeUids\(\)/.test(script),
+  '缺少统一的批量作用范围函数');
+check(/function acctSelUids\(\)\{\s*return selectedAccountsForBulk\(\)/.test(script),
+  '勾选集合应读 ACCOUNT_SELECTED，不能读 DOM 的 :checked');
+check(/acctScopeUids\(\)[\s\S]{0,200}filteredAccountsForBulk\(\)/.test(script),
+  '没有勾选时作用范围应是当前筛选结果');
+check(!/if\(!POOL_SEPARATION_EFFECTIVE\) return \[\];/.test(script),
+  'acctSelUids 不应再受号池隔离开关限制');
 
 // ---- 3. 概览：用已有数据，不发新请求，也不冒充时间序列 ---------------
 
