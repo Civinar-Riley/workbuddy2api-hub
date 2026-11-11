@@ -132,6 +132,54 @@ check("inline flow parent expanded",
       "providers:\n  a: 1\n" in t and 'wb-proxy: {"x": 1}' in t, repr(t))
 
 # ---------------------------------------------------------------------------
+# YAML flow-mapping refs (DSH writes refs: as a multi-line { ... } block)
+# ---------------------------------------------------------------------------
+
+print()
+print("[5b] yaml_refs_upsert: flow mapping { ... } (DSH's credentials format)")
+
+FM = "refs:\n  {\n    AAA: 'v1',\n    BBB: 'v2'\n  }\n"
+
+r = A.yaml_refs_upsert(FM, "NEW_KEY", "new-val")
+check("new key inserted inside flow map", "NEW_KEY: new-val" in r, repr(r))
+check("inserted before closing brace",
+      r.index("NEW_KEY") < r.index("}"), repr(r))
+check("previous entry gets trailing comma",
+      "'v2'," in r or "BBB: 'v2'," in r, repr(r))
+check("original keys preserved",
+      "AAA: 'v1'" in r and "BBB: 'v2'" in r, repr(r))
+
+r2 = A.yaml_refs_upsert(FM, "AAA", "updated")
+check("existing key replaced in flow map", "AAA: updated" in r2, repr(r2))
+check("replacement keeps trailing comma (not last entry)",
+      "AAA: updated," in r2, repr(r2))
+check("other entries untouched", "BBB: 'v2'" in r2, repr(r2))
+
+r3 = A.yaml_refs_upsert(FM, "BBB", "upd2")
+check("last entry replaced without forced comma",
+      "BBB: upd2\n" in r3, repr(r3))
+
+fm_ml = "refs:\n  {\n    LONG: 'line1\n      line2',\n    SHORT: 's'\n  }\n"
+r4 = A.yaml_refs_upsert(fm_ml, "LONG", "replaced")
+check("multi-line value replaced as one entry",
+      "LONG: replaced," in r4 and "line2" not in r4, repr(r4))
+check("multi-line replacement keeps comma (not last)",
+      "LONG: replaced," in r4, repr(r4))
+
+r5 = A.yaml_refs_upsert(fm_ml, "NEW2", "x2")
+check("insert into flow map with multi-line sibling",
+      "NEW2: x2" in r5, repr(r5))
+check("multi-line sibling gets comma on its real last line",
+      "line2'," in r5, repr(r5))
+
+print()
+print("[5c] yaml_refs_upsert: block mapping still works after flow-map support")
+
+r6 = A.yaml_refs_upsert("refs:\n  KEEP: v\n", "ADD", "a-1")
+check("block-style insert unchanged",
+      "KEEP: v" in r6 and "ADD: a-1" in r6, repr(r6))
+
+# ---------------------------------------------------------------------------
 # TOML editor
 # ---------------------------------------------------------------------------
 

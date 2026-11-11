@@ -448,13 +448,70 @@ def _yaml_upsert_at(lines, start, end, indent, keys, value_json=None,
     return lines
 
 
+def _yaml_flow_map_lines(block_lines, key, value):
+    """Find & replace (or prepare to insert) *key* inside flow-map block lines.
+
+    DSH writes ``refs`` as a multi-line YAML flow mapping::
+
+        refs:
+          {
+            EXISTING: 'value',
+          }
+
+    The block-level upserter below only understands indent-style mappings,
+    so this helper handles the ``{ ... }`` flavour.  Returns
+    ``(lines, changed)`` where *changed* is True if *key* was replaced
+    in-place; when *key* is absent the caller inserts it.
+    """
+    # Find the opening `{` and closing `}` lines.
+    open_idx = close_idx = None
+    for i, line in enumerate(block_lines):
+        stripped = line.strip()
+        if open_idx is None and stripped.startswith("{"):
+            open_idx = i
+        if stripped == "}" or stripped.endswith("}"):
+            close_idx = i
+            break
+    if open_idx is None or close_idx is None:
+        return block_lines, False
+
+    # Scan flow-map entries at indent >= 4 (inside `{` / `}`).
+    for i in range(open_idx + 1, close_idx):
+        stripped = block_lines[i].strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z_][\w.-]*)\s*:", stripped)
+        if m and m.group(1) == key:
+            # Find the full extent of this entry (may span multiple lines
+            # when the value is a long quoted string).
+            entry_end = i + 1
+            for j in range(i + 1, close_idx):
+                s2 = block_lines[j].strip()
+                if s2 and not s2.startswith("#") \
+                        and re.match(r"^[A-Za-z_][\w.-]*\s*:", s2):
+                    break  # next entry starts
+                entry_end = j + 1
+            # The entry's real last line tells us about the trailing comma.
+            last_line = block_lines[entry_end - 1].strip()
+            had_comma = last_line.endswith(",")
+            # Is this the last entry before `}`?
+            is_last = entry_end >= close_idx
+            suffix = "," if (had_comma or not is_last) else ""
+            indent = len(block_lines[i]) - len(block_lines[i].lstrip())
+            block_lines[i:entry_end] = [
+                " " * indent + "%s: %s%s" % (key, value, suffix)]
+            return block_lines, True
+    return block_lines, False
+
+
 def yaml_refs_upsert(text, key, value):
     """Upsert `key: value` inside the top-level `refs:` block.
 
+    Handles both block-style mappings (``refs:\\n  key: val``) and the
+    multi-line flow mapping DSH writes (``refs:\\n  {\\n    key: val,\\n  }``).
     When the document has no `refs:` block yet, one is appended at the end.
-    A `refs:` line that already holds an inline value (e.g. `refs: {}`) is
-    outside the supported subset and raises AgentConfigError instead of
-    being silently mangled.
+    A `refs:` line that already holds a single-line inline value (e.g.
+    `refs: {}`) is outside the supported subset and raises AgentConfigError.
     """
     lines = text.split("\n")
     idx = 0
@@ -468,6 +525,42 @@ def yaml_refs_upsert(text, key, value):
                     "cannot upsert into `refs: %s` - only a block-style "
                     "refs: mapping is supported" % after)
             end = _yaml_block_end(lines, idx, 0)
+            body = lines[idx + 1:end]
+            # --- flow mapping { ... } flavour (DSH writes this) ---
+            body, changed = _yaml_flow_map_lines(body, key, value)
+            if changed:
+                lines[idx + 1:end] = body
+                return "\n".join(lines)
+            if body and body[0].strip().startswith("{"):
+                # key not found inside the flow map: insert before `}`.
+                close = None
+                for i, bl in enumerate(body):
+                    if bl.strip() == "}" or bl.strip().endswith("}"):
+                        close = i
+                        break
+                if close is not None:
+                    # Use the indent of sibling entries (fall back to `}` + 2).
+                    entry_indent = None
+                    for i in range(close - 1, -1, -1):
+                        s = body[i].strip()
+                        if s and not s.startswith("#") and not s.startswith("{"):
+                            entry_indent = len(body[i]) - len(body[i].lstrip())
+                            break
+                    if entry_indent is None:
+                        entry_indent = (
+                            len(body[close]) - len(body[close].lstrip()) + 2)
+                    # Ensure the last entry before `}` has a trailing comma.
+                    for i in range(close - 1, -1, -1):
+                        s = body[i].strip()
+                        if s and not s.startswith("#") and not s.startswith("{"):
+                            if not s.endswith(","):
+                                body[i] = body[i].rstrip() + ","
+                            break
+                    body.insert(close,
+                                " " * entry_indent + "%s: %s" % (key, value))
+                    lines[idx + 1:end] = body
+                    return "\n".join(lines)
+            # --- block mapping flavour (original behaviour) ---
             j = idx + 1
             while j < end:
                 if lines[j].strip() and _yaml_indent(lines[j]) == 2 \
