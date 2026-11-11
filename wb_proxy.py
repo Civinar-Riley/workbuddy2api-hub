@@ -1174,6 +1174,19 @@ def _apply_model_aliases(payload, aliases):
     log("alias: model %s -> %s" % (name, target))
 
 
+def client_facing_model(handler, model):
+    """The model name to echo back: the operator alias when one was used.
+
+    The alias table only rewrites the *request*; the reply otherwise names the
+    upstream id, and a client that verifies the echoed model against the one it
+    sent sees a mismatch. Falling back to `model` keeps every un-aliased request
+    byte-identical. Module-level so the streaming helpers and the tests that
+    drive them with a stub handler can call it too.
+    """
+    original = str(getattr(handler, "_client_model", "") or "").strip()
+    return original or model
+
+
 # The WorkBuddy AI desktop app caches its account product config here on every
 # launch. That file carries the real model catalog the app shows in its picker
 # (21 models, incl. deepseek-v4.1-flash / gpt-6-astra) - the CLI-facing
@@ -11711,6 +11724,8 @@ def runtime_settings_view():
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "auto_switch_products": wb_settings.auto_switch_products(ACCOUNTS_DIR),
         "enable_anthropic_messages": wb_settings.enable_anthropic_messages(ACCOUNTS_DIR),
+        "model_aliases": wb_settings.model_aliases(ACCOUNTS_DIR),
+        "model_aliases_enabled": wb_settings.model_aliases_enabled(ACCOUNTS_DIR),
         "filter_models_by_key": wb_settings.filter_models_by_key(ACCOUNTS_DIR),
         "reasoning_effort_map": wb_settings.reasoning_effort_map(ACCOUNTS_DIR),
         "models_only_available": wb_settings.models_only_available(ACCOUNTS_DIR),
@@ -12641,6 +12656,44 @@ def fetch_models(realm=None):
             _catalog_meta[r] = {"source": source, "fetched_at": time.time(),
                                 "file_mtime": file_mtime}
         return entries
+def alias_model_entries(data, aliases):
+    """Append operator aliases to a /v1/models list, pointing at their target.
+
+    The alias table rewrites the request body before dispatch, so a client that
+    sends an alias works. The catalogue has to say the same thing: a client
+    that discovers models from /v1/models would otherwise never see the custom
+    name it was told to use (and the panel's key model restriction is expressed
+    in client-visible names too).
+
+    An alias is only listed when its target is present in this catalogue -
+    advertising an alias whose target is not served here would hand the client
+    a name that fails on the first call. The entry copies the target's metadata
+    and swaps only ``id`` (plus ``name`` when the target had one), because the
+    client must send the alias.
+    """
+    if not aliases or not isinstance(data, list):
+        return data
+    by_id = {}
+    for item in data:
+        if isinstance(item, dict) and item.get("id"):
+            by_id.setdefault(str(item["id"]), item)
+    seen = set(by_id)
+    extra = []
+    for alias, target in aliases.items():
+        if alias in seen or not target:
+            continue
+        source = by_id.get(str(target))
+        if source is None:
+            continue
+        entry = dict(source)
+        entry["id"] = alias
+        if source.get("name"):
+            entry["name"] = alias
+        extra.append(entry)
+        seen.add(alias)
+    return data + extra
+
+
 def model_entry(mid, meta, realm=None):
     """Build a rich /v1/models entry from the desktop app catalog metadata.
     The OpenAI spec only names id/object/created/owned_by, so capability data is
@@ -21742,11 +21795,21 @@ class Handler(BaseHTTPRequestHandler):
 
         A key that lists no models stays unrestricted, so this is a no-op
         unless the operator asked for a limit.
+
+        Two names are accepted: the resolved upstream id (what `model` holds by
+        the time this runs) and the name the client actually sent. An operator
+        alias is a client-facing name, and a key restricted to that alias would
+        otherwise be rejected the moment the alias is rewritten to its target —
+        the request would be blocked by the gateway's own convenience feature.
         """
         entry = self.key_entry
         if not entry:
             return ""
         if wb_settings.key_allows_model(entry, model):
+            return ""
+        original = str(getattr(self, "_client_model", "") or "").strip()
+        if original and original != model \
+                and wb_settings.key_allows_model(entry, original):
             return ""
         return key_model_message(entry, model)
 
@@ -22179,6 +22242,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         data = [model_entry(mid, meta, req_realm) for mid, meta in entries]
+        try:
+            # 别名开关关着时 effective_model_aliases() 返回空表：别名既不进
+            # 清单也不改写请求，原模型名照旧可用。
+            aliases = wb_settings.effective_model_aliases(ACCOUNTS_DIR)
+        except Exception:
+            aliases = {}
         pinned = pinned_account()
         if pinned is not None:
             # 定址路由宣告的是「这个账号实际能接的模型」：该账号禁用的模型
@@ -22188,8 +22257,18 @@ class Handler(BaseHTTPRequestHandler):
         # 目录语义；打开后，配了模型限制的 Key 不会再看到会被本地 400 拒掉
         # 的项，自动发现型客户端也就不会选到必失败的模型。
         if wb_settings.filter_models_by_key(ACCOUNTS_DIR) and self.key_entry:
+            # An alias is a client-facing name, so a key restricted to that
+            # alias must keep the alias's target in the list: the alias entry
+            # appended below is a copy of it. Dropping the target here would
+            # make the alias disappear too, and the client would be told it
+            # has no model although calling the alias works.
+            allowed_targets = {
+                target for alias, target in aliases.items()
+                if wb_settings.key_allows_model(self.key_entry, alias)
+            }
             data = [m for m in data
-                    if wb_settings.key_allows_model(self.key_entry, m.get("id"))]
+                    if wb_settings.key_allows_model(self.key_entry, m.get("id"))
+                    or m.get("id") in allowed_targets]
         # 可选：清单只宣告当前账号池里至少有一个账号能服务的模型。默认关闭
         # 保持全量目录；PRO ONLY 模型只有在池里有付费账号时才列出。
         if wb_settings.models_only_available(ACCOUNTS_DIR):
@@ -22210,6 +22289,10 @@ class Handler(BaseHTTPRequestHandler):
                     "required": "standard",
                     "at": gate_at,
                 }
+        # Operator aliases are advertised next to their target (see
+        # alias_model_entries): clients that discover the catalogue must be
+        # able to see the name they are expected to send.
+        data = alias_model_entries(data, aliases)
         payload = {"object": "list", "data": data,
                    "realm": req_realm or CURRENT_REALM}
         # 来源说明（面板展示用）：这批清单是上游 API 实时取的，还是读的
@@ -23836,6 +23919,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "enable_anthropic_messages must be true or false", "invalid_request_error")
             wb_settings.set_enable_anthropic_messages(ACCOUNTS_DIR, raw)
             reply["enable_anthropic_messages"] = raw
+        if "model_aliases" in payload:
+            try:
+                cleaned = wb_settings.set_model_aliases(
+                    ACCOUNTS_DIR, payload.get("model_aliases"))
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            reply["model_aliases"] = cleaned
+        if "model_aliases_enabled" in payload:
+            raw = payload.get("model_aliases_enabled")
+            if not isinstance(raw, bool):
+                return self._error(400, "model_aliases_enabled must be true or false",
+                                   "invalid_request_error")
+            wb_settings.set_model_aliases_enabled(ACCOUNTS_DIR, raw)
+            reply["model_aliases_enabled"] = raw
         if "filter_models_by_key" in payload:
             raw = payload.get("filter_models_by_key")
             if not isinstance(raw, bool):
@@ -26978,9 +27075,17 @@ class Handler(BaseHTTPRequestHandler):
         if is_media_route:
             return self._handle_media_post(path, payload)
         try:
-            aliases = wb_settings.model_aliases(ACCOUNTS_DIR)
+            aliases = wb_settings.effective_model_aliases(ACCOUNTS_DIR)
         except Exception:
             aliases = {}
+        # The key's model restriction is expressed in the names the client
+        # sends, and an operator alias is exactly such a name. Remember it
+        # before the rewrite so `_key_model_error` can accept either spelling
+        # (see its docstring).
+        try:
+            self._client_model = str(payload.get("model") or "")
+        except Exception:
+            self._client_model = ""
         _apply_model_aliases(payload, aliases)
         _apply_background_model_alias(payload)
         # Check per-key concurrency limit (#359)
@@ -27275,6 +27380,9 @@ class Handler(BaseHTTPRequestHandler):
             # A retry reuses the headers already on the wire; the client has not
             # seen a single byte, so a fresh chunk id is safe.
             stream_chunk_id = f"chatcmpl-wb-{uuid.uuid4().hex[:16]}"
+            # Synthesized text/tool frames must carry the same name the client
+            # sent, like the upstream frames rewritten below.
+            echo_model = client_facing_model(self, model)
             emitted = False
             last_usage = None
             first_ms = None
@@ -27319,10 +27427,10 @@ class Handler(BaseHTTPRequestHandler):
                 for action in actions:
                     if action[0] == "text":
                         if action[1]:
-                            write_chunk(chat_text_chunk(model, action[1], chunk_id=stream_chunk_id))
+                            write_chunk(chat_text_chunk(echo_model, action[1], chunk_id=stream_chunk_id))
                     else:
                         synthesized_calls = True
-                        for payload in chat_tool_call_chunks(model, action[1], chunk_id=stream_chunk_id):
+                        for payload in chat_tool_call_chunks(echo_model, action[1], chunk_id=stream_chunk_id):
                             write_chunk(payload)
 
             def before_read():
@@ -27388,7 +27496,7 @@ class Handler(BaseHTTPRequestHandler):
                         # client asked for the logical id, and model-scoped
                         # chunk helpers below must use that same id too.
                         if isinstance(maybe, dict) and maybe.get("model"):
-                            maybe["model"] = model
+                            maybe["model"] = client_facing_model(self, model)
                         cleaned = clean_chunk(
                             json.dumps(maybe, ensure_ascii=False)
                             if isinstance(maybe, dict) else data)
@@ -27522,6 +27630,9 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         if egress_on and egress_key:
             wb_egress.note_success(egress_key)
+        if isinstance(result, dict):
+            result["model"] = client_facing_model(
+                self, result.get("model") or model)
         wall = int((time.time() - t_start) * 1000)
         first_at = result.get("first_chunk_at")
         # Measured from request arrival so streaming and non-streaming are comparable.
