@@ -13575,6 +13575,26 @@ def has_fingerprint(text, identity=True, billing=True):
     return SANITIZE_IDENTITY_RE.search(text) is not None
 
 
+#: 计费头的宽松兜底：严格解析认不出时，按「看起来就是计费头」整段删除。
+#: 默认关闭，保持 #853 之后的严格语义；WB_SANITIZE_LOOSE_BILLING=1 打开。
+SANITIZE_LOOSE_BILLING = os.environ.get(
+    "WB_SANITIZE_LOOSE_BILLING", "0").strip().lower() in ("1", "true", "yes", "on")
+#: 一条计费头至少带两个 `cc_*=` / `cch=` 键值；正常 system 首行不会有。
+BILLING_KV_TOKENS_RE = re.compile(
+    r"(?:^|[;\s])(?:cc_[a-z0-9_]+|cch)=[^\s;]*", re.IGNORECASE)
+
+
+def _looks_like_billing_line(line):
+    """True when `line` reads like a Claude Code billing header, strict or not."""
+    text = str(line or "")
+    if not text or len(text) > 400:
+        return False
+    low = text.lower()
+    if any(name in low for name in SANITIZE_BILLING_LOWER):
+        return True
+    return len(BILLING_KV_TOKENS_RE.findall(text)) >= 2
+
+
 def _billing_payload_is_metadata(value):
     """True when a candidate header value contains only known metadata pairs."""
     value = str(value or "").strip()
@@ -13616,7 +13636,19 @@ def sanitize_billing_metadata_prefix(text):
     first = lines[0].rstrip("\r\n")
     match = SANITIZE_BILLING_LINE_RE.fullmatch(first)
     if match is None or not _billing_payload_is_metadata(match.group(1)):
-        return text
+        # 严格路径认不出（客户端改了字段名、多塞了未知键）：只要首行看起来就是
+        # 计费头，仍然整段丢掉。这类行每请求都不同，留在 system 首部等于每轮把
+        # 整段前缀打掉；宁可误删一行元数据，也不要静默贡献 0% 命中。
+        if not SANITIZE_LOOSE_BILLING or not _looks_like_billing_line(first):
+            return text
+        end = 1
+        while end < len(lines):
+            candidate = lines[end].rstrip("\r\n")
+            if not (SANITIZE_BILLING_CONT_RE.fullmatch(candidate)
+                    or _looks_like_billing_line(candidate)):
+                break
+            end += 1
+        return "".join(lines[end:]).strip()
     end = 1
     while end < len(lines):
         candidate = lines[end].rstrip("\r\n")

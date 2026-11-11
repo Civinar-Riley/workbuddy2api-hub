@@ -220,6 +220,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | `WB_IDENTITY_OS` | 宿主系统 | 仅 CLI 身份：覆盖 `x-stainless-os`（如 `Linux` / `Windows`） |
 | `WB_IDENTITY_ARCH` | 宿主架构 | 仅 CLI 身份：覆盖 `x-stainless-arch`（如 `x64` / `arm64`） |
 | `WB_IDENTITY_NODE_VERSION` | 官方默认 | 仅 CLI 身份：覆盖 `x-stainless-runtime-version` |
+| `WB_SANITIZE_LOOSE_BILLING` | `0` | 计费头的宽松兜底：严格解析认不出时，按「像计费头」（含 ≥2 个 `cc_*=` / `cch=` 键值、且不超过 400 字符）整段删除。默认关闭，保持 #853 之后的严格语义；客户端改字段名导致每轮前缀命中率归零时才需要打开 |
 
 遇到上游 `400 / 11-128` 时，先按 [`docs/TROUBLESHOOTING-11-128.md`](docs/TROUBLESHOOTING-11-128.md) 收集同一请求的
 身份、最小请求和提示词对照结果；不要先轮换账号。
@@ -248,7 +249,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 290 个套件：218 个 Python + 72 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 291 个套件：219 个 Python + 72 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
