@@ -11665,6 +11665,9 @@ def runtime_settings_view():
             "realm": entry.get("realm") or "",
             "models": list(entry.get("models") or []),
             "accounts": list(entry.get("accounts") or []),
+            # concurrency_limit 上游只存不显：面板读不到就显示 0，用户以为没设过，
+            # 再保存一次又把真实值写回 0。
+            "concurrency_limit": int(entry.get("concurrency_limit") or 0),
             "enabled": entry.get("enabled", True) is not False,
             "masked": (raw[:4] + "*" * 6 + raw[-4:]) if len(raw) > 8 else "*" * len(raw),
             "source": entry.get("source") or "panel",
@@ -21060,9 +21063,18 @@ def _anthropic_messages_enabled():
 # ---------------------------------------------------------------------------
 _key_active_concurrency = {}
 _key_concurrency_lock = threading.Lock()
+# 补丁：per-key 并发排队用的信号量。上游只在超限时直接拒绝，客户端会瞬间拿到
+# 429；这里改成有界等待，和用户批准的行为对齐（WB_CHAT_SLOT_WAIT 秒后仍未
+# 拿到才拒绝）。字典按 key id 懒创建，信号量初值在首次拿到 limit 时绑定。
+_key_semaphores = {}
+_key_semaphore_lock = threading.Lock()
 
 def _acquire_key_slot(key_entry):
-    """Try to acquire a concurrency slot for key_entry. Returns (ok, current, limit)."""
+    """Try to acquire a concurrency slot for key_entry. Returns (ok, current, limit).
+
+    补丁：并发占满时不再立即返回 False（客户端会瞬间吃到 429），改用有界信号量
+    排队，最多等 CHAT_SLOT_WAIT_SECONDS 秒。limit 变化时按新值重建信号量。
+    """
     if not isinstance(key_entry, dict):
         return True, 0, 0
     k_id = key_entry.get("id")
@@ -21073,13 +21085,36 @@ def _acquire_key_slot(key_entry):
         return True, 0, 0
     with _key_concurrency_lock:
         current = _key_active_concurrency.get(k_id, 0)
-        if current >= limit:
-            return False, current, limit
-        _key_active_concurrency[k_id] = current + 1
-        return True, current + 1, limit
+    with _key_semaphore_lock:
+        entry = _key_semaphores.get(k_id)
+        if entry is None or entry[0] != limit:
+            if entry is not None:
+                # limit 被改小：按已占用的数量初始化，避免凭空多出配额
+                sem = threading.BoundedSemaphore(max(1, limit))
+                for _ in range(min(current, limit)):
+                    try:
+                        sem.acquire(blocking=False)
+                    except Exception:
+                        pass
+            else:
+                sem = threading.BoundedSemaphore(max(1, limit))
+                for _ in range(current):
+                    try:
+                        sem.acquire(blocking=False)
+                    except Exception:
+                        pass
+            entry = [limit, sem]
+            _key_semaphores[k_id] = entry
+        sem = entry[1]
+    acquired = sem.acquire(timeout=CHAT_SLOT_WAIT_SECONDS)
+    with _key_concurrency_lock:
+        if acquired:
+            _key_active_concurrency[k_id] = _key_active_concurrency.get(k_id, 0) + 1
+            return True, _key_active_concurrency[k_id], limit
+        return False, _key_active_concurrency.get(k_id, 0), limit
 
 def _release_key_slot(key_entry):
-    """Release a concurrency slot for key_entry."""
+    """Release a concurrency slot for key_entry.（补丁：同时归还信号量）"""
     if not isinstance(key_entry, dict):
         return
     k_id = key_entry.get("id")
@@ -21094,6 +21129,15 @@ def _release_key_slot(key_entry):
             _key_active_concurrency[k_id] = current - 1
         else:
             _key_active_concurrency.pop(k_id, None)
+    with _key_semaphore_lock:
+        entry = _key_semaphores.get(k_id)
+        sem = entry[1] if entry else None
+    if sem is not None:
+        try:
+            sem.release()
+        except ValueError:
+            # 释放次数超过初值（limit 被调小过），忽略即可，不能让异常打断请求收尾
+            pass
 
 # 面板上「不带参数」的 POST 按钮：按钮会带一个 `{}` body，而路由从不解析它。
 # 这些 body 必须在分发前排空 —— 否则那 2 个字节留在 socket 里，同一条 keep-alive
@@ -27538,9 +27582,18 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 _key_active_concurrency = {}
 _key_concurrency_lock = threading.Lock()
+# 补丁：per-key 并发排队用的信号量。上游只在超限时直接拒绝，客户端会瞬间拿到
+# 429；这里改成有界等待，和用户批准的行为对齐（WB_CHAT_SLOT_WAIT 秒后仍未
+# 拿到才拒绝）。字典按 key id 懒创建，信号量初值在首次拿到 limit 时绑定。
+_key_semaphores = {}
+_key_semaphore_lock = threading.Lock()
 
 def _acquire_key_slot(key_entry):
-    """Try to acquire a concurrency slot for key_entry. Returns (ok, current, limit)."""
+    """Try to acquire a concurrency slot for key_entry. Returns (ok, current, limit).
+
+    补丁：并发占满时不再立即返回 False（客户端会瞬间吃到 429），改用有界信号量
+    排队，最多等 CHAT_SLOT_WAIT_SECONDS 秒。limit 变化时按新值重建信号量。
+    """
     if not isinstance(key_entry, dict):
         return True, 0, 0
     k_id = key_entry.get("id")
@@ -27551,13 +27604,36 @@ def _acquire_key_slot(key_entry):
         return True, 0, 0
     with _key_concurrency_lock:
         current = _key_active_concurrency.get(k_id, 0)
-        if current >= limit:
-            return False, current, limit
-        _key_active_concurrency[k_id] = current + 1
-        return True, current + 1, limit
+    with _key_semaphore_lock:
+        entry = _key_semaphores.get(k_id)
+        if entry is None or entry[0] != limit:
+            if entry is not None:
+                # limit 被改小：按已占用的数量初始化，避免凭空多出配额
+                sem = threading.BoundedSemaphore(max(1, limit))
+                for _ in range(min(current, limit)):
+                    try:
+                        sem.acquire(blocking=False)
+                    except Exception:
+                        pass
+            else:
+                sem = threading.BoundedSemaphore(max(1, limit))
+                for _ in range(current):
+                    try:
+                        sem.acquire(blocking=False)
+                    except Exception:
+                        pass
+            entry = [limit, sem]
+            _key_semaphores[k_id] = entry
+        sem = entry[1]
+    acquired = sem.acquire(timeout=CHAT_SLOT_WAIT_SECONDS)
+    with _key_concurrency_lock:
+        if acquired:
+            _key_active_concurrency[k_id] = _key_active_concurrency.get(k_id, 0) + 1
+            return True, _key_active_concurrency[k_id], limit
+        return False, _key_active_concurrency.get(k_id, 0), limit
 
 def _release_key_slot(key_entry):
-    """Release a concurrency slot for key_entry."""
+    """Release a concurrency slot for key_entry.（补丁：同时归还信号量）"""
     if not isinstance(key_entry, dict):
         return
     k_id = key_entry.get("id")
@@ -27572,6 +27648,15 @@ def _release_key_slot(key_entry):
             _key_active_concurrency[k_id] = current - 1
         else:
             _key_active_concurrency.pop(k_id, None)
+    with _key_semaphore_lock:
+        entry = _key_semaphores.get(k_id)
+        sem = entry[1] if entry else None
+    if sem is not None:
+        try:
+            sem.release()
+        except ValueError:
+            # 释放次数超过初值（limit 被调小过），忽略即可，不能让异常打断请求收尾
+            pass
 
 
 
