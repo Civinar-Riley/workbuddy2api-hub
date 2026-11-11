@@ -170,7 +170,7 @@ const thead = dom.makeElement('thead', {querySelectorAll: {th: ths}});
 const headRow = dom.makeElement('tr');
 // 与 dashboard.html 里 account-cards 的表头逐列对齐：列数与文字决定 colKind()
 // 走登记表还是按内容推断，错一列就测不到真实列。
-['版本', '账号', '状态', '今日活动', '出口', '权重', '积分', '请求', '总 token', '缓存', '操作']
+['', '版本', '账号', '状态', '今日活动', '出口', '权重', '积分', '请求', '总 token', '缓存', '操作']
   .forEach(label => {
     const th = dom.makeElement('th');
     th.textContent = label;
@@ -212,8 +212,8 @@ const checkPairs = (label, shape) => {
     assert.ok(acctRow && !acctRow.classList.contains('cool-row'),
       label + '：胶囊行前面没有账号行（行形态 ' + shape + '）');
     // 账号列除了昵称还有来源、到期、按钮文案，只取 acctN 这一段。
-    const name = (/acct\d+/.exec(acctRow.children[1].textContent) || [''])[0];
-    assert.ok(name, '账号列里找不到昵称：' + acctRow.children[1].textContent);
+    const name = (/acct\d+/.exec(acctRow.children[2].textContent) || [''])[0];
+    assert.ok(name, '账号列里找不到昵称：' + acctRow.children[2].textContent);
     assert.ok(row.children[0].textContent.includes('model-' + name),
       label + '：胶囊跟错了账号——期望 model-' + name + '，实际「'
       + row.children[0].textContent + '」（行形态 ' + shape + '）');
