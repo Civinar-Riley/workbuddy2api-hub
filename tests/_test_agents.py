@@ -716,7 +716,13 @@ class MockHandler:
     def _agents_resolve_key(self, payload, warnings):
         return "mock-key-123"
 
-    def _agents_models(self):
+    # apply 现在先问 _agents_realm() 该用哪个出口取目录（见
+    # tests/_test_agents_realm.py）。这个假 handler 不跑真实判定，固定回 cn，
+    # 与它下面固定的模型清单保持一致。
+    def _agents_realm(self, payload=None):
+        return "cn"
+
+    def _agents_models(self, realm=None):
         return [{"id": "model-fallback-1", "context_window": 128000},
                 {"id": "model-fallback-2", "context_window": 32000}]
 
