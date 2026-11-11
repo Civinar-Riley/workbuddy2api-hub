@@ -1094,7 +1094,11 @@ def _apply_dsh(paths, ctx):
         levels = dsh_reasoning_levels(entry.get("reasoning_efforts"))
         if levels:
             item["reasoningEfforts"] = levels
-        item["input"] = ["text", "image"]
+        if entry.get("supports_vision") or entry.get("supportsVision"):
+            # DSH's pi-ai adapter reads the declared input modalities, not a
+            # supportsVision flag: without `input` a model counts as text-only
+            # and a pasted image is rejected with MODEL_DOES_NOT_SUPPORT_IMAGES.
+            item["input"] = ["text", "image"]
         models.append(item)
     provider = {
         "displayName": PROVIDER_NAME,

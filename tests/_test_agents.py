@@ -501,9 +501,6 @@ check("dsh baseURL ends with /v1", "http://gw:1/v1" in dsh_text, dsh_text)
 check("dsh agent-default-model written",
       'agent-default-model: {"provider": "wb-proxy", "model": "m-big"}'
       in dsh_text, dsh_text)
-check("dsh model entries carry input modalities for image support",
-      '"input": ["text", "image"]' in dsh_text
-      or ("- image" in dsh_text and "input:" in dsh_text), dsh_text)
 with open(os.path.join(home6, ".dsh", ".credentials.yaml"),
           encoding="utf-8") as fh:
     cred_text = fh.read()
