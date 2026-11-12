@@ -160,8 +160,24 @@ check("撞上限时 total_exact=False（total 是下界）",
       capped["total_exact"] is False, capped["total_exact"])
 check("撞上限时 rows 只含已扫到的命中", len(capped["rows"]) <= 3, capped["rows"])
 
+# 另一个区域的行也要计入扫描上限：否则一份国际版 / 国内版混写的日志里，
+# 过滤国际版时上限会被国内版行无限绕过，等于退回全文件扫描。
+mixed = [row(10, "acct-a", "model-1", "key-1", "completed", realm="intl")]
+mixed += [row(11 + i, "noise", "model-1", "key-1", "completed", realm="cn")
+          for i in range(10)]
+write_rows(mixed)
+P.RECENT_FILTER_SCAN_ROWS = 3
+try:
+    mixed_capped = P.recent_usage(limit=10, realm="intl", account="acct-a")
+finally:
+    P.RECENT_FILTER_SCAN_ROWS = old_cap
+check("其它区域的行也计入扫描上限", mixed_capped["scanned"] == 3, mixed_capped["scanned"])
+check("混合区域撞上限时仍如实标成下界",
+      mixed_capped["total_exact"] is False, mixed_capped["total_exact"])
+
 # --------------------------------------------------------------------------
 # 7. 页数：截断且命中正好整页时多给一页（让「下一页」把剩下的读出来）
+write_rows(ROWS)
 P.RECENT_FILTER_SCAN_ROWS = 20000
 hit_two = P.recent_usage(limit=2, realm="intl", account="acct-b")
 check("截断且命中整页时 total_pages 多一页",

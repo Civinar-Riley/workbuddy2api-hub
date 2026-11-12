@@ -6904,13 +6904,13 @@ def _recent_scan_filtered(realm, need, filters, scan_cap=None):
                         item = json.loads(st.decode("utf-8", "replace"))
                     except Exception:
                         continue
-                    if realm and not row_matches_realm(item, realm):
-                        continue
                     if scanned >= scan_cap:
                         truncated = True
                         stop = True
                         break
                     scanned += 1
+                    if realm and not row_matches_realm(item, realm):
+                        continue
                     if recent_filter_match(item, **filters):
                         matching.append(item)
                         if len(matching) >= need:
@@ -6922,9 +6922,10 @@ def _recent_scan_filtered(realm, need, filters, scan_cap=None):
                     item = json.loads(buf.strip().decode("utf-8", "replace"))
                 except Exception:
                     item = None
-                if item is not None and (not realm or row_matches_realm(item, realm)):
+                if item is not None and scanned < scan_cap:
                     scanned += 1
-                    if recent_filter_match(item, **filters):
+                    if ((not realm or row_matches_realm(item, realm))
+                            and recent_filter_match(item, **filters)):
                         matching.append(item)
     except FileNotFoundError:
         pass
