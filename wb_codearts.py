@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 
 import wb_settings
+import wb_time
 import wb_codearts_crypto as crypto
 
 # ---------------------------------------------------------------------------
@@ -509,7 +510,7 @@ class CodeArtsAccount(object):
             "checkin": self.checkin,
             "disabled": self.disabled,
             "cooling": cooling,
-            "until": (time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.cool_until))
+            "until": (wb_time.strftime("%Y-%m-%dT%H:%M:%S", wb_time.localtime(self.cool_until))
                       if cooling else ""),
             "err_count": self.err_count,
             "reason": reason,
@@ -517,8 +518,8 @@ class CodeArtsAccount(object):
             "active_concurrent": self.active_concurrent,
             "max_concurrent": self.max_concurrent,
             "token_remaining": _fmt_duration(self.token_remaining()),
-            "expires_at": (time.strftime("%Y-%m-%dT%H:%M:%S",
-                                         time.localtime(self.expires_at()))
+            "expires_at": (wb_time.strftime("%Y-%m-%dT%H:%M:%S",
+                                            wb_time.localtime(self.expires_at()))
                            if self.expires_at() else ""),
             "models": len(self.models),
             "proxy_slot": self.proxy_slot,
@@ -549,8 +550,7 @@ class CodeArtsAccount(object):
         text = str(entry.get("checked_at") or "")
         if len(text) < 10:
             return False
-        today = time.strftime("%Y-%m-%d",
-                              time.localtime(now if now is not None else time.time()))
+        today = wb_time.day_key(time.time() if now is None else now)
         return text[:10] == today
 
     def has_model(self, model):
@@ -2931,7 +2931,7 @@ def _checkin_account(acct, timeout=30.0):
               "credits": total_credits, "message": message,
               "campaigns": results}
     acct.checkin = {"ok": result["ok"], "message": message,
-                    "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                    "checked_at": wb_time.strftime("%Y-%m-%dT%H:%M:%S")}
     acct.info_fetched_at = 0.0
     acct.pool.save_state()
     return result
@@ -3030,7 +3030,7 @@ def _maybe_auto_checkin(pool):
             return                      # 本线程正在手动签到，别抢
         if not pool.config.get("credits_auto_claim", False):
             return
-        today = time.strftime("%Y-%m-%d")
+        today = wb_time.day_key(time.time())
         now = time.time()
         key = os.path.abspath(str(pool.accounts_dir or "."))
         pending = []

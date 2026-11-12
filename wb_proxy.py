@@ -95,7 +95,23 @@ import wb_modelsdev
 import wb_probes
 import wb_updates
 import wb_update_request
+import wb_time
 IS_WINDOWS = os.name == "nt"
+
+
+def configure_timezone(enabled=None):
+    """Apply the statistics-timezone switch to every formatted time.
+
+    `enabled` defaults to the persisted setting, so this doubles as the startup
+    call and as the panel's post-save hook. Flipping the switch re-bases day and
+    hour buckets, so the day-key memo keyed off the host tz name (which never
+    changes here, since wb_time does not call tzset) is dropped explicitly.
+    """
+    if enabled is None:
+        enabled = wb_settings.stats_tz_beijing(ACCOUNTS_DIR)
+    wb_time.set_enabled(enabled)
+    _row_day_memo_clear()
+    return wb_time.enabled()
 
 # ---- 一键配置客户端（wb_agents）的可用性判定（issue #246）----
 # 这个功能写的是「网关进程所在机器」的客户端配置，所以只有在浏览器和网关
@@ -417,7 +433,7 @@ _MEDIA_KEY_SPEND_LOCK = threading.Lock()
 
 
 def _media_day_key(key_id):
-    return (key_id or "", time.strftime("%Y-%m-%d"))
+    return (key_id or "", wb_time.day_key(time.time()))
 
 
 def media_key_spend(key_id):
@@ -1545,8 +1561,7 @@ def _local_midnight(ts=None, days_back=0):
     mktime normalises an out-of-range day, so stepping back past the 1st of a
     month still lands on a real local midnight instead of raising.
     """
-    lt = time.localtime(ts if ts is not None else time.time())
-    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday - days_back, 0, 0, 0, 0, 0, -1))
+    return wb_time.midnight(ts, days_back)
 
 
 def _local_hour_start(ts):
@@ -1557,8 +1572,7 @@ def _local_hour_start(ts):
     相邻的真实时刻，所以调用方还要比对返回值是否等于原值——只有能原样
     还原的 ts 才是真的落在整点上（见 _hour_window_key）。
     """
-    lt = time.localtime(ts)
-    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour, 0, 0, 0, 0, -1))
+    return wb_time.hour_start(ts)
 
 
 def _epoch_or_none(value):
@@ -1603,10 +1617,9 @@ def range_window(value, since=None, until=None):
     if v in ("today", "day", "1d"):
         return _local_midnight(), None
     if v in ("week", "w"):
-        return _local_midnight(days_back=time.localtime().tm_wday), None
+        return _local_midnight(days_back=wb_time.localtime().tm_wday), None
     if v in ("month", "m"):
-        lt = time.localtime()
-        return time.mktime((lt.tm_year, lt.tm_mon, 1, 0, 0, 0, 0, 0, -1)), None
+        return wb_time.month_start(), None
     if v == "custom":
         lo, hi = _epoch_or_none(since), _epoch_or_none(until)
         if lo is not None and hi is not None and hi < lo:
@@ -1696,7 +1709,7 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     usage_missing = not fields
     row = {
         "at": time.time(),
-        "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "iso": wb_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "model": model,
         "stream": bool(stream),
         "outcome": outcome,
@@ -1863,7 +1876,7 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
     fields = _extract_usage(usage) or {}
     row = {
         "at": time.time(),
-        "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "iso": wb_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "model": model,
         "error": True,
         "outcome": outcome,
@@ -2819,7 +2832,7 @@ def daily_usage_stats(ttl=None):
     an account.
     """
     ttl = _STATS_TTL if ttl is None else ttl
-    day = time.strftime("%Y-%m-%d")
+    day = wb_time.day_key(time.time())
     now = time.time()
     with _daily_usage_lock:
         c = _daily_usage
@@ -2883,8 +2896,7 @@ def daily_tokens_by_account(ttl=None):
 
 def seconds_until_local_midnight():
     """Seconds until the local day rolls over (at least a minute)."""
-    lt = time.localtime()
-    nxt = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + 1, 0, 0, 0, 0, 0, -1))
+    nxt = wb_time.midnight(days_back=-1)
     return max(60, int(nxt - time.time()))
 
 
@@ -3393,9 +3405,7 @@ def _remaining_activity_floor(now):
     不是 now − 24h，因为需求写的是「昨日或当日」；同一天里这个下界不变，
     面板因此不会在轮询之间来回抖动。
     """
-    lt = time.localtime(now)
-    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
-    return midnight - LIMIT_WINDOW_SECONDS
+    return wb_time.midnight(now) - LIMIT_WINDOW_SECONDS
 
 
 def _save_account_caps(account, model, reset_at):
@@ -3822,9 +3832,9 @@ def _remaining_sample_rows(events, realm, model):
         rows.append({
             "account": str(event.get("account") or ""),
             "at": at,
-            "at_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(at)) if at else "",
+            "at_iso": wb_time.iso_seconds(at) if at else "",
             "reset": reset,
-            "reset_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(reset)) if reset else "",
+            "reset_iso": wb_time.iso_seconds(reset) if reset else "",
             "sample": int(event.get("sample") or 0),
         })
     rows.sort(key=lambda row: (row["at"], row["account"]))
@@ -3889,8 +3899,7 @@ def _remaining_payload_locked(state, now, accounts, realm_of, daily):
         key = int(ts)
         out = iso_cache.get(key)
         if out is None:
-            out = iso_cache[key] = time.strftime("%Y-%m-%d %H:%M:%S",
-                                                 time.localtime(ts))
+            out = iso_cache[key] = wb_time.iso_seconds(ts)
         return out
 
     # 撞线锚点：事件日志 + 凭证档里的 model_caps，按 (账号, 模型, 重置时刻)
@@ -5057,6 +5066,16 @@ def _row_memo_tz_changed():
     return True
 
 
+def _row_day_memo_clear():
+    """无条件清空日键表。
+
+    统计时区开关不经过 tzset（wb_time 用固定偏移），所以 time.tzname 不会变，
+    _row_memo_tz_changed 会早退、表照样留着旧时区的日键。开关一动必须显式
+    清一次，否则「今日用量」在切换后的一整轮里仍按旧日键归并。
+    """
+    _row_day_memo.clear()
+
+
 def _cost_entry(pricing, cost):
     """cost_for_row(details=False) 的返回值 -> 记忆条目（定长元组）。"""
     return (pricing, cost["known"], cost["cny"], cost.get("band"),
@@ -5595,7 +5614,7 @@ def _usage_snapshot_uncached(realm=None, since=None, until=None):
     else:
         snap = _usage_snapshot_window(r, since, until, pricing_on)
     snap["started"] = _usage.get("started", time.time())
-    snap["since"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snap.get("started", time.time())))
+    snap["since"] = wb_time.iso_seconds(snap.get("started", time.time()))
     snap["log_file"] = USAGE_LOG
     snap["realm"] = r or "all"
     # Cost figures are CNY; the panel divides by this rate to show USD
@@ -7134,7 +7153,8 @@ def save_persisted_realm(realm):
         try:
             os.makedirs(ACCOUNTS_DIR, exist_ok=True)
             with open(realm_state_file(), "w", encoding="utf-8") as fh:
-                json.dump({"realm": realm, "updated_at": time.time(), "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S")}, fh, indent=2)
+                json.dump({"realm": realm, "updated_at": time.time(),
+                           "updated_iso": wb_time.iso_seconds(time.time())}, fh, indent=2)
             log("persisted active realm '%s' to disk" % realm)
         except Exception as exc:
             log("failed to persist active realm: %s" % exc)
@@ -7235,7 +7255,7 @@ def _parse_stamp_epoch(text):
     if not text:
         return None
     try:
-        return time.mktime(time.strptime(str(text)[:19], "%Y-%m-%d %H:%M:%S"))
+        return wb_time.mktime(time.strptime(str(text)[:19], "%Y-%m-%d %H:%M:%S"))
     except Exception:
         return None
 
@@ -7350,10 +7370,9 @@ def credit_grants(now=None):
     return {
         "ok": True,
         "generated_at": now,
-        "generated_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+        "generated_iso": wb_time.iso_seconds(now),
         "fetched_at": fetched or None,
-        "fetched_iso": (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(fetched))
-                        if fetched else None),
+        "fetched_iso": (wb_time.iso_seconds(fetched) if fetched else None),
         "rows": rows,
         "summary": {
             "count": len(rows),
@@ -8870,10 +8889,10 @@ def _local_day_key(ts):
     try:
         hit = memo.get(ts)
     except TypeError:
-        return time.strftime("%Y-%m-%d", time.localtime(ts))
+        return wb_time.day_key(ts)
     if hit is not None:
         return hit
-    key = time.strftime("%Y-%m-%d", time.localtime(ts))
+    key = wb_time.day_key(ts)
     cap = _ROW_MEMO_MAX
     if cap > 0:
         if len(memo) >= cap:
@@ -8890,7 +8909,7 @@ def _local_day_key(ts):
 def _day_key_start(key):
     """日键 -> 该日的本地午夜 epoch。"""
     lt = time.strptime(key, "%Y-%m-%d")
-    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    return wb_time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
 
 
 def _window_day_key(since):
@@ -12032,6 +12051,7 @@ def runtime_settings_view():
         "media_minimums": dict(wb_settings.MEDIA_MINIMUMS),
         "media_realms": list(wb_settings.MEDIA_REALMS),
         "log_db_enabled": wb_settings.log_db_enabled(ACCOUNTS_DIR),
+        "stats_tz_beijing": wb_settings.stats_tz_beijing(ACCOUNTS_DIR),
         "log_db_max_rows": wb_settings.log_db_max_rows(ACCOUNTS_DIR),
         "log_db_max_days": wb_settings.log_db_max_days(ACCOUNTS_DIR),
         "log_db_max_bytes": wb_settings.log_db_max_bytes(ACCOUNTS_DIR),
@@ -12392,8 +12412,8 @@ def _log_db_active():
 
 def add_log_entry(msg, level=None, tag=None):
     global _LOG_COUNTER
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    t_short = time.strftime("%H:%M:%S")
+    ts = wb_time.strftime("%Y-%m-%d %H:%M:%S")
+    t_short = wb_time.strftime("%H:%M:%S")
     msg_str = str(msg).rstrip()
     if not level:
         lower = msg_str.lower()
@@ -12544,7 +12564,7 @@ def log(msg, level=None, tag=None):
         add_log_entry(msg, level=level, tag=tag)
         return
     _ensure_log_writer()
-    line = f"[wb-proxy] {time.strftime('%H:%M:%S')} {_mask_text(str(msg))}\n"
+    line = f"[wb-proxy] {wb_time.strftime('%H:%M:%S')} {_mask_text(str(msg))}\n"
     try:
         _LOG_QUEUE.put_nowait(line)
     except queue.Full:
@@ -16860,7 +16880,7 @@ def maybe_dump_11_128(exc, detail, endpoint, model, fp=None, stream=None,
         summary = {
             "schema": 1,
             "at": time.time(),
-            "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "iso": wb_time.strftime("%Y-%m-%dT%H:%M:%S"),
             "endpoint": endpoint,
             "status": status,
             "model": model,
@@ -16896,7 +16916,7 @@ def maybe_dump_11_128(exc, detail, endpoint, model, fp=None, stream=None,
 
         outdir = os.path.join(USAGE_DIR, DUMP_11_128_DIR)
         os.makedirs(outdir, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = wb_time.strftime("%Y%m%d-%H%M%S")
         base = "%s-%s-%s" % (stamp, _dump_filename_part(endpoint),
                              _dump_filename_part(request_id or body_key[:12]))
         path = os.path.join(outdir, base + ".json")
@@ -22743,7 +22763,7 @@ class Handler(BaseHTTPRequestHandler):
         # accessToken/refreshToken 等凭证字段不受影响。
         doc = _redact_account_names(doc)
         if (query.get("download") or ["0"])[0] in ("1", "true", "yes"):
-            stamp = time.strftime("%Y%m%d-%H%M%S")
+            stamp = wb_time.strftime("%Y%m%d-%H%M%S")
             if len(uids) == 1:
                 # Name a single-account export after the account, so a
                 # folder of them stays readable.
@@ -23027,7 +23047,7 @@ class Handler(BaseHTTPRequestHandler):
         lines = [f"[{item['ts']}] [{item['level']}] [{item['tag']}] {_mask_text(str(item['msg']))}"
                  for item in log_data["logs"]]
         text_content = "\n".join(lines).encode("utf-8")
-        filename = f"wb-proxy-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        filename = f"wb-proxy-{wb_time.strftime('%Y%m%d-%H%M%S')}.log"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
@@ -24046,7 +24066,7 @@ class Handler(BaseHTTPRequestHandler):
                     concurrency_limit = item.get("concurrency_limit")
                 else:
                     concurrency_limit = stored.get("concurrency_limit")
-                created_at = item.get("created_at") or (stored.get("created_at") if entry_id in existing else None) or time.strftime("%Y/%m/%d %H:%M")
+                created_at = item.get("created_at") or (stored.get("created_at") if entry_id in existing else None) or wb_time.strftime("%Y/%m/%d %H:%M")
                 cleaned.append({
                     "id": entry_id,
                     "name": name,
@@ -24571,6 +24591,17 @@ class Handler(BaseHTTPRequestHandler):
                     log_db_touched = True
             if log_db_touched:
                 apply_log_db_settings()
+        if "stats_tz_beijing" in payload:
+            # 统计时区（默认关）：关着的时候全部按宿主时区，与上游一字不差；
+            # 开启后所有对外可见时间与日 / 小时分桶改用固定 +08:00。保存后立即
+            # 生效，并清掉按日键缓存的表。
+            raw = payload.get("stats_tz_beijing")
+            if not isinstance(raw, bool):
+                return self._error(400, "stats_tz_beijing must be true or false",
+                                   "invalid_request_error")
+            wb_settings.set_stats_tz_beijing(ACCOUNTS_DIR, raw)
+            reply["stats_tz_beijing"] = raw
+            configure_timezone(raw)
         if "accounts_collapsed" in payload:
             # A disclosure state, and the only thing this branch may touch: the
             # submission carries just this key, so the settings it does not name
@@ -28319,6 +28350,10 @@ def _bootstrap_runtime(args):
     # 不建文件、不改日志路径。
     LOG_STORE = wb_logstore.LogStore(os.path.join(USAGE_DIR, "logs.sqlite3"))
     apply_log_db_settings()
+    # 统计时区（默认关闭）：在账号池与任何一行日志之前定下来，免得启动头几
+    # 条日志与后续行落在两个时区里。关着的时候 wb_time 全是直通，行为与上游
+    # 完全一致。
+    configure_timezone()
     # LAN mode must not ship a known key: the gateway spends the account's own
     # upstream quota, so a guessable default lets anyone on the network drain
     # it. Generate one on first use, persist it, and reuse it afterwards.

@@ -29,6 +29,7 @@ import urllib.request
 
 import wb_accounts
 import wb_settings
+import wb_time
 
 STATE_NAME = "model_windows.json"
 STATE_VERSION = 1
@@ -134,7 +135,7 @@ def _save(accounts_dir):
     """原子落盘。调用方需持有 _lock。写失败只丢持久化，不影响本轮探针。"""
     payload = {
         "version": STATE_VERSION,
-        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_at": wb_time.strftime("%Y-%m-%d %H:%M:%S"),
         "windows": list(_state["windows"].values()),
     }
     path = _state_path(accounts_dir)
@@ -336,7 +337,7 @@ def _fire(accounts_dir, account, model, log):
                 last_result=detail)
         log("窗口探针：账号 [%s] 的 %s 仍在限流，下一轮重置 %s"
             % (uid8, model,
-               time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(reset_at))))
+               wb_time.strftime("%Y-%m-%d %H:%M:%S", wb_time.localtime(reset_at))))
         return
 
     row = _get(accounts_dir, uid, model) or {}

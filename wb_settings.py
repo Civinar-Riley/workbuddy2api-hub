@@ -18,6 +18,8 @@ import secrets
 import threading
 import time
 
+import wb_time
+
 DEFAULT_PANEL_PASSWORD = "admin"
 PBKDF2_ROUNDS = 120_000
 SESSION_TTL = 7 * 24 * 3600
@@ -252,6 +254,14 @@ DEFAULT_LOG_DB_MAX_DAYS = 7
 MAX_LOG_DB_MAX_ROWS = 100_000_000
 MAX_LOG_DB_MAX_DAYS = 36500
 MAX_LOG_DB_MAX_BYTES = 100 * 1024 ** 3
+
+# 统计时区：开启后日志时间戳、请求记录、撞线 / 重置时刻、用量日 / 小时分桶、
+# 签到日期、额度重置日、导出文件时间等所有对外可见的时间统一按固定 +08:00
+# （北京时间）计算。缺失键读作关 —— 关着的时候全部走宿主时区，与上游一字不差。
+# 固定偏移而不是 TZ=Asia/Shanghai + tzset()：中国自 1991 年起无夏令时，偏移是
+# 常量；常量偏移不需要 tzdata，Windows 没有 tzset、musl / OpenWrt 镜像常缺
+# zoneinfo，IANA 名在那里会静默退化成 UTC，反而把「北京时间」算错。
+STATS_TZ_BEIJING_KEY = "stats_tz_beijing"
 
 _lock = threading.RLock()
 
@@ -608,7 +618,7 @@ def _clean_key_entry(entry):
         "accounts": _clean_account_refs(entry.get("accounts")),
         "concurrency_limit": concurrency,
         "enabled": False if deleted_at else entry.get("enabled", True) is not False,
-        "created_at": entry.get("created_at") or time.strftime("%Y/%m/%d %H:%M"),
+        "created_at": entry.get("created_at") or wb_time.strftime("%Y/%m/%d %H:%M"),
         "deleted_at": deleted_at,
     }
 
@@ -702,7 +712,7 @@ def _retired_key_entry(old):
         "models": old.get("models") or [],
         "enabled": False,
         "created_at": old.get("created_at") or "",
-        "deleted_at": old.get("deleted_at") or time.strftime("%Y/%m/%d %H:%M"),
+        "deleted_at": old.get("deleted_at") or wb_time.strftime("%Y/%m/%d %H:%M"),
     }
 
 
@@ -2336,6 +2346,26 @@ def set_log_db_enabled(accounts_dir, enabled):
     return enabled
 
 
+def stats_tz_beijing(accounts_dir):
+    """Whether all human-facing times use fixed +08:00 instead of the host tz.
+
+    Off unless the operator turns it on: with the switch off every timestamp and
+    bucket is computed in the host timezone, exactly as it is upstream, so an
+    existing install's history keeps its current meaning after an upgrade.
+    """
+    return load(accounts_dir).get(STATS_TZ_BEIJING_KEY) is True
+
+
+def set_stats_tz_beijing(accounts_dir, enabled):
+    """Persist the statistics-timezone switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[STATS_TZ_BEIJING_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
 def _positive_cap(raw, fallback, hard_max):
     """One retention cap read back: a positive whole number, clamped.
 
@@ -2851,8 +2881,7 @@ def daily_chat_random_times(accounts_dir, now=None):
     around under the accounts that already ran, and "next slot in ..." would
     never converge. The stored date is the guard.
     """
-    moment = time.localtime(now) if now is not None else time.localtime()
-    today = time.strftime("%Y-%m-%d", moment)
+    today = wb_time.day_key(time.time() if now is None else now)
     data = load(accounts_dir)
     stored = data.get(DAILY_CHAT_RANDOM_KEY)
     if isinstance(stored, dict) and stored.get("date") == today:

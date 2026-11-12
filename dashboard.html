@@ -3251,6 +3251,14 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '本周请求数': 'Requests this week',
     '本地网络工具': 'Local web tools',
     '更新': 'Update',
+    '统计时区': 'Statistics timezone',
+    '按北京时间统计': 'Bucket by Beijing time',
+    '默认关闭：全部时间按服务器所在时区显示与分桶，与上游一致。勾选后统一按北京时间（固定 UTC+8）：':
+      'Off by default: every time is shown and bucketed in the server timezone, matching upstream. Turn it on to use Beijing time (fixed UTC+8) for log timestamps, request rows, limit-hit and reset moments, today activity, usage day/hour buckets, check-in dates, quota reset days and export filenames.',
+    '已切换为北京时间统计': 'Switched to Beijing time',
+    '已恢复服务器时区统计': 'Back to the server timezone',
+    '(北京时间 UTC+8)': '(Beijing time, UTC+8)',
+    '(服务器时区)': '(server timezone)',
     // 「更新于 HH:MM:SS」是 B 版页头的动态拼接串，只有「更新」有词条会拼出「Update于」。
     '更新于': 'Updated at',
     '立即检查更新': 'Check now',
@@ -7887,6 +7895,26 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
             <div style="font-size:12px;color:var(--dim);margin-bottom:4px">日志库大小上限 MB（留空 = 不限）</div>
             <input id="setLogDbMaxMB" type="number" min="1" placeholder="不限"
                    style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+          </div>
+        </div>
+      </section>
+
+      <section data-cat="system">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">统计时区 <em id="setTzState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              默认关闭：全部时间按服务器所在时区显示与分桶，与上游一致。勾选后统一按北京时间（固定 UTC+8）：
+              日志时间戳、请求记录、撞线 / 重置时刻、今日活动、用量日 / 小时分桶、签到日期、额度重置日、导出文件名。
+              落盘仍存 epoch，切换只影响展示与日历日的计算。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setStatsTzBeijing" type="checkbox" style="width:16px;height:16px">
+              按北京时间统计
+            </label>
+            <button onclick="saveStatsTz(this)">保存</button>
           </div>
         </div>
       </section>
@@ -17138,6 +17166,14 @@ async function loadSettings(showToast, opts){
       fillCapInput('setLogDbMaxRows', data.log_db_max_rows);
       fillCapInput('setLogDbMaxDays', data.log_db_max_days);
       fillCapInputMB('setLogDbMaxMB', data.log_db_max_bytes);
+      const tzBeijing = data.stats_tz_beijing === true;
+      const tzInput = document.getElementById('setStatsTzBeijing');
+      if(tzInput) tzInput.checked = tzBeijing;
+      const tzState = document.getElementById('setTzState');
+      if(tzState){
+        tzState.textContent = tzBeijing ? '(北京时间 UTC+8)' : '(服务器时区)';
+        tzState.style.color = tzBeijing ? 'var(--accent2)' : 'var(--dim)';
+      }
     // Rebuild the editable rows, keeping stored values so an untouched field
     // is not accidentally blanked.
     API_KEY_ROWS = (data.api_keys || []).map(k => ({
@@ -18599,6 +18635,21 @@ async function saveLogDb(btn){
   try {
     await postJSON('/settings/save', payload);
     toast(payload.log_db_enabled ? '已启用日志落库' : '已关闭日志落库', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveStatsTz(btn){
+  const el = document.getElementById('setStatsTzBeijing');
+  const payload = {stats_tz_beijing: !!(el && el.checked)};
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', payload);
+    toast(payload.stats_tz_beijing ? '已切换为北京时间统计' : '已恢复服务器时区统计', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
@@ -24190,7 +24241,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     system: {
       title: '日志与系统',
       desc: '日志落库、更新、版本回退和运行信息。',
-      items: ['日志落库', '更新', '版本回退', '运行信息']
+      items: ['日志落库', '统计时区', '更新', '版本回退', '运行信息']
     }
   };
 
