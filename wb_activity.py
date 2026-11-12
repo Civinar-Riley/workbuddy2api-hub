@@ -19,6 +19,8 @@ import sys
 import threading
 import time
 
+import wb_time
+
 HISTORY_NAME = "activity_history.jsonl"
 
 TASK_CHECKIN = "checkin"
@@ -165,7 +167,13 @@ def project(row):
 
 
 def _timestamp():
-    """本地时间带偏移量：面板按本地时间显示，读取端不必再猜是哪个时区。"""
+    """本地时间带偏移量：面板按本地时间显示，读取端不必再猜是哪个时区。
+
+    统计时区开关打开时固定输出 +08:00 —— 偏移量必须跟着实际用的时区走，
+    否则读取端会按宿主时区把北京时间重新换算一遍。
+    """
+    if wb_time.enabled():
+        return wb_time.strftime("%Y-%m-%dT%H:%M:%S") + "+08:00"
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
@@ -262,9 +270,7 @@ def local_midnight(now=None):
     进「今日」，或者漏掉今天凌晨的记录。time.mktime 把这件事交给平台 —— 它按给
     定的那个本地时刻判断当时是否在夏令时（tm_isdst=-1），而不是按调用时刻。
     """
-    moment = time.localtime(now) if now is not None else time.localtime()
-    return time.mktime((moment.tm_year, moment.tm_mon, moment.tm_mday,
-                        0, 0, 0, 0, 0, -1))
+    return wb_time.midnight(now)
 
 
 def range_cutoff(value):

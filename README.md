@@ -20,7 +20,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v2.1.1-2496ED?style=flat-square" alt="Version 2.1.1"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v2.2.0-2496ED?style=flat-square" alt="Version 2.2.0"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -248,7 +248,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 290 个套件：218 个 Python + 72 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 291 个套件：219 个 Python + 72 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -257,6 +257,9 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 ## 七、版本更新记录 (Changelog)
 
 本版更新与完整历史版本请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+### Unreleased
+
+- **统计时区开关（北京时间）**：设置 →「日志与系统」新增「统计时区」卡片（`settings.json` 键 `stats_tz_beijing`，`/settings/save` 只收 JSON 布尔，默认关闭）。关闭时全部时间按服务器所在时区显示与分桶，与上游一致；勾选后统一按北京时间（固定 UTC+8）计算日志时间戳、请求记录、撞线 / 重置时刻、今日活动、用量日 / 小时分桶、签到日期、额度重置日与导出文件名。落盘仍存 epoch，切换只影响展示与日历日计算，保存后立即生效。实现用固定偏移而不是 `TZ=Asia/Shanghai` + `tzset()`：中国自 1991 年起无夏令时，固定偏移不需要 tzdata，Windows 没有 `tzset`、musl / OpenWrt 镜像常缺 zoneinfo 也能正确工作。 / A statistics-timezone switch (Settings → Logs & system) now offers Beijing time: `stats_tz_beijing` in `settings.json`, a strict JSON boolean on `/settings/save`, off by default. With it off every time is shown and bucketed in the host timezone exactly as before; switched on, log timestamps, request rows, limit-hit and reset moments, today's activity, usage day/hour buckets, check-in dates, quota reset days and export filenames all use a fixed UTC+8. Epochs are still what gets stored, so the switch only changes display and calendar-day maths, and it takes effect on save. The implementation uses a fixed offset rather than `TZ=Asia/Shanghai` + `tzset()`: China has had no DST since 1991, so no tz database is needed, which keeps it correct on Windows (no `tzset`) and on musl / OpenWrt images that ship without zoneinfo.
 
 ---
 
