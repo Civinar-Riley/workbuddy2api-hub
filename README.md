@@ -222,6 +222,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | `WB_IDENTITY_ARCH` | 宿主架构 | 仅 CLI 身份：覆盖 `x-stainless-arch`（如 `x64` / `arm64`） |
 | `WB_IDENTITY_NODE_VERSION` | 官方默认 | 仅 CLI 身份：覆盖 `x-stainless-runtime-version` |
 | `WB_SANITIZE_LOOSE_BILLING` | `0` | 计费头的宽松兜底：严格解析认不出时，按「像计费头」（含 ≥2 个 `cc_*=` / `cch=` 键值、且不超过 400 字符）整段删除。默认关闭，保持 #853 之后的严格语义；客户端改字段名导致每轮前缀命中率归零时才需要打开 |
+| `WB_MSGSTAT_SHARDS` | `0` | 单发 `/v1/messages` 请求收敛到几个账号上（0 = 关闭）。打开后同一 *(key, 模型, system, tools)* 组合的一次性调用固定复用 ≤N 个账号，避免被首条 user 文本打散到整池；上游 prompt 缓存按账号存放，换号即整段重付 |
+| `WB_MSGSTAT_DAILY_SALT` | `1` | 上一条的亲和键带当天日期盐，每天各桶重新开一次；`0` 关闭（键跨天不变） |
 
 遇到上游 `400 / 11-128` 时，先按 [`docs/TROUBLESHOOTING-11-128.md`](docs/TROUBLESHOOTING-11-128.md) 收集同一请求的
 身份、最小请求和提示词对照结果；不要先轮换账号。

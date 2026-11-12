@@ -4,6 +4,9 @@
 - **Key 级日 token 限量**（`daily_token_limit`，单位 M，`0` = 不限）：新增按 Key 折叠的用量视图 `keytokens`（与账号维度的 `tokens` 是同一批行的两种折叠，不增加 I/O）。**先按 key 累加再判 uid 为空**：400 之类的失败行没有 `account` 字段，先在 uid 上跳过就会漏掉它们。超限时在**并发槽位之前**返回 `403 permission_error`（已超额的 Key 不该先排队等 `WB_CHAT_SLOT_WAIT` 秒再被拒），`/v1/messages` 走 Anthropic 错误信封。面板：编辑弹窗新增「日 token 限量 (M)」输入框与「日限 NM」徽标；`/settings/save` 在请求体缺该字段时沿用已存值，老面板保存不会把日限量清成 0。
 - **Key 级并发上限改为有界排队**：`concurrency_limit` 占满时不再立刻返回 429，而是最多等待 `WB_CHAT_SLOT_WAIT` 秒（默认 30，与全局对话槽位同一预算）再判定；多进程客户端在工具调用密集时的瞬时超并发不再表现为「网关抽风」。信号量按 Key 懒创建，`limit` 变化时按当前占用重建，`limit <= 0`（不限）不建信号量；归还路径对多还、限流调小都做了幂等保护。
 - **面板回显 `concurrency_limit`**：该字段上游只存不显，面板读不到就显示 0，用户再保存一次会把真实值写回 0。
+- **单发 `/v1/messages` 的稳定亲和键**（`WB_MSGSTAT_SHARDS`，默认 `0` = 关闭）：Claude Code 等客户端的一次性调用是 `[system, user]`，user 文本每次不同；`affinity_route()` 用 `msgs[:2]` 派生会话键，于是每次调用都被当成新会话、被轮询派到不同账号。上游 prompt 缓存**按账号存放**，换号等于整段前缀重付。打开开关后，同一 *(API Key, 模型, system, tools)* 组合的调用按用户文本哈希分到 ≤N 个固定账号并持续复用，稳定前缀继续命中；流式主循环与已续轮请求仍走原有的前缀亲和，行为不变。
+- **第 2 轮继承第 1 轮绑定**：`affinity_stable_key_enabled` 打开时第 1 轮哈希 `msgs[:2]`、第 2 轮哈希 `msgs[:3]`，中间必然换一次冷号。现在第 2 轮会把新键 prebind 到第 1 轮用过的账号（仅在客户端未自带会话键、且键确实变化时生效）。
+- 两处改动都只作用于 `/v1/messages`；`/v1/chat/completions`、`/v1/responses`、`/v1/completions` 的派单路径一行未改。
 
 ## v2.1.1
 
