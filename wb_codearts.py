@@ -17,6 +17,7 @@
 依赖：Python 3.9+ 标准库；密码学原语在 `wb_codearts_crypto.py`。
 """
 
+import io
 import json
 import os
 import secrets
@@ -427,6 +428,16 @@ class CodeArtsAccount(object):
         self._refresh_lock = threading.Lock()
         self._models_lock = threading.Lock()
         self._info_lock = threading.Lock()
+        # Credit accounting samples the account's cumulative "used" counter
+        # before and after a request. Serialize only those two short lookups,
+        # never the chat stream itself. `_credit_settled_used` is the account
+        # wide high-water mark: overlapping requests may observe the same
+        # cumulative value, but only the first settlement may claim that delta.
+        # `_credit_explicit_pending` keeps a credit value returned directly by
+        # an upstream response from being counted again in the next delta.
+        self._credit_sample_lock = threading.RLock()
+        self._credit_settled_used = None
+        self._credit_explicit_pending = 0.0
 
     def chat_base_url(self):
         return SNAP_HOST
@@ -1743,6 +1754,10 @@ class CodeArtsStream(object):
         self._last_text = ""
         self._usage = None
         self._created = int(time.time())
+        self._credit_baseline = None
+        self._credit_baseline_ready = False
+        self._credit_finalized = False
+        self._last_credit_usage = None
 
     def __enter__(self):
         return self
@@ -1760,6 +1775,104 @@ class CodeArtsStream(object):
             self.pool.release(self.acct)
         except Exception:
             pass
+
+    # ---- 积分结算 ----
+    def seed_credit_baseline(self, used):
+        """Attach the cumulative-used snapshot taken before the chat POST."""
+        try:
+            self._credit_baseline = None if used is None else float(used)
+            self._credit_baseline_ready = used is not None
+        except (TypeError, ValueError):
+            self._credit_baseline = None
+            self._credit_baseline_ready = False
+
+    def take_credit_baseline(self):
+        """Sample the account's cumulative used-credit counter before a POST."""
+        with self.acct._credit_sample_lock:
+            current = _sample_credit_used(self.acct)
+            if current is not None:
+                settled = self.acct._credit_settled_used
+                # A package renewal can reset the counter. Only adopt the
+                # lower value when this request is alone; a stale sample while
+                # other requests are in flight must not erase their charges.
+                if (settled is None
+                        or (current < settled
+                            and self.acct.active_concurrent <= 1)):
+                    self.acct._credit_settled_used = current
+                    self.acct._credit_explicit_pending = 0.0
+            self.seed_credit_baseline(current)
+        return self._credit_baseline
+
+    def finish_credit_sample(self, usage):
+        """把累计已用积分的前后差值写入本次 usage。
+
+        重复调用必须幂等；采样失败或计数回退（套餐切换/刷新）时，不改动
+        usage。上游直接返回非零 credit 时保留该值，并在下一次累计采样中
+        扣掉已声明的部分，避免重复记账。返回值是最终 usage。
+
+        同一账号的请求可能重叠，而上游只提供累计已用积分。用账号级
+        high-water mark 结算可以保证总量不重复：某个请求先结算后，其他请求
+        只能从已经结算到的水位继续计算；因此并发请求中可能有一个请求记 0，
+        但所有成功请求的 credit 总和与上游累计增量一致。
+        """
+        if self._credit_finalized:
+            return self._last_credit_usage
+        self._credit_finalized = True
+        self._last_credit_usage = usage
+        if not isinstance(usage, dict):
+            return usage
+        if not self._credit_baseline_ready or self._credit_baseline is None:
+            return usage
+        try:
+            explicit_credit = float(usage.get("credit") or 0)
+        except (TypeError, ValueError):
+            explicit_credit = 0.0
+        if explicit_credit > 0:
+            # The upstream supplied the amount for this request. Keep it as
+            # the row value, but remember it until a cumulative sample proves
+            # the charge has landed. A snapshot taken before this request
+            # settles must not be mistaken for a post-charge total.
+            with self.acct._credit_sample_lock:
+                if self.acct._credit_settled_used is not None:
+                    self.acct._credit_explicit_pending += explicit_credit
+            return usage
+        try:
+            _ensure_token(self.acct)
+            with self.acct._credit_sample_lock:
+                info = fetch_account_info(self.acct, timeout=5.0)
+                total = ((info.get("credits") or {}).get("total") or {})
+                used = total.get("used")
+                if used is None:
+                    return usage
+                used = float(used)
+                settled = self.acct._credit_settled_used
+                if settled is None:
+                    settled = float(self._credit_baseline)
+                    self.acct._credit_settled_used = settled
+                if used < settled:
+                    # The counter can go backwards after a package renewal.
+                    # A later request's baseline will adopt the new range.
+                    return usage
+                unaccounted = used - settled
+                pending = self.acct._credit_explicit_pending
+                if unaccounted >= pending:
+                    delta = unaccounted - pending
+                    self.acct._credit_settled_used = used
+                    self.acct._credit_explicit_pending = 0.0
+                else:
+                    # This sample predates the explicit charge. Keep the
+                    # pending amount for the next request instead of charging
+                    # it to a request that has no upstream credit of its own.
+                    delta = unaccounted
+                    self.acct._credit_settled_used = used
+                if delta <= 0:
+                    return usage
+                usage = dict(usage)
+                usage["credit"] = round(delta, 4)
+                self._last_credit_usage = usage
+                return usage
+        except Exception:
+            return usage
 
     def preflight(self):
         """读到首个 data 事件；HTTP 200 里内嵌的业务错误在这里抛出。"""
@@ -2009,6 +2122,19 @@ def _clamp_output_tokens(acct, model, body):
         body[key] = limit
 
 
+def _sample_credit_used(acct):
+    """Best-effort cumulative credit snapshot; never raises into chat."""
+    try:
+        _ensure_token(acct)
+        with acct._credit_sample_lock:
+            info = fetch_account_info(acct, timeout=5.0)
+        total = ((info.get("credits") or {}).get("total") or {})
+        used = total.get("used")
+        return None if used is None else float(used)
+    except Exception:
+        return None
+
+
 def _client_chat(acct, body, session_key):
     model = _canonical_model(acct, body.get("model"))
     chat_id = body.get("chat_id") or _derive_chat_id(session_key, body.get("messages"))
@@ -2040,6 +2166,10 @@ def _client_chat(acct, body, session_key):
     timeout = float(acct.pool.config.get("stream_timeout_seconds")
                     or DEFAULTS["stream_timeout_seconds"])
     last_error = None
+    # Sample before the POST: CodeArts settles credits immediately, so a
+    # post-response baseline would already include this request's cost.
+    credit_baseline = CodeArtsStream(
+        io.BytesIO(b""), model, acct, acct.pool).take_credit_baseline()
     for attempt in range(3):
         req = urllib.request.Request(SNAP_HOST + EP_CHAT, data=raw,
                                      headers=headers, method="POST")
@@ -2074,6 +2204,7 @@ def _client_chat(acct, body, session_key):
             reason = getattr(exc, "reason", None) or exc
             raise CodeArtsUnavailable("连不上 CodeArts 聊天接口：%s" % reason)
         stream = CodeArtsStream(resp, model, acct, acct.pool)
+        stream.seed_credit_baseline(credit_baseline)
         try:
             stream.preflight()
         except CodeArtsUpstreamError as exc:
@@ -2081,6 +2212,8 @@ def _client_chat(acct, body, session_key):
             if _is_concurrency_message(str(exc)):
                 last_error = exc
                 if attempt < 2:
+                    # The failed attempt spent no credits; keep the original
+                    # baseline so the retry does not absorb a phantom delta.
                     time.sleep(2.0 * (attempt + 1))
                     continue
             raise

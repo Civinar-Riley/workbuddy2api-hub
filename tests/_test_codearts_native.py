@@ -3,6 +3,7 @@ import io
 import json
 import os
 import sys
+import threading
 import time
 from unittest import mock
 
@@ -411,6 +412,85 @@ try:
     stream.preflight()
     result = b''.join(stream)
     check("first SSE text normalized", b'"content": "hello"' in result, result)
+
+    print("== credit sampling ==")
+    acct._credit_settled_used = None
+    acct._credit_explicit_pending = 0.0
+    sample = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    sample.seed_credit_baseline(10.0)
+    with mock.patch.object(C, "fetch_account_info",
+                           return_value={"credits": {"total": {"used": 10.25}}}):
+        usage = sample.finish_credit_sample({"total_tokens": 5})
+    check("credit delta recorded", usage.get("credit") == 0.25, usage)
+    check("credit finalize idempotent",
+          sample.finish_credit_sample({"total_tokens": 5}) is usage, usage)
+
+    upstream_credit = {"total_tokens": 5, "credit": 0.5}
+    acct._credit_settled_used = 10.0
+    acct._credit_explicit_pending = 0.0
+    explicit = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    explicit.seed_credit_baseline(10.0)
+    with mock.patch.object(C, "fetch_account_info",
+                           return_value={"credits": {"total": {"used": 10.25}}}):
+        check("upstream credit wins",
+              explicit.finish_credit_sample(upstream_credit).get("credit") == 0.5,
+              upstream_credit)
+
+    failed_sample = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    failed_sample.seed_credit_baseline(10.0)
+    with mock.patch.object(C, "fetch_account_info",
+                           side_effect=C.CodeArtsUnavailable("offline")):
+        failed_usage = failed_sample.finish_credit_sample({"total_tokens": 5})
+    check("credit sample failure is best effort",
+          failed_usage.get("credit") is None, failed_usage)
+
+    print("== credit concurrent settlement ==")
+    acct._credit_settled_used = None
+    acct._credit_explicit_pending = 0.0
+    first = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    second = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    first.seed_credit_baseline(20.0)
+    second.seed_credit_baseline(20.0)
+    settled = {}
+    barrier = threading.Barrier(2)
+
+    def settle(name, stream):
+        barrier.wait()
+        settled[name] = stream.finish_credit_sample({"total_tokens": 5})
+
+    with mock.patch.object(
+            C, "fetch_account_info",
+            return_value={"credits": {"total": {"used": 20.5}}}):
+        workers = [
+            threading.Thread(target=settle, args=("first", first)),
+            threading.Thread(target=settle, args=("second", second)),
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+    credits = sorted(float(item.get("credit") or 0) for item in settled.values())
+    check("concurrent credit delta is not double counted",
+          len(credits) == 2 and credits == [0.0, 0.5], credits)
+
+    print("== credit explicit pending ==")
+    acct._credit_settled_used = 10.0
+    acct._credit_explicit_pending = 0.0
+    explicit_pending = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    explicit_pending.seed_credit_baseline(10.0)
+    with mock.patch.object(C, "fetch_account_info",
+                           return_value={"credits": {"total": {"used": 10.0}}}):
+        explicit_usage = explicit_pending.finish_credit_sample(
+            {"total_tokens": 5, "credit": 0.25})
+    next_usage = C.CodeArtsStream(io.BytesIO(b""), "GLM-5.2", acct, acct.pool)
+    next_usage.seed_credit_baseline(10.0)
+    with mock.patch.object(C, "fetch_account_info",
+                           return_value={"credits": {"total": {"used": 10.5}}}):
+        next_result = next_usage.finish_credit_sample({"total_tokens": 5})
+    check("explicit credit is reconciled once the counter advances",
+          explicit_usage.get("credit") == 0.25
+          and next_result.get("credit") == 0.25,
+          (explicit_usage, next_result))
 
     print("== named tool choice ==")
     tool_body = C.build_chat_body({

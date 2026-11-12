@@ -33,6 +33,8 @@ class FakeState(object):
         self.last_body = None
         self.chat_text = "你好"
         self.chat_mode = "delta"  # delta | text
+        self.chat_credit = 0.25
+        self.credit_error = False
         self.chat_error = None    # (status, body_dict) 或 None
         self.chat_error_remaining = -1  # -1 = 一直失败；N = 失败 N 次后恢复
         self.embedded_error = None  # {"error_code": ..., "error_msg": ...}
@@ -236,6 +238,7 @@ class _Handler(BaseHTTPRequestHandler):
                 raw_sse = ("data: " + json.dumps(state.embedded_error) + "\n").encode()
                 self._send_sse(raw_sse)
                 return
+            self._charge_chat_credit()
             self._send_sse(_sse_chunks(state, state.last_body.get("model") or "GLM-5.2"))
             return
         if path == "/api/v1/benefit/claim":
@@ -277,6 +280,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "base_url": "https://example.test", "models": state.benefit_models}})
             return
         if path == "/snap-manager/v1/statistics/plugin":
+            if state.credit_error:
+                self._send_json(500, {"error_msg": "statistics unavailable"})
+                return
             self._send_json(200, {
                 "metrics": state.credit_metrics,
                 "model_metrics": state.model_metrics,
@@ -301,6 +307,22 @@ class _Handler(BaseHTTPRequestHandler):
                                   "domain_id": state.domain_id})
             return
         self._send_json(404, {"error_msg": "not found"})
+
+    def _charge_chat_credit(self):
+        state = self.state
+        try:
+            amount = float(state.chat_credit or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount <= 0:
+            return
+        for item in state.credit_metrics:
+            if item.get("name") != "usageTotalPackageCredit":
+                continue
+            item["package_credit_used"] = round(
+                float(item.get("package_credit_used") or 0) + amount, 4)
+            item["package_credit_remain"] = round(
+                max(0.0, float(item.get("package_credit_remain") or 0) - amount), 4)
 
 
 def start_server(state=None):

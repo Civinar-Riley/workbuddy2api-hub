@@ -148,8 +148,12 @@ try:
                        dict(chat, model="deepseek-v4-pro-0813", stream=False),
                        "hub-key-1234")
     check("benefit status", status == 200, (status, raw[:300]))
-    check("benefit header sent", state.last_headers.get("maas_type") == "benefit",
-          state.last_headers)
+    benefit_headers = [
+        req.get("headers") or {} for req in state.requests
+        if req.get("path") == "/api/v2/chat/completions"
+        and (req.get("headers") or {}).get("maas_type") == "benefit"
+    ]
+    check("benefit header sent", bool(benefit_headers), state.last_headers)
     state.require_benefit_header = False
 
     print("== responses ==")
@@ -198,6 +202,27 @@ try:
     check("all unpriced",
           all(r.get("cost_policy") == "codearts:unpriced" for r in rows),
           [r.get("cost_policy") for r in rows])
+    priced = [r for r in rows if not r.get("error")]
+    check("all successful rows carry credit",
+          priced and all(float(r.get("credit") or 0) > 0 for r in priced),
+          [(r.get("model"), r.get("credit")) for r in priced])
+    check("credit totals match upstream samples",
+          abs(sum(float(r.get("credit") or 0) for r in priced)
+              - state.chat_credit * len(priced)) < 0.001,
+          (sum(float(r.get("credit") or 0) for r in priced),
+           state.chat_credit * len(priced)))
+
+    print("== credit sampling failure ==")
+    state.credit_error = True
+    status, raw = post("/v1/chat/completions", dict(chat, stream=False),
+                       "hub-key-1234")
+    check("chat survives credit sampling failure", status == 200,
+          (status, raw[:300]))
+    state.credit_error = False
+    with open(os.path.join(USAGE, "usage.jsonl"), encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh if line.strip()]
+    check("failed sample leaves credit at zero",
+          float(rows[-1].get("credit") or 0) == 0, rows[-1])
 
     print("== unpriced ==")
     cost = wb_pricing.cost_for_row({
@@ -213,10 +238,13 @@ try:
                       messages=[{"role": "user", "content": [
         {"type": "text", "text": "describe"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]}])
-    before = len(state.requests)
+    before = len([r for r in state.requests
+                  if r.get("path") == "/api/v2/chat/completions"])
     status, raw = post("/v1/chat/completions", image_chat, "hub-key-1234")
     check("image forwarded to upstream", status == 200
-          and len(state.requests) == before + 1, (status, raw))
+          and len([r for r in state.requests
+                   if r.get("path") == "/api/v2/chat/completions"]) == before + 1,
+          (status, raw))
     content = ((state.last_body or {}).get("messages") or [{}])[0].get("content")
     check("image content preserved", isinstance(content, list)
           and any(isinstance(p, dict) and p.get("type") == "image_url"
@@ -228,11 +256,18 @@ try:
         {"key": "allowed-account", "name": "allowed", "realm": "codearts", "accounts": ["u1"]},
         {"key": "hub-key-1234", "name": "test", "realm": "codearts"},
     ])
-    before = len(state.requests)
+    before = len([r for r in state.requests
+                  if r.get("path") == "/api/v2/chat/completions"])
     status, raw = post("/v1/chat/completions", chat, "model-limit")
-    check("model restriction enforced", status == 400 and len(state.requests) == before, (status, raw))
+    check("model restriction enforced", status == 400
+          and len([r for r in state.requests
+                   if r.get("path") == "/api/v2/chat/completions"]) == before,
+          (status, raw))
     status, raw = post("/v1/chat/completions", chat, "account-limit")
-    check("account restriction enforced", status != 200 and len(state.requests) == before, (status, raw))
+    check("account restriction enforced", status != 200
+          and len([r for r in state.requests
+                   if r.get("path") == "/api/v2/chat/completions"]) == before,
+          (status, raw))
     status, raw = post("/v1/chat/completions", chat, "allowed-account")
     check("allowed account works", status == 200, (status, raw[:300]))
 

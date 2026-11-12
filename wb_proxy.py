@@ -1797,6 +1797,12 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
 
 def record_upstream_usage(upstream, requested_model, usage, **kwargs):
     """Record the model actually billed upstream, preserving the client alias."""
+    finalize = getattr(upstream, "finish_credit_sample", None)
+    if callable(finalize):
+        # CodeArts reports token usage but not a per-request credit value.
+        # Settle the cumulative-credit delta here, at the single accounting
+        # point shared by chat/responses/messages and streaming/non-streaming.
+        usage = finalize(usage)
     billed_model = getattr(upstream, "_wb_billed_model", requested_model)
     # 出口归因（#743）：每条完成行都带上响应对象的账号槽位与实际出口。
     account = POOL.get(getattr(upstream, "_wb_account_uid", "")) if POOL else None
