@@ -31,6 +31,7 @@ logs/
 
 # 测试套件输出（tests/run_all.py --logs 落盘的每个套件的完整输出）
 suite-logs/
+suite-logs-*/
 
 # 便携版内置运行时（仓库只保存纯源码，绿色包通过 Release 发布）
 python/
