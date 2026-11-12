@@ -176,21 +176,34 @@ check(/html:not\(\[data-console-layout="on"\]\):not\(\[data-ui="next"\]\) \.cons
 check(!/html:not\(\[data-console-layout="on"\]\) \.console-filterbar\s*\{display:none!important\}/.test(html),
   '旧布局的筛选栏隐藏规则不应误伤新导航');
 
-// 号池控件只在隔离实际生效时出现；关闭时既不能露按钮，也不能让隐藏的
-// POOL_FILTER 继续过滤账号（与 #850 同一类问题）。
-check(/id="poolToolsGroup"[^>]*\bhidden\b/.test(html),
-  '号池工具组默认应隐藏');
-check(/\.tb-group\[hidden\]\{display:none!important\}/.test(html),
-  '.tb-group 的 display 必须让 hidden 真正隐藏，不能把号池按钮露出来');
-check(/function applyPoolSeparationUi\(effective\)/.test(script),
-  '缺少号池工具组显隐与状态重置');
-check(/if\(!POOL_SEPARATION_EFFECTIVE\) POOL_FILTER = 'all'/.test(script),
-  '关闭隔离时应清空号池筛选');
-check(/if\(POOL_SEPARATION_EFFECTIVE && POOL_FILTER !== 'all'\)/.test(script),
-  '关闭隔离时 renderAccounts 不应按 poolScope 过滤');
-check(/class="acct-sel"/.test(script) &&
-      /POOL_SEPARATION_EFFECTIVE[\s\S]{0,260}媒体号池/.test(script),
-  '账号勾选框应始终可用；关闭隔离时只隐藏号池徽章和号池按钮');
+// 批量作用范围不再跟号池隔离开关走：勾选本身就是明确的选择，没有勾选时按
+// 当前筛选结果，两者都与「隔离是否开启」无关。
+check(/function acctScopeUids\(\)/.test(script),
+  '缺少统一的批量作用范围函数');
+check(/function acctSelUids\(\)\{\s*return selectedAccountsForBulk\(\)/.test(script),
+  '勾选集合应读 ACCOUNT_SELECTED，不能读 DOM 的 :checked');
+check(/acctScopeUids\(\)[\s\S]{0,200}filteredAccountsForBulk\(\)/.test(script),
+  '没有勾选时作用范围应是当前筛选结果');
+check(!/if\(!POOL_SEPARATION_EFFECTIVE\) return \[\];/.test(script),
+  'acctSelUids 不应再受号池隔离开关限制');
+
+// 号池筛选与「移入」按钮始终上屏：poolScope 是账号归属，隔离关着时只是不
+// 限制派发，不代表这个字段不可见 / 不可改。筛选状态也不再跟开关走——否则
+// 会出现「控件藏了、POOL_FILTER 还在过滤」的 #850 同类问题。
+check(!/id="poolToolsGroup"[^>]*\bhidden\b/.test(html),
+  '号池工具组不应默认隐藏');
+check(!/POOL_SEPARATION_EFFECTIVE/.test(script),
+  '号池筛选与批量作用范围不应再依赖隔离开关');
+check(/<select id="poolFilterSelect"[^>]*onchange="poolFilter\(this\.value\)"/.test(html),
+  '号池筛选应是下拉框，选择后立即生效');
+check(/<option value="all">全部号池<\/option>\s*<option value="text">文本号池<\/option>\s*<option value="media">媒体号池<\/option>/.test(html),
+  '号池下拉应提供全部 / 文本 / 媒体三项，且默认第一项是全部号池');
+check(!/id="pfAll"/.test(html) && !/id="pfText"/.test(html) && !/id="pfMedia"/.test(html),
+  '旧的三个号池按钮应已移除');
+check(/>移入媒体池</.test(html) && />移入文本池</.test(html),
+  '批量按钮应叫「移入媒体池」「移入文本池」');
+check(!/勾选移入媒体池/.test(html) && !/勾选移回文本池/.test(html),
+  '旧按钮文案应已移除');
 
 // ---- 3. 概览：用已有数据，不发新请求，也不冒充时间序列 ---------------
 

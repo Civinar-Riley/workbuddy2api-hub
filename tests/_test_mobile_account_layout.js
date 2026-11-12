@@ -25,19 +25,37 @@ assert.ok(/class="tb-group tb-bulk"/.test(html),
   '批量操作那一组缺少 .tb-bulk 标记，窄屏网格规则会落到所有 tb-group 上');
 assert.ok(/#accountsBody \.toolbar \.tb-bulk\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/
     .test(html),
-  '窄屏下 .tb-bulk 应改成两列网格（6 个按钮排成 3 行 2 列）');
+  '窄屏下 .tb-bulk 应改成两列网格');
 assert.ok(/#accountsBody \.toolbar \.tb-bulk button\.sec\{[^}]*white-space:nowrap/.test(html),
   '网格里的按钮必须 white-space:nowrap，否则名称又被压成竖排');
 
-// 6 个按钮都在这一组里：一键分配代理 / 一键切换所有出站身份 / 全部启用 /
-// 全部停用 / 当前分组启用 / 当前分组停用。
+// 批量按钮都在这一组里：分配代理 / 切换所有出站身份 / 启用 / 停用 /
+// 当前分组启用 / 当前分组停用 / 导出已选 / 启用已选 / 停用已选 / 删除已选。
 const bulkAt = html.indexOf('class="tb-group tb-bulk"');
 assert.ok(bulkAt > 0, '找不到 .tb-bulk 组');
 const bulkBlock = html.slice(bulkAt, html.indexOf('</div>', bulkAt));
-for (const label of ['一键分配代理', '一键切换所有出站身份', '全部启用', '全部停用',
-                     '当前分组启用', '当前分组停用']) {
+for (const label of ['分配代理', '切换所有出站身份', '启用', '停用',
+                     '当前分组启用', '当前分组停用',
+                     '导出已选', '启用已选', '停用已选', '删除已选']) {
   assert.ok(bulkBlock.includes(label), '批量操作组里缺少「' + label + '」');
 }
+
+/* ---- 1b. 号池组：同一行 -------------------------------------------- */
+
+// 号池筛选 + 两个「移入」按钮原来排两行（下拉独占一行），账号列表被多推
+// 下一行。窄屏改成四列网格（下拉 + 计数 + 两个按钮）放一行；自定义下拉真正
+// 上屏的元素是 .cs-trigger，默认比按钮矮 9px，必须钉到 36px 才对得齐。
+assert.ok(/class="tb-group tb-pool"/.test(html), '号池组缺少 .tb-pool 标记');
+assert.ok(/#accountsBody \.toolbar \.tb-pool\{display:grid;\s*grid-template-columns:minmax\(0,1\.2fr\) auto minmax\(0,1fr\) minmax\(0,1fr\)/
+    .test(html),
+  '窄屏下号池组应是四列网格（下拉 + 计数 + 两个按钮同一行）');
+assert.ok(/#accountsBody \.toolbar \.tb-pool \.cs-wrap\{display:block;width:100%;min-width:0/
+    .test(html),
+  '号池下拉的自定义包装层要拉满格宽，否则仍按内容宽排在行首');
+assert.ok(/#accountsBody \.toolbar \.tb-pool \.cs-trigger\{height:36px/.test(html),
+  '号池下拉触发器要钉 36px，与两个「移入」按钮同高');
+assert.ok(/#accountsBody \.toolbar \.tb-pool button\.sec\{[^}]*white-space:nowrap/.test(html),
+  '号池按钮必须 white-space:nowrap，窄屏下不能被压成竖排文字');
 
 /* ---- 2. 账号卡第二行：任务开关 + 版本/状态/类型 ---------------------- */
 
