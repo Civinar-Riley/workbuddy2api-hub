@@ -106,6 +106,96 @@ check("deepseek-v4-pro-preview also stays CN-exclusive",
       P.exclusive_realm("deepseek-v4-pro-preview") == "cn",
       P.exclusive_realm("deepseek-v4-pro-preview"))
 
+
+print()
+print("[4b] operator aliases are advertised next to their target")
+
+catalog = [
+    {"id": "deepseek-v4.1-flash", "object": "model", "name": "DeepSeek Flash"},
+    {"id": "glm-5.2", "object": "model"},
+]
+out = P.alias_model_entries(catalog, {"gpt-4o-mini": "deepseek-v4.1-flash",
+                                      "my-model": "not-served"})
+ids = [m["id"] for m in out]
+check("the alias is listed", "gpt-4o-mini" in ids, ids)
+check("an alias with no served target is not listed", "my-model" not in ids, ids)
+check("the original catalogue is untouched",
+      ids[:2] == ["deepseek-v4.1-flash", "glm-5.2"], ids)
+alias_entry = next(m for m in out if m["id"] == "gpt-4o-mini")
+check("the alias entry copies the target metadata but swaps the id",
+      alias_entry.get("name") == "gpt-4o-mini"
+      and alias_entry.get("object") == "model", alias_entry)
+check("no aliases => the list is returned as-is",
+      P.alias_model_entries(catalog, {}) is catalog)
+
+print()
+print("[4c] set_model_aliases persists a normalized table")
+
+directory2 = tempfile.mkdtemp(prefix="alias-write-")
+stored = S.set_model_aliases(directory2, {"GPT-4o-Mini": "deepseek-v4.1-flash",
+                                          "self": "self",
+                                          " ": "x"})
+check("keys are lowercased on write",
+      stored.get("gpt-4o-mini") == "deepseek-v4.1-flash", stored)
+check("identity mappings are dropped", "self" not in stored, stored)
+check("blank keys are dropped", len(stored) == 1, stored)
+check("the table round-trips through the reader",
+      S.model_aliases(directory2) == stored, S.model_aliases(directory2))
+
+print()
+print("[4d] a key restricted to an alias keeps its alias and target")
+
+# Simulates the panel's filter pass: the alias is allowed, so the target it
+# points at must survive too (otherwise the alias entry has no source and the
+# client is told it has no models although the alias works).
+allowed = lambda entry, name: name in ("gpt-4o-mini",)
+filtered = [m for m in catalog
+            if allowed(None, m["id"]) or m["id"] in {"deepseek-v4.1-flash"}]
+listed = [m["id"] for m in P.alias_model_entries(
+    filtered, {"gpt-4o-mini": "deepseek-v4.1-flash"})]
+check("the alias is listed for a key restricted to it",
+      "gpt-4o-mini" in listed, listed)
+
+print()
+print("[4d2] the alias switch gates every consumer, the table survives it")
+
+directory3 = tempfile.mkdtemp(prefix="alias-switch-")
+S.set_model_aliases(directory3, {"claude-opus-5": "deepseek-v4.1-flash"})
+check("aliases are off until the switch is set",
+      S.model_aliases_enabled(directory3) is False)
+check("an off switch yields no effective aliases",
+      S.effective_model_aliases(directory3) == {},
+      S.effective_model_aliases(directory3))
+check("the stored table is still readable while off",
+      S.model_aliases(directory3).get("claude-opus-5") == "deepseek-v4.1-flash")
+S.set_model_aliases_enabled(directory3, True)
+check("turning the switch on exposes the stored table",
+      S.effective_model_aliases(directory3).get("claude-opus-5")
+      == "deepseek-v4.1-flash")
+check("advertising uses the effective table, so off means no alias entries",
+      [m["id"] for m in P.alias_model_entries(
+          catalog, S.effective_model_aliases(directory3))][-1] == "claude-opus-5")
+S.set_model_aliases_enabled(directory3, False)
+check("turning the switch off hides the aliases again",
+      S.effective_model_aliases(directory3) == {})
+check("an off switch still leaves the original model advertised",
+      "deepseek-v4.1-flash" in [m["id"] for m in P.alias_model_entries(
+          catalog, S.effective_model_aliases(directory3))])
+check("the switch normalises to a boolean on write",
+      S.set_model_aliases_enabled(directory3, 0) is False)
+
+print()
+print("[4e] the reply echoes the name the client sent")
+
+class _Echo:
+    _client_model = "my-alias"
+check("an alias request is echoed as the alias",
+      P.client_facing_model(_Echo(), "deepseek-v4.1-flash") == "my-alias")
+check("a plain request keeps the upstream id",
+      P.client_facing_model(object(), "deepseek-v4.1-flash")
+      == "deepseek-v4.1-flash")
+
+
 print()
 print("[5] the background rewrite remains independent")
 
