@@ -112,6 +112,9 @@ UI_LANGUAGE_VALUES = ("zh", "zh-Hant", "en")
 # makes the gateway send a request on its own schedule.
 UPDATE_CHECK_ENABLED_KEY = "update_check_enabled"
 UPDATE_CHECK_PROXY_SLOT_KEY = "update_check_proxy_slot"
+# Sentinel stored in the slot field when the checker should use the host's
+# system/environment proxy discovery. An empty value still means direct.
+UPDATE_CHECK_PROXY_SYSTEM = "__system__"
 # The last-check bookkeeping for that daily check. One small object, never a
 # general update-state store: see update_check_state().
 UPDATE_CHECK_STATE_KEY = "update_check"

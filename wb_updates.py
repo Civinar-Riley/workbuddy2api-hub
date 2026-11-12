@@ -154,8 +154,17 @@ def describe_failure(exc):
 
 
 def _opener(proxy=""):
-    """A direct opener, or one pinned to the configured proxy slot."""
+    """A direct, system-proxy, or slot-pinned opener.
+
+    The empty value is deliberately an explicit empty ProxyHandler: it must
+    bypass HTTP(S)_PROXY and the platform proxy registry, not silently follow
+    them like urllib's default opener does. The sentinel is the opposite: it
+    asks urllib to discover the host's system/environment proxy.
+    """
     proxy = str(proxy or "").strip()
+    if proxy == wb_settings.UPDATE_CHECK_PROXY_SYSTEM:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler(urllib.request.getproxies() or {}))
     if not proxy:
         return urllib.request.build_opener(urllib.request.ProxyHandler({}))
     return urllib.request.build_opener(
@@ -163,10 +172,7 @@ def _opener(proxy=""):
 
 
 def _open(request, timeout, proxy=""):
-    """Keep the no-proxy path patchable by the existing test contract."""
-    proxy = str(proxy or "").strip()
-    if not proxy:
-        return urllib.request.urlopen(request, timeout=timeout)
+    """Open through the route selected by the update-check setting."""
     return _opener(proxy).open(request, timeout=timeout)
 
 
@@ -395,9 +401,11 @@ class UpdateChecker(threading.Thread):
             else:
                 proxy = ""
                 try:
-                    slot_id = wb_settings.update_check_proxy_slot(self.settings_dir)
-                    if slot_id:
-                        slot = wb_settings.find_proxy_slot(self.settings_dir, slot_id)
+                    route = wb_settings.update_check_proxy_slot(self.settings_dir)
+                    if route == wb_settings.UPDATE_CHECK_PROXY_SYSTEM:
+                        proxy = wb_settings.UPDATE_CHECK_PROXY_SYSTEM
+                    elif route:
+                        slot = wb_settings.find_proxy_slot(self.settings_dir, route)
                         if slot and slot.get("enabled", True):
                             proxy = slot.get("url") or ""
                 except Exception:

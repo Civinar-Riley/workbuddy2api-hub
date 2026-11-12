@@ -24835,7 +24835,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "update_check_proxy_slot must be a string",
                                    "invalid_request_error")
             slot_id = raw.strip()
-            if slot_id and not wb_settings.find_proxy_slot(ACCOUNTS_DIR, slot_id):
+            if (slot_id
+                    and slot_id != wb_settings.UPDATE_CHECK_PROXY_SYSTEM
+                    and not wb_settings.find_proxy_slot(ACCOUNTS_DIR, slot_id)):
                 return self._error(400, "update_check_proxy_slot does not exist",
                                    "invalid_request_error")
             reply["update_check_proxy_slot"] = (

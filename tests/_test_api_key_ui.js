@@ -82,12 +82,19 @@ const escapeHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').r
 const picker = new Function('API_KEY_ROWS', 'document', 'window', 'esc', 'updateKeyAccountSummary',
   html.slice(pickerStart, pickerEnd) + '\nreturn renderKeyPickers;')(
     [{accounts: ['uid-123']}], fakeDocument,
-    {ACCOUNTS: [{uid: 'uid-123', nickname: 'Alice', note: '<VIP>', realm: 'cn'}]},
+    {ACCOUNTS: [{uid: 'uid-123', nickname: 'Alice', note: '<VIP>', realm: 'cn'}],
+     REALM_OPTIONS: ['intl', 'cn', 'codearts'],
+     CODEARTS_OVERVIEW: {accounts: [
+       {uid: 'ca-456', nickname: 'CodeArts Bob', note: '<CA>'},
+     ]}},
     escapeHtml, () => {});
 picker(0).then(() => {
   check(pickerList.innerHTML.includes('&lt;VIP>'), '备注应安全显示');
   check(pickerList.innerHTML.includes('data-search="alice · &lt;vip>'), '备注应进入搜索文本');
   check(pickerList.innerHTML.includes('value="uid-123" checked'), '选择仍以 UID 保存');
+  check(pickerList.innerHTML.includes('value="ca-456"'), 'CodeArts 账号应出现在允许账号列表');
+  check(pickerList.innerHTML.includes('CodeArts Bob'), 'CodeArts 账号应显示昵称');
+  check(pickerList.innerHTML.includes('data-group="CodeArts"'), 'CodeArts 账号应可按组筛选');
 }).catch(err => { console.error(err); process.exitCode = 1; });
 
 console.log('OK ' + checks + ' checks');

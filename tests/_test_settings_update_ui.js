@@ -129,6 +129,7 @@ try {
       checkUpdateNow: checkUpdateNow,
       installUpdateNow: installUpdateNow,
       saveUpdateCheckEnabled: saveUpdateCheckEnabled,
+      saveUpdateProxySlot: saveUpdateProxySlot,
       applyUpdateStatus: applyUpdateStatus,
       saveDailyChatModule: saveDailyChatModule,
       resetDailyChatModule: resetDailyChatModule,
@@ -363,6 +364,32 @@ const posts = () => calls.filter(c => c.method === 'POST');
         save.length ? save[0].body : '(no save)');
   check('没有走浏览器本地存储（偏好由服务端保存）',
         !calls.some(c => c.url.indexOf('localStorage') !== -1), urls().join(', '));
+
+  // ---- 5b. 更新出口：直连 / 系统代理 / 代理槽三种模式 ----
+  SETTINGS.update_check_proxy_slots = [
+    {id: 'slot-1', label: 'Tokyo', enabled: true},
+  ];
+  SETTINGS.update_check_proxy_slot = '__system__';
+  calls.length = 0;
+  await api.loadSettings(true);
+  await settled();
+  const updateProxy = element('setUpdateProxySlot');
+  check('更新出口下拉包含系统代理选项',
+        updateProxy.innerHTML.includes('value="__system__"'),
+        updateProxy.innerHTML);
+  check('已保存的系统代理模式能正确回填',
+        updateProxy.value === '__system__', updateProxy.value);
+  toasts.length = 0;
+  await api.saveUpdateProxySlot({disabled: false});
+  await settled();
+  const proxySave = posts().filter(c => c.url === '/settings/save');
+  check('系统代理模式提交 __system__',
+        proxySave.length === 1 &&
+        JSON.parse(proxySave[0].body).update_check_proxy_slot === '__system__',
+        proxySave.length ? proxySave[0].body : '(no save)');
+  check('系统代理模式给出对应提示',
+        toasts.length === 1 && String(toasts[0][0]).indexOf('跟随系统代理') !== -1,
+        JSON.stringify(toasts));
 
   // ---- 6. 安装入口受更新状态与人工确认控制 ----
   const installBtn = element('setUpdateInstallBtn');

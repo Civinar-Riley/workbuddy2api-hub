@@ -7960,6 +7960,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
             <select id="setUpdateProxySlot"
                     style="min-width:220px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
               <option value="">直连（不使用代理槽）</option>
+              <option value="__system__">根据系统代理（环境变量 / 系统设置）</option>
             </select>
             <button onclick="saveUpdateProxySlot(this)">保存</button>
           </div>
@@ -17237,13 +17238,15 @@ async function loadSettings(showToast, opts){
         ? data.update_check_proxy_slots : [];
       const current = String(data.update_check_proxy_slot || '');
       updateProxy.innerHTML = '<option value="">直连（不使用代理槽）</option>'
+        + '<option value="__system__">根据系统代理（环境变量 / 系统设置）</option>'
         + choices.map(slot =>
             '<option value="' + esc(slot.id) + '">'
             + esc(slot.label || slot.id)
             + (slot.enabled === false ? '（已停用）' : '')
             + '</option>').join('');
       // A deleted slot must not remain visually selected as if it were active.
-      updateProxy.value = choices.some(slot => slot.id === current) ? current : '';
+      updateProxy.value = (current === '__system__'
+        || choices.some(slot => slot.id === current)) ? current : '';
     }
       // 用量聚合保留窗口：没改过时后端给的就是内置默认（小时层 48 / 日桶 32），
       // 所以「等于默认」按默认态显示，只有被调过才标出实际值。
@@ -18848,8 +18851,9 @@ async function saveUpdateProxySlot(btn){
   if(btn) btn.disabled = true;
   try {
     await postJSON('/settings/save', {update_check_proxy_slot: value});
-    toast(value ? '已保存：更新检查走所选代理槽'
-                : '已保存：更新检查直连', 'ok');
+    toast(value === '__system__' ? '已保存：更新检查跟随系统代理'
+                : value ? '已保存：更新检查走所选代理槽'
+                        : '已保存：更新检查直连', 'ok');
     await loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
@@ -19513,10 +19517,40 @@ async function renderKeyPickers(i){
   }
   const accountList = document.getElementById('editKeyAccountList_' + i);
   if(accountList){
-    if(!(window.ACCOUNTS || []).length){
+    if(!(window.ACCOUNTS || []).length && typeof loadAccounts === 'function'){
       try { await loadAccounts(); } catch(e) { /* keep the empty hint */ }
     }
-    const accts = window.ACCOUNTS || [];
+    // CodeArts accounts live in a separate pool and endpoint. The key allow-list
+    // is just a set of UIDs, so the picker must merge both sources or a Key that
+    // follows / is bound to the CodeArts exit can never select its accounts.
+    const codeartsOn = row.realm === 'codearts'
+      || (window.REALM_OPTIONS || []).indexOf('codearts') >= 0;
+    if(codeartsOn && !window.CODEARTS_OVERVIEW && typeof getJSON === 'function'){
+      try { window.CODEARTS_OVERVIEW = await getJSON('/codearts/overview'); }
+      catch(e) { /* a CodeArts read failure must not blank the WorkBuddy list */ }
+    }
+    const accts = [];
+    const seenUids = new Set();
+    (window.ACCOUNTS || []).forEach(a => {
+      const uid = String((a && a.uid) || '');
+      if(!uid || seenUids.has(uid)) return;
+      seenUids.add(uid);
+      accts.push(a);
+    });
+    if(codeartsOn){
+      (((window.CODEARTS_OVERVIEW || {}).accounts) || []).forEach(a => {
+        const uid = String((a && a.uid) || '');
+        if(!uid || seenUids.has(uid)) return;
+        seenUids.add(uid);
+        accts.push({
+          uid: uid,
+          nickname: a.nickname || a.user_name || uid,
+          note: a.note || '',
+          realm: 'codearts',
+          group: 'CodeArts'
+        });
+      });
+    }
     const groupSelect = document.getElementById('editKeyAccountGroup_' + i);
     if(groupSelect){
       const groups = Array.from(new Set(accts.map(a => String((a && a.group) || '').trim()).filter(Boolean))).sort();
@@ -19530,7 +19564,10 @@ async function renderKeyPickers(i){
       if(!uid) return '';
       const note = String(a.note || '').trim();
       const group = String(a.group || '').trim();
-      const label = (a.nickname || uid.slice(0, 8)) + (note ? ' · ' + note : '') + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '') + (group ? ' · ' + group : '');
+      const realm = String(a.realm || '').trim();
+      const realmText = realm && realm.toLowerCase() !== group.toLowerCase()
+        ? ' · ' + realm : '';
+      const label = (a.nickname || uid.slice(0, 8)) + (note ? ' · ' + note : '') + ' · ' + uid.slice(0, 8) + realmText + (group ? ' · ' + group : '');
       const checked = (row.accounts || []).indexOf(uid) >= 0 ? ' checked' : '';
       return '<label class="key-pick-row" data-group="' + esc(group) + '" data-search="' + esc((label + ' ' + uid).toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(uid) + '"' + checked + ' onchange="toggleKeyAccount(' + i + ',this)">' + esc(label) + '</label>';
     }).join('') || '<div style="font-size:12px;color:var(--warn);padding:4px">账号列表为空或加载失败，<a href="javascript:void(0)" onclick="renderKeyPickers(' + i + ')">重试</a></div>';
