@@ -1579,6 +1579,16 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 .cs-opt .cs-tick{flex:0 0 auto;width:11px;font-size:11px;opacity:0;color:var(--accent)}
 .cs-opt.cs-selected .cs-tick{opacity:1}
 .cs-empty{padding:10px 9px;font-size:11.5px;color:var(--dim-light);text-align:center}
+/* 长列表（账号下拉、模型清单）展开后一眼看不到底，面板顶部给一个搜索框：
+   sticky 吸顶，滚动选项时它不跟着走。 */
+.cs-search{position:sticky;top:-4px;z-index:1;padding:2px 2px 4px;background:var(--panel)}
+.cs-search-input{width:100%;box-sizing:border-box;background:var(--panel2);
+  border:1px solid var(--line);border-radius:7px;padding:5px 8px;color:var(--fg);
+  font:inherit;font-size:12px;line-height:1.35}
+.cs-search-input::placeholder{color:var(--dim-light)}
+.cs-search-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+/* 搜索过滤后不匹配的行只隐藏，不从 DOM 里删：data-idx 始终指向真实 options */
+.cs-opt.cs-hidden{display:none}
 /* 深色主题下原生控件仍是系统配色，这里补一层兜底，避免未增强时闪白 */
 [data-theme="dark"] select{color-scheme:dark}
 @media (prefers-reduced-motion:reduce){
@@ -2859,6 +2869,27 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '导入完成：新增': 'Import finished: added',
     '导入账号': 'Import accounts',
     '批量选择时会先校验全部文件，全部通过后再统一预览和导入。': 'For a multi-file import, every file is validated first and only then previewed and imported together.',
+    '打开文件': 'Open file',
+    '粘贴 JSON': 'Paste JSON',
+    '选择 JSON 文件…': 'Choose JSON files…',
+    '解析并预览': 'Parse and preview',
+    '点「解析并预览」校验这份内容。': 'Click "Parse and preview" to validate this content.',
+    '内容已改动，点「解析并预览」重新校验。': 'Content changed - click "Parse and preview" to validate it again.',
+    '导出文档、账号数组、单个账号对象都可以': 'An export document, an account array or a single account object all work',
+    '选择一个或多个账号 JSON 文件。': 'Choose one or more account JSON files.',
+    '也可以把 JSON 直接粘贴进来。': 'You can also paste the JSON straight in.',
+    '导入到分组（可选）': 'Import into group (optional)',
+    '导入方式': 'Import method',
+    '搜索…': 'Search…',
+    '搜索选项': 'Search options',
+    '没有匹配项': 'No matches',
+    '尚未粘贴内容。': 'Nothing pasted yet.',
+    '粘贴框是空的：先把账号 JSON 贴进来。': 'The paste box is empty: paste the account JSON first.',
+    '正在校验粘贴的内容…': 'Validating the pasted content…',
+    '粘贴的内容': 'Pasted content',
+    '粘贴内容': 'Pasted content',
+    '来源：': 'Source: ',
+    '例如：Team A；留空则沿用内容里的分组': 'e.g. Team A; leave it empty to keep the group inside the payload',
     '导出': 'Export',
     '导出中...': 'Exporting...',
     '导出失败:': 'Export failed:',
@@ -4116,6 +4147,27 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "导入完成：新增 ": "匯入完成：新增 ",
     "导入账号": "匯入帳號",
     "批量选择时会先校验全部文件，全部通过后再统一预览和导入。": "批次選擇時會先校驗全部檔案，全部通過後再統一預覽和匯入。",
+    "打开文件": "開啟檔案",
+    "粘贴 JSON": "貼上 JSON",
+    "选择 JSON 文件…": "選擇 JSON 檔案…",
+    "解析并预览": "解析並預覽",
+    "点「解析并预览」校验这份内容。": "點「解析並預覽」校驗這份內容。",
+    "内容已改动，点「解析并预览」重新校验。": "內容已改動，點「解析並預覽」重新校驗。",
+    "导出文档、账号数组、单个账号对象都可以": "匯出檔案、帳號陣列、單個帳號物件都可以",
+    "选择一个或多个账号 JSON 文件。": "選擇一個或多個帳號 JSON 檔案。",
+    "也可以把 JSON 直接粘贴进来。": "也可以把 JSON 直接貼進來。",
+    "导入到分组（可选）": "匯入到分組（可選）",
+    "导入方式": "匯入方式",
+    "尚未粘贴内容。": "尚未貼上內容。",
+    "粘贴框是空的：先把账号 JSON 贴进来。": "貼上框是空的：先把帳號 JSON 貼進來。",
+    "正在校验粘贴的内容…": "正在校驗貼上的內容…",
+    "粘贴的内容": "貼上的內容",
+    "粘贴内容": "貼上內容",
+    "来源：": "來源：",
+    "搜索…": "搜尋…",
+    "搜索选项": "搜尋選項",
+    "没有匹配项": "沒有符合項目",
+    "例如：Team A；留空则沿用内容里的分组": "例如：Team A；留空則沿用內容裡的分組",
     "导出": "匯出",
     "导出中...": "匯出中...",
     "导出失败:": "匯出失敗:",
@@ -8253,12 +8305,38 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
       <p class="hint" style="margin-top:0">
         选择一个或多个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象，
         以及桌面客户端的 <code>{"account":…,"auth":…}</code> 格式。
-        批量选择时会先校验全部文件，全部通过后再统一预览和导入。
+        也可以把 JSON 直接粘贴进来。
       </p>
-      <div class="field" style="margin-bottom:12px">
+      <!-- 两种入口共用下面那一个预览区：#importBody 里的内容与「确认导入」
+           按钮的行数永远属于最后一次解析成功的那一份，切换入口时会一起清空。 -->
+      <div class="realm-switch" role="tablist" aria-label="导入方式" style="margin-bottom:12px">
+        <button type="button" id="importModeFile" class="active" role="tab" aria-selected="true"
+                aria-controls="importFilePane" onclick="setImportMode('file')">打开文件</button>
+        <button type="button" id="importModePaste" role="tab" aria-selected="false"
+                aria-controls="importPastePane" onclick="setImportMode('paste')">粘贴 JSON</button>
+      </div>
+      <div id="importFilePane" role="tabpanel">
+        <p class="hint" style="margin-top:0">
+          批量选择时会先校验全部文件，全部通过后再统一预览和导入。
+        </p>
+        <div style="margin-bottom:12px">
+          <button class="sec" id="btnImportPick" onclick="pickImportFiles()">选择 JSON 文件…</button>
+        </div>
+      </div>
+      <div id="importPastePane" role="tabpanel" style="display:none">
+        <textarea id="importPasteInput" rows="6" spellcheck="false" autocomplete="off"
+                  oninput="onImportPasteInput()"
+                  placeholder='[{"uid":"...","accessToken":"..."}]'
+                  style="width:100%;box-sizing:border-box;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;color:var(--fg);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.6;resize:vertical"></textarea>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px">
+          <button class="sec" id="btnImportParse" onclick="parseImportPaste()">解析并预览</button>
+          <span class="hint" style="margin:0">导出文档、账号数组、单个账号对象都可以</span>
+        </div>
+      </div>
+      <div class="field" style="margin:14px 0 12px">
         <label for="importGroup">导入到分组（可选）</label>
         <input id="importGroup" type="text" maxlength="64" autocomplete="off"
-               placeholder="例如：Team A；留空则使用文件里的分组" style="width:100%">
+               placeholder="例如：Team A；留空则沿用内容里的分组" style="width:100%">
       </div>
       <div id="importBody"><p class="hint">尚未选择文件。</p></div>
     </div>
@@ -13706,18 +13784,70 @@ async function exportOne(uid){
 
 let importRows = null;   // 已解析、待导入的账号行
 let importFileCount = 0; // 批量选择时已读取的文件数
+let importMode = 'file'; // 'file' = 选文件，'paste' = 粘贴 JSON
 
-function openImport(){
+function importShowHint(text, warn){
+  const body = document.getElementById('importBody');
+  if(!body) return;
+  body.innerHTML = '<p class="hint"' + (warn ? ' style="color:var(--warn)"' : '')
+    + '>' + esc(text) + '</p>';
+}
+
+// 失败即清空待导入行：预览区还留着上一次的内容、按钮还挂着上一份的行数，
+// 是最容易让人按错「确认导入」的状态。
+function importReset(hint, warn){
   importRows = null;
   importFileCount = 0;
+  const btn = document.getElementById('btnImportCommit');
+  if(btn){ btn.disabled = true; btn.textContent = '确认导入'; }
+  importShowHint(hint, !!warn);
+}
+
+function importAbort(msg){ importReset(msg, true); }
+
+function setImportMode(mode){
+  importMode = mode === 'paste' ? 'paste' : 'file';
+  const filePane = document.getElementById('importFilePane');
+  const pastePane = document.getElementById('importPastePane');
+  const fileBtn = document.getElementById('importModeFile');
+  const pasteBtn = document.getElementById('importModePaste');
+  if(filePane) filePane.style.display = importMode === 'file' ? '' : 'none';
+  if(pastePane) pastePane.style.display = importMode === 'paste' ? '' : 'none';
+  if(fileBtn){
+    fileBtn.classList.toggle('active', importMode === 'file');
+    fileBtn.setAttribute('aria-selected', importMode === 'file' ? 'true' : 'false');
+  }
+  if(pasteBtn){
+    pasteBtn.classList.toggle('active', importMode === 'paste');
+    pasteBtn.setAttribute('aria-selected', importMode === 'paste' ? 'true' : 'false');
+  }
+  // 换入口就等于换来源：上一份预览作废，免得把选中的文件当成粘贴内容导进去。
+  importReset(importMode === 'paste' ? '尚未粘贴内容。' : '尚未选择文件。');
+  if(importMode === 'paste'){
+    const input = document.getElementById('importPasteInput');
+    if(input) setTimeout(() => input.focus(), 50);
+  }
+}
+
+function openImport(){
   const m = document.getElementById('importModal');
-  const body = document.getElementById('importBody');
   const ow = document.getElementById('importOverwrite');
   const group = document.getElementById('importGroup');
+  const paste = document.getElementById('importPasteInput');
   if(ow) ow.checked = false;
   if(group) group.value = String(ACCOUNT_FILTERS.group || '');
-  if(body) body.innerHTML = '<p class="hint">正在打开文件…</p>';
+  // 粘贴框里是账号本身，等同于凭证：每次开关都清空，不留在 DOM 里。
+  if(paste) paste.value = '';
   if(m) m.classList.add('show');
+  setImportMode('file');
+  // 默认仍走老路径：一进来就弹选择器，少一次点击。现在取消选择只留在这个
+  // 弹窗里，不关窗，用户可以直接切到「粘贴 JSON」。
+  pickImportFiles();
+}
+
+function pickImportFiles(){
+  setImportMode('file');
+  importShowHint('正在打开文件…');
   // The picker is created per call so choosing the same file twice still fires.
   // `multiple` lets one picker pass every exported JSON at once; all files are
   // parsed and dry-run together before anything is written.
@@ -13727,9 +13857,12 @@ function openImport(){
   picker.accept = '.json,application/json';
   picker.onchange = () => {
     const files = picker.files ? Array.from(picker.files) : [];
-    if(!files.length){ closeImport(); return; }
+    if(!files.length) return;
     readImportFiles(files);
   };
+  // 取消选择（Chrome 走 cancel 事件）时把提示改回「尚未选择文件」，别把
+  // 「正在打开文件…」一直挂在预览区里。
+  picker.oncancel = () => { if(!importRows) importReset('尚未选择文件。'); };
   picker.click();
 }
 
@@ -13801,6 +13934,9 @@ function closeImport(){
   importFileCount = 0;
   const btn = document.getElementById('btnImportCommit');
   if(btn) btn.disabled = true;
+  const paste = document.getElementById('importPasteInput');
+  // 贴进来的就是账号凭证，关窗即抹掉，留在 DOM 里没有任何好处。
+  if(paste) paste.value = '';
 }
 
 function importRowsFromDocument(doc, label){
@@ -13814,6 +13950,14 @@ function importRowsFromDocument(doc, label){
   return rows;
 }
 
+// 粘贴入口和文件入口吃同一套格式，只是文本来源不同。
+function importRowsFromText(text, label){
+  let doc;
+  try{ doc = JSON.parse(text); }
+  catch(e){ throw new Error((label ? label + '：' : '') + '不是合法 JSON'); }
+  return importRowsFromDocument(doc, label);
+}
+
 async function parseImportFile(file){
   let text;
   try{ text = await file.text(); }
@@ -13824,16 +13968,29 @@ async function parseImportFile(file){
   return {file: file, doc: doc, rows: importRowsFromDocument(doc, file.name)};
 }
 
+// 两个入口共用的预检：同一端点、同一载荷形状，失败一律清空待导入行。
+// A bare array is accepted by /accounts/import and keeps rows from different
+// files in one document, so duplicate UIDs are reported once across the batch.
+async function runImportDryRun(rows, label){
+  try{
+    if(!rows.length) throw new Error('账号列表是空的');
+    importRows = rows;
+    const group = String((document.getElementById('importGroup') || {}).value || '').trim();
+    const r = await postJSON('/accounts/import',
+      {data: rows, dryRun: true, group: group});
+    renderImportPreview(label, r.result || {}, rows.length);
+  }catch(e){
+    importAbort('读取失败: ' + e.message);
+  }
+}
+
 async function readImportFiles(files){
-  const body = document.getElementById('importBody');
   const btn = document.getElementById('btnImportCommit');
   try{
     importRows = null;
     importFileCount = files.length;
-    if(btn){ btn.disabled = true; btn.textContent = '校验中...'; }
-    if(body){
-      body.innerHTML = '<p class="hint">正在校验 ' + files.length + ' 个文件…</p>';
-    }
+    if(btn){ btn.disabled = true; btn.textContent = '校验中…'; }
+    importShowHint('正在校验 ' + files.length + ' 个文件…');
     // Read and parse every file before the dry run. Sequential reads preserve
     // picker order, and a rejected file aborts the whole batch so a later
     // click cannot import only half of what the user selected.
@@ -13841,21 +13998,43 @@ async function readImportFiles(files){
     for(const file of files) parsed.push(await parseImportFile(file));
     const rows = [];
     for(const item of parsed) rows.push(...item.rows);
-    if(!rows.length) throw new Error('账号列表是空的');
-    importRows = rows;
-    // The dry run takes the same shape as the real import. A bare array is
-    // accepted by /accounts/import and keeps rows from different files in one
-    // document, so duplicate UIDs are reported once across the whole batch.
-    const group = String((document.getElementById('importGroup') || {}).value || '').trim();
-    const r = await postJSON('/accounts/import',
-      {data: rows, dryRun: true, group: group});
     const label = files.length === 1 ? files[0].name : files.length + ' 个文件';
-    renderImportPreview(label, r.result || {}, rows.length);
+    await runImportDryRun(rows, label);
   }catch(e){
-    importRows = null;
-    if(btn) btn.disabled = true;
-    if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">读取失败: ' + esc(e.message) + '</p>';
+    importAbort('读取失败: ' + e.message);
   }
+}
+
+// 内容一动，上一份预览就作废：宁可让人再点一次「解析并预览」，也不要拿
+// 旧行数去覆盖账号。
+function onImportPasteInput(){
+  const input = document.getElementById('importPasteInput');
+  if(importRows){ importReset('内容已改动，点「解析并预览」重新校验。'); return; }
+  if(input && String(input.value || '').trim()) importShowHint('点「解析并预览」校验这份内容。');
+  else importShowHint('尚未粘贴内容。');
+}
+
+// 「粘贴 JSON」入口：先解析文本，再走与文件导入相同的预检和预览。
+function parseImportPaste(){
+  const input = document.getElementById('importPasteInput');
+  const btn = document.getElementById('btnImportCommit');
+  const text = String((input && input.value) || '').trim();
+  importRows = null;
+  importFileCount = 0;
+  if(!text){
+    importAbort('粘贴框是空的：先把账号 JSON 贴进来。');
+    return null;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = '校验中…'; }
+  importShowHint('正在校验粘贴的内容…');
+  let rows;
+  try{
+    rows = importRowsFromText(text, '粘贴内容');
+  }catch(e){
+    importAbort('读取失败: ' + e.message);
+    return null;
+  }
+  return runImportDryRun(rows, '粘贴的内容');
 }
 
 function renderImportPreview(filename, res, total){
@@ -13870,7 +14049,7 @@ function renderImportPreview(filename, res, total){
     return '<li><code>' + esc(String(uid).slice(0,8)) + '</code>' + reason + '</li>';
   }).join('');
 
-  let html = '<p class="hint" style="margin-top:0">文件：<b>' + esc(filename) + '</b>'
+  let html = '<p class="hint" style="margin-top:0">来源：<b>' + esc(filename) + '</b>'
     + ' · 共 ' + total + ' 条</p>';
   html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">'
     + '<span>新增 <b style="color:var(--accent2)">' + added.length + '</b></span>'
@@ -23370,6 +23549,108 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     }
   }
 
+  /* 选项一多（账号列表动辄几十条），逐项翻找比打字慢得多。超过 SEARCH_MIN 个
+     选项时给面板加一个搜索框；单个控件也能显式开关：
+     data-cs-search="on" 强制加（账号菜单哪怕只有两三个账号也照样可搜），
+     data-cs-search="off" 强制不加。 */
+  var SEARCH_MIN = 8;
+
+  function wantsSearch(sel){
+    var flag = sel.getAttribute('data-cs-search');
+    if (flag === 'off' || flag === '0') return false;
+    if (flag === 'on' || flag === '1') return true;
+    return sel.options.length >= SEARCH_MIN;
+  }
+
+  /* 过滤只打隐藏标记，data-idx 始终指向真实的 sel.options 下标，所以选中逻辑
+     不必区分有没有搜索。键盘导航只走可见行。 */
+  function visibleRows(panel){
+    var rows = panel.querySelectorAll('.cs-opt');
+    var out = [];
+    for (var i = 0; i < rows.length; i++){
+      if (!rows[i].classList.contains('cs-hidden')) out.push(rows[i]);
+    }
+    return out;
+  }
+
+  function applyFilter(wrap, query){
+    var panel = wrap.querySelector('.cs-panel');
+    if (!panel) return;
+    var q = String(query == null ? '' : query).trim().toLowerCase();
+    var rows = panel.querySelectorAll('.cs-opt');
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++){
+      var label = String(rows[i].getAttribute('data-label') || '').toLowerCase();
+      var hit = !q || label.indexOf(q) >= 0;
+      rows[i].classList.toggle('cs-hidden', !hit);
+      if (!hit) rows[i].classList.remove('cs-hover');
+      if (hit) shown++;
+    }
+    var empty = panel.querySelector('.cs-filter-empty');
+    if (rows.length && !shown){
+      if (!empty){
+        empty = document.createElement('div');
+        empty.className = 'cs-empty cs-filter-empty';
+        empty.textContent = '没有匹配项';
+        panel.appendChild(empty);
+      }
+      empty.style.display = '';
+    } else if (empty){
+      empty.style.display = 'none';
+    }
+  }
+
+  function buildSearch(sel, wrap, panel){
+    var box = document.createElement('div');
+    box.className = 'cs-search';
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cs-search-input';
+    input.setAttribute('placeholder', '搜索…');
+    input.setAttribute('aria-label', '搜索选项');
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('spellcheck', 'false');
+    input.addEventListener('input', function(){ applyFilter(wrap, input.value); });
+    input.addEventListener('keydown', function(e){
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+        e.preventDefault();
+        var rows = visibleRows(panel);
+        if (!rows.length) return;
+        var cur = -1;
+        for (var i = 0; i < rows.length; i++){
+          if (rows[i].classList.contains('cs-hover')){ cur = i; break; }
+        }
+        var next = e.key === 'ArrowDown'
+          ? Math.min(rows.length - 1, cur + 1)
+          : Math.max(0, cur < 0 ? rows.length - 1 : cur - 1);
+        hoverRow(rows, next);
+      } else if (e.key === 'Enter'){
+        e.preventDefault();
+        var list = visibleRows(panel);
+        var target = null;
+        for (var j = 0; j < list.length; j++){
+          if (list[j].classList.contains('cs-hover')){ target = list[j]; break; }
+        }
+        target = target || list[0];
+        if (target) pick(sel, wrap, parseInt(target.getAttribute('data-idx'), 10));
+      } else if (e.key === 'Escape'){
+        // 第一下 Esc 先清空输入，第二下才关面板。
+        e.preventDefault();
+        e.stopPropagation();
+        if (input.value){ input.value = ''; applyFilter(wrap, ''); }
+        else {
+          closeWrap(wrap);
+          var trg = wrap.querySelector('.cs-trigger');
+          if (trg) trg.focus();
+        }
+      } else if (e.key === 'Tab'){
+        closeWrap(wrap);
+      }
+    });
+    box.appendChild(input);
+    return box;
+  }
+
   function buildPanel(sel, wrap){
     var panel = wrap.querySelector('.cs-panel');
     if (!panel){
@@ -23379,6 +23660,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
       wrap.appendChild(panel);
     }
     panel.textContent = '';
+    if (wantsSearch(sel)) panel.appendChild(buildSearch(sel, wrap, panel));
     var n = sel.options.length;
     for (var i = 0; i < n; i++){
       var o = sel.options[i];
@@ -23386,6 +23668,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
       row.className = 'cs-opt' + (o.disabled ? ' cs-disabled' : '');
       row.setAttribute('role','option');
       row.setAttribute('data-idx', i);
+      row.setAttribute('data-label', o.textContent || o.text || '');
       if (o.disabled) row.setAttribute('aria-disabled','true');
       var tick = document.createElement('span');
       tick.className = 'cs-tick';
@@ -23402,6 +23685,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
       em.textContent = '\u2014';
       panel.appendChild(em);
     }
+    applyFilter(wrap, '');
     syncLabel(sel, wrap);
   }
 
@@ -23446,6 +23730,9 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
 
   function openWrap_(wrap){
     closeAll(wrap);
+    // 每次打开都从空查询开始：上一次的过滤条件留着，下次点开就是一份空列表。
+    var input = wrap.querySelector('.cs-search-input');
+    if (input){ input.value = ''; applyFilter(wrap, ''); }
     positionPanel(wrap);
     placePanel(wrap);
     wrap.classList.add('cs-open');
@@ -23455,9 +23742,12 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     var sel = wrap.querySelector('select');
     var panel = wrap.querySelector('.cs-panel');
     if (panel && sel){
-      var cur = panel.children[sel.selectedIndex];
+      // 面板首个子节点现在是搜索框，不能再按 children[selectedIndex] 取行。
+      var rows = panel.querySelectorAll('.cs-opt');
+      var cur = rows[sel.selectedIndex];
       if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
     }
+    if (input) setTimeout(function(){ try { input.focus(); } catch(e){} }, 0);
   }
 
   function pick(sel, wrap, idx){
@@ -23473,8 +23763,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     if (trg) trg.focus();
   }
 
-  function hoverIdx(panel, idx){
-    var rows = panel.querySelectorAll('.cs-opt');
+  function hoverRow(rows, idx){
     for (var i = 0; i < rows.length; i++){
       rows[i].classList.toggle('cs-hover', i === idx);
     }
@@ -23533,19 +23822,24 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
         e.preventDefault();
         if (!wrap.classList.contains('cs-open')) openWrap_(wrap);
-        var rows = panel.querySelectorAll('.cs-opt');
+        // 只走可见行：搜索过滤过的面板里，隐藏项不该被方向键选中。
+        var rows = visibleRows(panel);
         var cur = -1;
         for (var i = 0; i < rows.length; i++) if (rows[i].classList.contains('cs-hover')) { cur = i; break; }
         var next = e.key === 'ArrowDown'
           ? Math.min(rows.length - 1, cur + 1)
           : Math.max(0, cur < 0 ? rows.length - 1 : cur - 1);
-        hoverIdx(panel, next);
+        hoverRow(rows, next);
       } else if (e.key === 'Enter' || e.key === ' '){
         e.preventDefault();
         if (!wrap.classList.contains('cs-open')) { openWrap_(wrap); return; }
-        var rows2 = panel.querySelectorAll('.cs-opt');
+        var rows2 = visibleRows(panel);
         for (var j = 0; j < rows2.length; j++){
-          if (rows2[j].classList.contains('cs-hover')) { pick(sel, wrap, j); return; }
+          if (rows2[j].classList.contains('cs-hover')){
+            // 可见行下标与 options 下标不一定相同（过滤过的面板），统一读 data-idx。
+            pick(sel, wrap, parseInt(rows2[j].getAttribute('data-idx'), 10));
+            return;
+          }
         }
       } else if (e.key === 'Escape'){
         closeWrap(wrap);
