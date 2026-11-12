@@ -475,16 +475,30 @@ def checkin_state(code, msg):
     只有 checked / already 能写 last_checkin：写早了（旧实现拿到 HTTP 200 就
     先写盘）会让当天 can_checkin() 恒为 False，这次失败被永久放弃，9 点与
     21 点两轮再也不会重试，面板还显示「今日已领」。
+
+    判定顺序有讲究，不能按 code 分支各判各的：上游重复签到回的是
+    `code=0, msg=今天已签到，请明天再来`（生产实测 1288 条签到记录里 250 条
+    都是它），旧实现只在 code=10001 时才认「已签到」，于是这 250 次都被当成
+    "又签成了一次"，面板还弹「签到成功 (+100积分)」。
+
+    顺序：pending → failed → already → checked。
+    - pending 最先：「请求处理中，请勿重复操作」是明确没签成，且不能落盘；
+    - failed 先于 already：「签到失败，已签到天数不足 7 天」同时含「失败」和
+      「已签到」，语义是失败，不能被 already 抢走；
+    - already 先于 checked：code=0 + 「今天已签到」是"今天早就签过了"，不是
+      本次签到成功，两者要分开展示。
     """
     text = str(msg or "")
     if any(k in text for k in CHECKIN_PENDING_HINTS):
         return "pending"
-    if code == 0:
+    if any(k in text for k in CHECKIN_FAILURE_HINTS):
         # 「失败」是唯一的硬词：CHECKIN_FAILURE_HINTS 之外的口径太宽，
         # 「签到成功，距离 7 天奖励还不足」里的「不足」会把成功判成失败。
-        return "failed" if any(k in text for k in CHECKIN_FAILURE_HINTS) else "checked"
-    if code == 10001:
-        return "already" if any(k in text for k in CHECKIN_ALREADY_HINTS) else "failed"
+        return "failed"
+    if any(k in text for k in CHECKIN_ALREADY_HINTS):
+        return "already"
+    if code == 0:
+        return "checked"
     return "failed"
 
 
@@ -3105,6 +3119,19 @@ class Account(object):
         wb_activity.record_attempt(self, wb_activity.TASK_CHECKIN, trigger, res)
         return res
 
+    def _mark_checkin_done(self, state):
+        """记下「今天签过了」，供 can_checkin() 的当日闸门用。
+
+        already 只在当天还没有记录时才补写：保留当天真实签到时间（可能是 9 点
+        那轮定时器签的），不要被用户晚上又点一次覆盖成点击时刻。
+        """
+        today = time.strftime("%Y-%m-%d")
+        if state == "already" and str(self.last_checkin or "").startswith(today):
+            return
+        self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
+        if self.path and os.path.exists(os.path.dirname(self.path)):
+            self.save(os.path.dirname(self.path))
+
     def _checkin_upstream(self):
         """签到的实际请求；返回形状见 checkin。"""
         cfg = get_realm_config("cn")
@@ -3117,9 +3144,7 @@ class Account(object):
             msg = payload.get("msg") or "ok"
             state = checkin_state(code, msg)
             if state in ("checked", "already"):
-                self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
-                if self.path and os.path.exists(os.path.dirname(self.path)):
-                    self.save(os.path.dirname(self.path))
+                self._mark_checkin_done(state)
                 return {"ok": True, "state": state, "code": code, "msg": msg,
                         "data": payload.get("data")}
             return {"ok": False, "state": state, "code": code, "msg": msg, "error": msg}
@@ -3132,10 +3157,8 @@ class Account(object):
                 # 上游如果在今日已签到时返回 HTTP 400 且文案写「今天已签到」，
                 # 说明今日事实上已处于签到完成状态，按成功处理并记录时间。
                 state = checkin_state(code, msg)
-                if state == "already":
-                    self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
-                    if self.path and os.path.exists(os.path.dirname(self.path)):
-                        self.save(os.path.dirname(self.path))
+                if state in ("checked", "already"):
+                    self._mark_checkin_done(state)
                     return {"ok": True, "state": state, "code": code, "msg": msg,
                             "data": body.get("data")}
                 return {"ok": False, "state": state, "code": code, "msg": msg, "error": msg}
