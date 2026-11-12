@@ -7379,6 +7379,161 @@ def invalidate_tasks_cache():
     """任务状态变了就清掉快照，下一次读重新向上游取。"""
     with _tasks_cache_lock:
         _tasks_cache.clear()
+    with _tasks_progress_lock:
+        _tasks_progress_cache.clear()
+    save_task_progress()
+
+
+# ------------------------------------------------------- 任务进度（下拉里的 13/18）
+# 任务状态没有批量接口，只能按账号问上游（每账号一次，约 1~1.5 秒）。面板的账号
+# 下拉要给每个账号标「已完成 N/M」，一百多个账号逐个现问显然不行，而且任务一天
+# 只变一次：这里按 uid 缓存进度，TTL 默认 6 小时，面板首屏只读缓存、缺的那部分
+# 由前端分批来补（GET /tasks/progress），每批最多 6 个账号、后端 3 并发。
+TASK_PROGRESS_TTL = float(os.environ.get("WB_TASK_PROGRESS_TTL") or "21600")
+TASK_PROGRESS_BATCH = 6
+_tasks_progress_cache = {}
+_tasks_progress_lock = threading.Lock()
+
+
+def task_progress_counts(tasks):
+    """完成数 / 总数。claimed、completed、进度达标都算「已达成」。
+
+    与任务表格里的徽章口径一致：已领取与待领奖都是达成，只有进度没跑满的
+    才算未完成。
+    """
+    rows = tasks or []
+    done = 0
+    for item in rows:
+        if item.get("status") in ("claimed", "completed"):
+            done += 1
+            continue
+        try:
+            current = float(item.get("current") or 0)
+            target = float(item.get("target") or 0)
+        except (TypeError, ValueError):
+            continue
+        if target > 0 and current >= target:
+            done += 1
+    return done, len(rows)
+
+
+def record_task_progress(uid, tasks):
+    if not uid:
+        return None
+    load_task_progress()
+    rows = tasks or []
+    if not rows:
+        # 空列表多半是上游查询失败（fetch_growth_tasks 会把异常吞成 []），
+        # 不能拿它覆盖已知的好进度，否则下拉会突然从 13/18 变回「—」。
+        return None
+    done, total = task_progress_counts(rows)
+    entry = {"done": done, "total": total, "at": time.time()}
+    with _tasks_progress_lock:
+        _tasks_progress_cache[uid] = entry
+    return entry
+
+
+def task_progress_entry(uid):
+    """未过期的进度；没缓存或已过期给 None。"""
+    if not uid:
+        return None
+    load_task_progress()
+    with _tasks_progress_lock:
+        entry = _tasks_progress_cache.get(uid)
+    if not entry:
+        return None
+    if entry["at"] + TASK_PROGRESS_TTL <= time.time():
+        return None
+    return entry
+
+
+def credits_remain_of(account):
+    """账号缓存的剩余积分；没有这份数据就返回 None（不是 0）。"""
+    credits = getattr(account, "credits", None)
+    if not isinstance(credits, dict):
+        return None
+    value = credits.get("remain")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---- 进度落盘 ----
+# 只放内存的话，蓝绿发布会把一百多个账号的进度清零，下一次开面板又要逐个问
+# 上游。这里存成 `usage/task-progress.json`（发布用的 rsync 已排除 usage/），
+# 原子写 + 版本号；文件坏了、版本不符、条目过期都当作没有，重新问上游即可。
+TASK_PROGRESS_FILE = "task-progress.json"
+TASK_PROGRESS_VERSION = 1
+_tasks_progress_loaded = False
+_tasks_progress_last_payload = None
+
+
+def task_progress_path():
+    return os.path.join(USAGE_DIR, TASK_PROGRESS_FILE)
+
+
+def load_task_progress():
+    """懒加载落盘缓存。只信版本一致、未过期、结构正确的条目。"""
+    global _tasks_progress_loaded
+    if _tasks_progress_loaded:
+        return
+    _tasks_progress_loaded = True
+    try:
+        with open(task_progress_path(), encoding="utf-8-sig") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return
+    except Exception:
+        # 坏文件不该拖垮网关：当作没有缓存，重新向上游取。
+        return
+    if not isinstance(raw, dict) or raw.get("version") != TASK_PROGRESS_VERSION:
+        return
+    items = raw.get("items")
+    if not isinstance(items, dict):
+        return
+    now = time.time()
+    with _tasks_progress_lock:
+        for uid, item in items.items():
+            if not isinstance(item, dict):
+                continue
+            try:
+                done = int(item["done"])
+                total = int(item["total"])
+                at = float(item["at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if total <= 0 or at + TASK_PROGRESS_TTL <= now:
+                continue
+            _tasks_progress_cache[str(uid)] = {"done": done, "total": total, "at": at}
+
+
+def save_task_progress():
+    """原子落盘；内容没变就不重写。写失败只丢持久化，不影响请求。"""
+    global _tasks_progress_last_payload
+    now = time.time()
+    with _tasks_progress_lock:
+        items = {}
+        for uid, item in _tasks_progress_cache.items():
+            if item["total"] <= 0 or item["at"] + TASK_PROGRESS_TTL <= now:
+                continue
+            items[uid] = {"done": item["done"], "total": item["total"],
+                          "at": item["at"]}
+    payload = json.dumps({"version": TASK_PROGRESS_VERSION, "saved_at": int(now),
+                          "items": items}, ensure_ascii=False, sort_keys=True)
+    if payload == _tasks_progress_last_payload:
+        return True
+    path = task_progress_path()
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)
+        _tasks_progress_last_payload = payload
+        return True
+    except Exception:
+        return False
 
 def growth_snapshot(account):
     """成长任务 + 汇总；TTL 内直接复用上一份快照，过期或没缓存才请求上游。
@@ -7399,6 +7554,88 @@ def growth_snapshot(account):
     with _tasks_cache_lock:
         _tasks_cache[account.uid] = (time.time() + TASKS_CACHE_TTL, data)
     return data
+
+def credits_remain_of(account):
+    """账号缓存的剩余积分；没有这份数据就返回 None（不是 0）。"""
+    credits = getattr(account, "credits", None)
+    if not isinstance(credits, dict):
+        return None
+    try:
+        return float(credits.get("remain"))
+    except (TypeError, ValueError):
+        return None
+
+
+def checkin_today_of(account):
+    """今天有没有完成 Buddy 加油站签到（那 100 积分）。
+
+    两个来源，按**时间先后**取结论，不能只认其中一个：
+
+    - `credits.checkin`：额度刷新时顺手问上游 `checkin-activity-status` 的快照，
+      采集时刻记在同一份 `credits` 的 `updated_iso` 上；
+    - `lastCheckin`：本机每次真签成 / 上游答「今天已签到」时写下的确认时刻。
+
+    坑就在这里（2026-11-11 实测）：快照是当天 00:44 采的，那时当然还没签到；
+    09:00 定时器签成、21:12 用户又点一次拿到「今天已签到」写下 lastCheckin。
+    旧实现只要快照里存在 `today_checked_in` 就直接采信，于是徽章一直显示「未签」
+    ——明明上游已经签了。
+
+    规则：谁的时刻更晚信谁。快照不是今天的（或没有时刻）一律当过期，不采信它
+    的「已签」，免得把昨天的 true 当成今天的。企业号 / 静态 Key 没有个人成长
+    体系，返回 None 让面板显示「—」，不要显示成"未签到"。
+    """
+    try:
+        if account.uses_enterprise_billing():
+            return {"checkin_today": None, "checkin_credit": 0}
+    except Exception:
+        pass
+    today = time.strftime("%Y-%m-%d")
+    credits = getattr(account, "credits", None)
+    snapshot = credits.get("checkin") if isinstance(credits, dict) else None
+    snapshot_at = ""
+    if isinstance(credits, dict):
+        snapshot_at = str(credits.get("updated_iso") or "")
+        if not snapshot_at:
+            try:
+                snapshot_at = time.strftime("%Y-%m-%d %H:%M:%S",
+                                            time.localtime(float(credits.get("updated_at"))))
+            except (TypeError, ValueError):
+                snapshot_at = ""
+    local_at = str(getattr(account, "last_checkin", "") or "")
+
+    # 没有时刻的老快照按"当场采的"处理（历史数据），否则那些账号会整片掉成「—」
+    snapshot_today = ((snapshot_at.startswith(today) or not snapshot_at)
+                      and isinstance(snapshot, dict)
+                      and "today_checked_in" in snapshot)
+    local_today = local_at.startswith(today)
+
+    if not snapshot_today and not local_today:
+        return {"checkin_today": None, "checkin_credit": 100}
+
+    checked = None
+    if snapshot_today:
+        checked = bool(snapshot.get("today_checked_in"))
+    # 本机记录更晚（当天签到发生在快照采集之后）→ 以本机为准
+    if local_today and (checked is None or local_at > snapshot_at):
+        checked = True
+
+    credit = snapshot.get("today_credit") if snapshot_today else None
+    try:
+        credit = int(credit)
+    except (TypeError, ValueError):
+        credit = 100
+    return {"checkin_today": checked, "checkin_credit": credit}
+
+
+# ---- 进度落盘 ----
+# 只放内存的话，蓝绿发布会把一百多个账号的进度清零，下一次开面板又要逐个问
+# 上游。这里存成 `usage/task-progress.json`（发布用的 rsync 已排除 usage/），
+# 原子写 + 版本号；文件坏了、版本不符、条目过期都当作没有，重新问上游即可。
+TASK_PROGRESS_FILE = "task-progress.json"
+TASK_PROGRESS_VERSION = 1
+_tasks_progress_loaded = False
+_tasks_progress_last_payload = None
+
 
 def _both(tasks_fn, summary_fn, account):
     """并发跑两条上游查询；任一条抛错就照旧往外抛（不写进快照）。"""
@@ -22054,6 +22291,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_activity_history(query)
         if path == "/tasks":
             return self._get_tasks(query)
+        if path == "/tasks/progress":
+            return self._get_tasks_progress(query)
         if path == "/scheduler":
             return self._get_scheduler()
         if path == "/pricing":
@@ -22563,13 +22802,85 @@ class Handler(BaseHTTPRequestHandler):
         if not acc:
             acc = cn_accounts[0]
         tasks, summary = growth_snapshot(acc)
-        acct_list = [{"uid": a.uid, "nickname": a.nickname or a.uid[:8]} for a in cn_accounts]
+        if record_task_progress(acc.uid, tasks):
+            save_task_progress()
+        acct_list = []
+        for a in cn_accounts:
+            checkin = checkin_today_of(a)
+            entry = task_progress_entry(a.uid)
+            acct_list.append({
+                "uid": a.uid,
+                "nickname": a.nickname or a.uid[:8],
+                "credits_remain": credits_remain_of(a),
+                "tasks_done": entry["done"] if entry else None,
+                "tasks_total": entry["total"] if entry else None,
+                "progress_at": int(entry["at"]) if entry else None,
+                "checkin_today": checkin["checkin_today"],
+                "checkin_credit": checkin["checkin_credit"],
+            })
         return self._json_panel(200, {
             "tasks": tasks,
             "summary": summary,
             "account": acc.public(),
             "accounts": acct_list,
         })
+
+    def _get_tasks_progress(self, query):
+        """`GET /tasks/progress?uids=a,b,c`：下拉里的「已完成 13/18」。
+
+        只补缓存里没有的账号：每批最多 6 个、3 并发问上游，单个账号失败只把
+        这一项标成 error，不影响同批其它账号。写进 TTL 缓存后，面板再开就
+        不用再问上游。
+        """
+        if not self._authorized():
+            return
+        raw = (query.get("uids") or [""])[0]
+        wanted = []
+        for uid in str(raw).split(","):
+            uid = uid.strip()
+            if uid and uid not in wanted:
+                wanted.append(uid)
+        accounts = POOL.task_accounts("cn") if POOL else []
+        by_uid = {a.uid: a for a in accounts}
+        # 先按真实账号过滤再截断：列表里带了失效 uid 时不能白占一个名额。
+        targets = [by_uid[uid] for uid in wanted if uid in by_uid][:TASK_PROGRESS_BATCH]
+        items = []
+        pending = []
+        for account in targets:
+            uid = account.uid
+            entry = task_progress_entry(uid)
+            if entry:
+                items.append({"uid": uid, "done": entry["done"],
+                              "total": entry["total"],
+                              "updated_at": int(entry["at"]),
+                              "state": "cached"})
+            else:
+                pending.append(account)
+        if pending:
+            from concurrent.futures import ThreadPoolExecutor
+            from wb_tasks import fetch_growth_tasks
+
+            def _fetch(account):
+                try:
+                    return account, fetch_growth_tasks(account), ""
+                except Exception as exc:  # 单账号失败不拖垮整批
+                    return account, None, str(exc)[:120]
+
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                for account, tasks, error in pool.map(_fetch, pending):
+                    if tasks is None:
+                        items.append({"uid": account.uid, "done": None,
+                                      "total": None, "updated_at": None,
+                                      "state": "error", "error": error})
+                        continue
+                    now = time.time()
+                    record_task_progress(account.uid, tasks)
+                    done, total = task_progress_counts(tasks)
+                    items.append({"uid": account.uid, "done": done,
+                                  "total": total, "updated_at": int(now),
+                                  "state": "fetched"})
+            save_task_progress()
+        return self._json_panel(200, {"items": items})
 
     def _get_scheduler(self):
         if not self._authorized():

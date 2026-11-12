@@ -74,9 +74,10 @@ check('一次性区块保留任务表与日志',
 
 check('任务表过滤每日夜猫子',
   /filter\(t => String\(t\.task_code \|\| ''\) !== 'black_cat'\)/.test(script));
-check('两个国内账号下拉框双向同步',
-  /\["growthAcctSelect", "cnCheckinAcctSelect"\]\.forEach/.test(script) &&
-  /if\(el && el\.value !== uid\) el\.value = uid;/.test(script));
+check('两个国内账号选择器共用同一份选中状态',
+  /const GROWTH_PICKERS = \[/.test(script) &&
+  /key: 'growth'/.test(script) && /key: 'daily'/.test(script) &&
+  /function renderGrowthTriggerLabels\(\)/.test(script));
 check('调度器保留独立的立即巡检按钮',
   /id="btnTriggerSched" onclick="triggerSchedulerNow\(this\)"/.test(html));
 
