@@ -587,6 +587,14 @@ def key_allows_account(entry, uid):
     return str(uid or "").strip() in refs
 
 
+def _clean_daily_token_limit(value):
+    """日 token 限量归一：单位 M（百万 token），负数与脏值一律当 0（不限）。"""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _clean_key_entry(entry):
     """Normalize one stored key entry; returns None when unusable.
 
@@ -617,6 +625,7 @@ def _clean_key_entry(entry):
         "models": _clean_model_patterns(entry.get("models")),
         "accounts": _clean_account_refs(entry.get("accounts")),
         "concurrency_limit": concurrency,
+        "daily_token_limit": _clean_daily_token_limit(entry.get("daily_token_limit")),
         "enabled": False if deleted_at else entry.get("enabled", True) is not False,
         "created_at": entry.get("created_at") or wb_time.strftime("%Y/%m/%d %H:%M"),
         "deleted_at": deleted_at,

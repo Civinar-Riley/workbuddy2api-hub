@@ -21,11 +21,17 @@ import sys
 import tempfile
 import time
 import unittest
+import calendar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_settings
 import wb_time
+
+
+def utc_epoch(*fields):
+    """Construct an epoch from explicit UTC fields, independent of host timezone."""
+    return calendar.timegm(tuple(fields) + (0, 0, 0))
 
 
 class SettingsSwitchTests(unittest.TestCase):
@@ -103,7 +109,7 @@ class HelperTests(unittest.TestCase):
     def test_day_rolls_over_at_beijing_midnight(self):
         wb_time.set_enabled(True)
         # 2026-11-11 00:00 Beijing == 2026-11-10 16:00 UTC.
-        base = time.mktime((2026, 11, 10, 16, 0, 0, 0, 0, -1))
+        base = utc_epoch(2026, 11, 10, 16, 0, 0)
         before = base - 1
         self.assertNotEqual(wb_time.day_key(before), wb_time.day_key(base))
         self.assertEqual(wb_time.iso_seconds(base)[11:], "00:00:00")
@@ -112,10 +118,10 @@ class HelperTests(unittest.TestCase):
         # A row at 23:30 Beijing is still the previous day in UTC; the switch
         # is exactly what makes the two disagree, so this pins the intent.
         wb_time.set_enabled(True)
-        ts = time.mktime((2026, 11, 10, 15, 30, 0, 0, 0, -1))
+        ts = utc_epoch(2026, 11, 10, 15, 30, 0)
         self.assertEqual(wb_time.day_key(ts), "2026-11-10")
         self.assertEqual(time.strftime("%Y-%m-%d", time.gmtime(ts)), "2026-11-10")
-        ts2 = time.mktime((2026, 11, 10, 16, 30, 0, 0, 0, -1))
+        ts2 = utc_epoch(2026, 11, 10, 16, 30, 0)
         self.assertEqual(wb_time.day_key(ts2), "2026-11-11")
         self.assertEqual(time.strftime("%Y-%m-%d", time.gmtime(ts2)), "2026-11-10")
 
@@ -145,19 +151,20 @@ class ProxyBucketTests(unittest.TestCase):
 
     def test_local_day_key_follows_switch(self):
         P = self.P
-        ts = time.mktime((2026, 11, 10, 16, 30, 0, 0, 0, -1))
+        ts = utc_epoch(2026, 11, 10, 16, 30, 0)
         wb_time.set_enabled(False)
         P._row_day_memo_clear()
         off = P._local_day_key(ts)
+        host_day = time.strftime("%Y-%m-%d", time.localtime(ts))
         wb_time.set_enabled(True)
         P._row_day_memo_clear()
         on = P._local_day_key(ts)
+        self.assertEqual(off, host_day)
         self.assertEqual(on, "2026-11-11")
-        self.assertNotEqual(off, on)
 
     def test_local_midnight_follows_switch(self):
         P = self.P
-        ts = time.mktime((2026, 11, 10, 16, 30, 0, 0, 0, -1))
+        ts = utc_epoch(2026, 11, 10, 16, 30, 0)
         wb_time.set_enabled(True)
         self.assertEqual(wb_time.iso_seconds(P._local_midnight(ts)),
                          "2026-11-11 00:00:00")
@@ -168,14 +175,15 @@ class ProxyBucketTests(unittest.TestCase):
         P = self.P
         wb_time.set_enabled(False)
         P._row_day_memo_clear()
-        ts = time.mktime((2026, 11, 10, 16, 30, 0, 0, 0, -1))
-        self.assertNotEqual(P._local_day_key(ts), "2026-11-11")
+        ts = utc_epoch(2026, 11, 10, 16, 30, 0)
+        host_day = time.strftime("%Y-%m-%d", time.localtime(ts))
+        self.assertEqual(P._local_day_key(ts), host_day)
         P.configure_timezone(True)
         self.assertTrue(wb_time.enabled())
         self.assertEqual(P._local_day_key(ts), "2026-11-11")
         P.configure_timezone(False)
         self.assertFalse(wb_time.enabled())
-        self.assertNotEqual(P._local_day_key(ts), "2026-11-11")
+        self.assertEqual(P._local_day_key(ts), host_day)
 
 
 if __name__ == "__main__":
