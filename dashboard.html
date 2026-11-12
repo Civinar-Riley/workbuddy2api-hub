@@ -8026,7 +8026,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
                   style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit"></select>
         </div>
         <div style="flex:1;min-width:200px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">默认模型</div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">默认模型 <span id="agentModelRealmHint" style="color:var(--accent)"></span></div>
           <select id="agentModelSelect"
                   style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit"></select>
         </div>
@@ -8903,6 +8903,10 @@ async function switchViewRealm(r){
   setViewRealm(r);
   RECENT_PAGE = 1;
   window.updateUI();
+  // 智能体页的模型目录跟着视图走（见 agentRequestRealm）：换了版本就把下拉框
+  // 重取一次，否则切到国际版后它还在列上一次（国内版）的目录。不 await——
+  // 它要 import wb_agents 并探测本机客户端，比其它接口慢得多。
+  if(typeof loadAgents === 'function') loadAgents();
   if(r === "codearts"){
     // CodeArts 没有 WorkBuddy 的账号池/成长任务/调度器，别拿空数据去刷那些接口。
     await Promise.all([loadCodeartsOverview(true), loadModels(),
@@ -20347,13 +20351,40 @@ function agentClients(){
   return d.clients || d.agents || [];
 }
 
+/* Which exit the one-click config should read its model list from.
+
+   The picked key wins: a key bound to an exit is a hard runtime constraint
+   (`_request_realm` puts the key above the global switch), so the models
+   written into the client have to be the ones that key can actually call -
+   otherwise the first request comes back 400 from `_cross_realm_error`.
+
+   Only when the key has no binding do we fall back to the current view.
+   `codearts` has no agent catalogue, so it maps to `intl`.
+
+   The realm has to come from here rather than from the server: the panel
+   calls /agents with its session token, and that path never resolves an API
+   key, so `_key_realm()` is always empty on the server side. */
+function agentRequestRealm(){
+  const keySel = document.getElementById('agentKeySelect');
+  const keyId = keySel ? keySel.value : '';
+  if(keyId){
+    const k = (AGENT_KEYS || []).find(x => String(x.id) === String(keyId));
+    const kr = k && k.realm;
+    if(kr === 'intl' || kr === 'cn') return kr;
+  }
+  const v = window.VIEW_REALM || 'intl';
+  return (v === 'cn' || v === 'intl') ? v : 'intl';
+}
+
 async function loadAgents(showToast){
   if(AGENTS_LOADING) return;
   AGENTS_LOADING = true;
   const state = document.getElementById('agentDetectState');
   if(state){ state.textContent = '(检测中...)'; state.style.color = 'var(--dim)'; }
   try {
-    const data = await getJSON('/agents');
+    // 带上出口：后端据此挑目录，否则下拉框永远跟着「默认出口」走，切到国际版
+    // 视图、或把 Key 绑成国际版，都拿不到国际版模型。
+    const data = await getJSON('/agents?realm=' + encodeURIComponent(agentRequestRealm()));
     AGENTS_DATA = data || {};
     AGENT_MODELS = AGENTS_DATA.models || [];
     AGENT_KEYS = AGENTS_DATA.keys || AGENTS_DATA.api_keys || [];
@@ -20401,6 +20432,13 @@ function renderAgentConnForm(){
     });
     keySel.innerHTML = html;
     if(prev && keySel.querySelector('option[value="' + prev.replace(/"/g, '\\"') + '"]')) keySel.value = prev;
+  }
+  // 目录跟着出口走，标题旁标一下当前取的是哪个版本的目录，避免「以为在配
+  // 国际版、实际拿的是国内版清单」这种看不见的错位。
+  const realmHint = document.getElementById('agentModelRealmHint');
+  if(realmHint){
+    const r = (AGENTS_DATA && AGENTS_DATA.realm) || agentRequestRealm();
+    realmHint.textContent = '（' + realmLabel(r) + '目录）';
   }
   const modelSel = document.getElementById('agentModelSelect');
   if(modelSel){
@@ -20557,7 +20595,10 @@ async function applyAgent(id, btn){
       base_url: baseUrl,
       key_id: keySel ? keySel.value : '',
       model: modelSel ? modelSel.value : '',
-      models: pickedModels
+      models: pickedModels,
+      // 让后端按同一个出口补模型规格（上下文窗口 / 输出上限 / 思考档位）：
+      // 不带的话它会退到默认出口的目录，国际版模型补不上规格。
+      realm: agentRequestRealm()
     });
     if(r && (r.ok === false || r.error)){
       toast('配置失败: ' + (r.message || (r.error && r.error.message) || '未知错误'), 'bad');
@@ -20593,10 +20634,16 @@ async function restoreAgent(id, btn){
 }
 
 // 网关地址输入框：用户改过后打标，刷新检测不再覆盖。
+// API Key 下拉：换 Key 就重取一次目录——Key 绑了出口时目录要跟着它走
+// （见 agentRequestRealm），否则切到「claude code (intl)」下拉框里还是国内版模型。
 (function(){
   const bind = () => {
     const baseInput = document.getElementById('agentBaseUrl');
     if(baseInput) baseInput.addEventListener('input', () => { baseInput.dataset.touched = '1'; });
+    const keySel = document.getElementById('agentKeySelect');
+    if(keySel) keySel.addEventListener('change', () => {
+      if(typeof AGENTS_DATA !== 'undefined' && AGENTS_DATA) loadAgents();
+    });
   };
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
   else bind();

@@ -22316,7 +22316,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings/reveal":
             return self._get_settings_reveal(query)
         if path == "/agents":
-            return self._get_agents()
+            # ?realm=intl|cn：看板把当前视图（以及所选 Key 绑定的出口）带上来，
+            # 后端据此挑该出口的目录；不带就退回 Key 绑定、再退回全局出口
+            # （见 _agents_realm）。
+            return self._get_agents({"realm": (query.get("realm") or [""])[0]})
         if path == "/agents/model-selection":
             return self._get_agents_model_selection()
         if path == "/agents/available":
@@ -24953,18 +24956,53 @@ class Handler(BaseHTTPRequestHandler):
             host = "127.0.0.1"
         return "http://%s:%d/v1" % (host, int(port or 0))
 
-    def _agents_models(self):
+    def _agents_realm(self, payload=None):
+        """Which exit the one-click config should read its model list from.
+
+        Most specific first, then progressively broader:
+
+          1. an explicit `realm` in the payload - the panel sends its current
+             view (VIEW_REALM) and, when an API key is picked, that key's own
+             binding;
+          2. the exit bound to the key this request authenticated with;
+          3. the global switch, CURRENT_REALM.
+
+        Rule 3 alone is not enough, and that is the whole point of this
+        helper: switching the panel view or binding a key to `intl` only ever
+        affected inference requests (`_request_realm`). `/agents` never
+        consulted either, so a picker opened with an `intl` key still listed
+        the domestic catalogue and no international model could be selected.
+        """
+        if isinstance(payload, dict):
+            explicit = str(payload.get("realm") or "").strip().lower()
+            if explicit in ("intl", "cn"):
+                return explicit
+        try:
+            bound = self._key_realm()
+        except Exception:
+            bound = ""
+        if bound in ("intl", "cn"):
+            return bound
+        return CURRENT_REALM if CURRENT_REALM in ("intl", "cn") else "intl"
+
+    def _agents_models(self, realm=None):
         """Flat model list for the picker; bundled intl+cn catalog, deduped.
 
         Live sources stay out of this path on purpose: the panel must answer
         even when the upstream is down, so a failure here is simply a shorter
         list, never an error.
+
+        `realm` must be threaded through: without it fetch_models() falls back
+        to the global CURRENT_REALM, so the picker would list one exit's
+        catalogue no matter which exit the operator is configuring for. The
+        "intl+cn" in the line above only holds for the bundled fallback
+        below, which is what runs when the live catalogue is unavailable.
         """
         models = []
         seen = set()
         try:
             try:
-                entries = fetch_models()
+                entries = fetch_models(realm=realm)
             except Exception:
                 entries = []
             if entries:
@@ -25060,7 +25098,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         return
 
-    def _get_agents(self):
+    def _get_agents(self, payload=None):
         if not self._agents_client_allowed():
             # 远程看板（服务端 / Docker / OpenWrt）：一键配置改的是网关所在
             # 机器的配置目录，到不了用户自己的电脑，直接按不可用返回。
@@ -25077,14 +25115,22 @@ class Handler(BaseHTTPRequestHandler):
                         "id": entry.get("id"),
                         "name": entry.get("name") or "",
                         "enabled": True,
+                        # 出口绑定：面板据此提示「这个 Key 固定走哪个版本」。
+                        # 没有它，看板就无法判断写进去的模型客户端调不调得动
+                        # ——绑了出口的 Key 换版本会直接 400（_cross_realm_error）。
+                        "realm": entry.get("realm") or "",
                     })
         except Exception:
             keys = []
         selection = wb_settings.agent_model_selection(ACCOUNTS_DIR)
+        realm = self._agents_realm(payload)
         return self._json(200, {
             "enabled": True,
+            # 这份目录属于哪个出口：面板据此在标题旁标注，避免「以为在配
+            # 国际版、实际拿到国内版清单」这种看不见的错位。
+            "realm": realm,
             "clients": list(wb_agents.overview(ACCOUNTS_DIR).values()),
-            "models": self._agents_models(),
+            "models": self._agents_models(realm),
             # 「网关模型清单」里勾选的模型：一键配置只把这些写进客户端。
             # None（从未保存）时给空列表，由 models_configured 区分「没选过」
             # 与「选了 0 个」——前者 apply 退回完整目录，后者 apply 拒绝。
@@ -25144,13 +25190,18 @@ class Handler(BaseHTTPRequestHandler):
                 400, "base_url must start with http:// or https://",
                 "invalid_request_error")
         model = str(payload.get("model") or "").strip() or None
+        # 补模型规格（上下文窗口 / 输出上限 / 思考档位）必须和下拉框用同一个
+        # 出口的目录：否则国际版模型在这里查不到规格，写进客户端的清单里只剩
+        # 一个 id，DSH / Crush 这类客户端拿不到档位控件。
+        realm = self._agents_realm(payload)
         models = payload.get("models")
         if models is None:
             # 前端没带清单（老看板 / 直接调接口）：优先用「网关模型清单」里
-            # 勾选的模型；从未保存过勾选（升级前的老安装）才退回完整目录。
+            # 勾选的模型；从未保存过勾选（升级前的老安装）才退回该出口的
+            # 完整目录。
             selection = wb_settings.agent_model_selection(ACCOUNTS_DIR)
             if selection is None:
-                models = self._agents_models()
+                models = self._agents_models(realm)
             else:
                 models = [{"id": mid} for mid in selection]
         if not isinstance(models, list):
@@ -25170,7 +25221,7 @@ class Handler(BaseHTTPRequestHandler):
         # 写出来的模型列表只有 id，客户端就只能吃自己的内置默认值。
         try:
             specs = {}
-            for spec in self._agents_models():
+            for spec in self._agents_models(realm):
                 if isinstance(spec, dict) and spec.get("id"):
                     specs[str(spec["id"])] = spec
         except Exception:
