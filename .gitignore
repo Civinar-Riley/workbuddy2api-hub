@@ -60,6 +60,8 @@ bin/wb-tls-bridge*
 __pycache__/
 *.py[cod]
 *$py.class
+# PowerShell 里误写 `$null` 会生成这个零字节文件；它从来不是项目产物
+$null
 
 # 系统与编辑器文件
 .DS_Store
