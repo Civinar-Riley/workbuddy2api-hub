@@ -3268,6 +3268,41 @@ class Account(object):
             "status": acc.get("Status", 0),
         }
 
+    #: 上游 free/paid packages 的 PageSize 上限就是 200（传 500 直接回 400）。
+    PACKAGE_PAGE_SIZE = 200
+    #: 分页兜底上限：10 页 × 200 = 2000 条实例，正常账号一辈子也用不到。
+    PACKAGE_MAX_PAGES = 10
+
+    def _paged_packages(self, url, body, headers):
+        """按页把套餐实例拉全。
+
+        签到与成长计划每天各发一个 100 积分包，一个活跃号两三个月就能攒到 200 条
+        以上；只拉第一页会让后面的实例静默丢失——面板上就是「签到 28 天却看不到
+        任何记录」。任何一页失败只返回已经拿到的部分，不让整次刷新失败。
+        """
+        accounts = []
+        total = None
+        for page in range(1, self.PACKAGE_MAX_PAGES + 1):
+            body_page = dict(body, PageNumber=page, PageSize=self.PACKAGE_PAGE_SIZE)
+            try:
+                res = http_json(url, data=json.dumps(body_page).encode(), method="POST",
+                                headers=headers, timeout=20, proxy=self.proxy)
+            except Exception:
+                break
+            data = res.get("data") or {}
+            chunk = data.get("Accounts") or []
+            if total is None:
+                try:
+                    total = int(data.get("TotalCount"))
+                except (TypeError, ValueError):
+                    total = None
+            accounts.extend(chunk)
+            if len(chunk) < self.PACKAGE_PAGE_SIZE:
+                break
+            if total is not None and len(accounts) >= total:
+                break
+        return accounts
+
     def _fetch_credits_cn_detailed(self):
         cfg = get_realm_config(self.realm)
         headers = self.headers(purpose="billing")
@@ -3314,29 +3349,22 @@ class Account(object):
         summary_pkgs = s_data.get("Packages") or []
         pkg_codes = [p.get("PackageCode") for p in summary_pkgs if p.get("PackageCode")]
 
-        # 2. 免费包
+        # 2. 免费包：Status 必须带 0/1/2/3。
+        #    只查 [0]（有效）会把用光的实例全部滤掉：签到发的 100 积分包一被用完就
+        #    变 status=3，于是「签到 N 天」在明细里一条都看不到，「已用完/过期」这个
+        #    筛选永远是空的。实测同一个号：[0] 只回 5 条，[0,1,2,3] 回 89 条。
         free_accs = []
         if pkg_codes:
             free_url = base_billing + RESOURCE_FREE_PACKAGES_PATH
-            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0]}
-            try:
-                f_res = http_json(free_url, data=json.dumps(body).encode(), method="POST",
-                                  headers=headers, timeout=15, proxy=self.proxy)
-                free_accs = (f_res.get("data") or {}).get("Accounts") or []
-            except Exception:
-                pass
+            free_accs = self._paged_packages(
+                free_url, {"PackageCodes": pkg_codes, "Status": [0, 1, 2, 3]}, headers)
 
         # 3. 付费包
         paid_accs = []
         if pkg_codes:
             paid_url = base_billing + RESOURCE_PAID_PACKAGES_PATH
-            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0, 3], "NeedRenewInfo": True}
-            try:
-                p_res = http_json(paid_url, data=json.dumps(body).encode(), method="POST",
-                                  headers=headers, timeout=15, proxy=self.proxy)
-                paid_accs = (p_res.get("data") or {}).get("Accounts") or []
-            except Exception:
-                pass
+            paid_accs = self._paged_packages(
+                paid_url, {"PackageCodes": pkg_codes, "Status": [0, 3], "NeedRenewInfo": True}, headers)
 
         # 4. 每日签到状态
         checkin_info = None
@@ -3370,12 +3398,15 @@ class Account(object):
         tot_used = sum(p["used"] for p in packages)
         tot_size = sum(p["size"] for p in packages)
 
-        # 若具体包为空且 summary 含有汇总容量，则使用 summaryPkgs
-        if not packages and summary_pkgs:
-            for sp in summary_pkgs:
-                tot_size += float(sp.get("CycleTotalCapacity") or 0)
-                tot_remain += float(sp.get("CycleRemainCapacity") or 0)
-                tot_used += float(sp.get("CycleUsedCapacity") or 0)
+        # 汇总口径：明细列表只是"上游还愿意返回的实例"，签到的 100 积分包用完就变成
+        # status=3 并逐渐被上游回收，对这些实例求和会得到远小于真实累计的数字
+        # （实测同一时刻：列表求和 900 / 500，官方 summary 累计 8863 / 8465）。
+        # resource-summary 的 Packages[] 才是累计值，拿得到就以它为准。
+        sum_size = sum(float(sp.get("CycleTotalCapacity") or 0) for sp in summary_pkgs)
+        sum_used = sum(float(sp.get("CycleUsedCapacity") or 0) for sp in summary_pkgs)
+        sum_remain = sum(float(sp.get("CycleRemainCapacity") or 0) for sp in summary_pkgs)
+        if sum_size > 0:
+            tot_size, tot_used, tot_remain = sum_size, sum_used, sum_remain
 
         tot_remain = round(tot_remain, 2)
         tot_used = round(tot_used, 2)
