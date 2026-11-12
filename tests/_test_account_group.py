@@ -258,7 +258,11 @@ class DashboardGroupWiringTests(unittest.TestCase):
             "id=\"importGroup\"",
             "editKeyAccountGroup_",
             "addKeyAccountsFromGroup",
-            "payload.group = ACCOUNT_FILTERS.group",
+            # 批量刷新 / 测试 / 启停改走「作用范围点名」：分组筛选在客户端收敛成
+            # uid 列表（acctScopeUids -> filteredAccountsForBulk），后端不再吃
+            # group 参数。分组自身的一键启停仍显式提交 group。
+            "acctScopeUids",
+            "filteredAccountsForBulk",
         ):
             self.assertIn(marker, html)
 

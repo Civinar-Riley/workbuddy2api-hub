@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import wb_pricing
 import wb_proxy as P
 import wb_settings
+import wb_time
 
 T0 = 1791000000.0
 MODEL_A = "fold-model-a"          # 走策略分支（行上带 cost_policy）
@@ -630,8 +631,12 @@ class RowResultMemoTests(AggregateHarness):
                 return self._key
 
         real_time = P.time
+        real_wb_time = wb_time.time
         clock = _Clock(("A", "B"), "2001-01-01")
+        # 日键的格式化已经搬进 wb_time（固定偏移方案），所以「进程时区变了」
+        # 这个模拟必须同时替换 wb_time 看到的那份 time 模块。
         P.time = clock
+        wb_time.time = clock
         try:
             self.assertEqual(P._local_day_key(123), "2001-01-01")
             self.assertEqual(P._local_day_key(456), "2001-01-01")
@@ -643,6 +648,7 @@ class RowResultMemoTests(AggregateHarness):
             self.assertNotIn(456, P._row_day_memo)
         finally:
             P.time = real_time
+            wb_time.time = real_wb_time
 
     # ---- 形状与退化输入 ----
 

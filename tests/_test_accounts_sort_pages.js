@@ -129,7 +129,7 @@ const stubCreate = document.createElement.bind(document);
 document.getElementById = id => id === 'accounts' ? box : stubGet(id);
 document.createElement = tag => tag === 'div' ? new El('div') : stubCreate(tag);
 
-const REQ_COL = 7;   // 「请求」列：fmt(usage.requests)，纯数字
+const REQ_COL = 8;   // 「请求」列：fmt(usage.requests)，纯数字
 const N = 120;
 // 请求数与服务端顺序打乱（i*37 mod 120 是 0..119 的一个排列），默认排序（同权重
 // 保持服务端顺序）与按请求数排序完全不同。

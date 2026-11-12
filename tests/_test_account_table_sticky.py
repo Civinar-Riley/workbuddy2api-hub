@@ -24,6 +24,7 @@ STYLES = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", HTML, re.S))
 
 def fixture():
     headers = [
+        '<th class="acct-check" style="text-align:center;width:32px"></th>',
         '<th style="text-align:center;width:76px">版本</th>',
         '<th style="text-align:left">账号</th>',
         '<th style="text-align:center;width:84px">状态</th>',
@@ -37,6 +38,7 @@ def fixture():
         '<th style="text-align:center;width:232px">操作</th>',
     ]
     cells = [
+        '<td class="acct-check" style="text-align:center"><input type="checkbox"></td>',
         '<td style="text-align:center;white-space:nowrap" data-label="版本">INTL</td>',
         '<td style="text-align:left" data-label="账号"><div class="acct-name-row">'
         '<span class="acct-name" title="test-account">test-account</span></div></td>',
@@ -55,7 +57,7 @@ def fixture():
     ]
     rows = (
         '<tr class="has-alert">' + "".join(cells) + "</tr>"
-        '<tr class="cool-row"><td colspan="11"><div class="cool-list">'
+        '<tr class="cool-row"><td colspan="12"><div class="cool-list">'
         '<span class="cool-pill">model-a · 撞线 12:00 · 恢复 18:00（时间为本地时间）</span>'
         "</div></td></tr>"
         "<tr>" + "".join(cells) + "</tr>"
@@ -106,9 +108,9 @@ class AccountTableStickyTests(unittest.TestCase):
             data = page.evaluate(
                 """() => {
                   const wrap = document.querySelector('#wrap');
-                  const account = wrap.querySelector('tbody tr:not(.cool-row) td:nth-child(2)');
+                  const account = wrap.querySelector('tbody tr:not(.cool-row) td:nth-child(3)');
                   const name = account.querySelector('.acct-name');
-                  const version = wrap.querySelector('tbody tr:not(.cool-row) td:nth-child(1)');
+                  const version = wrap.querySelector('tbody tr:not(.cool-row) td:nth-child(2)');
                   const cool = wrap.querySelector('tr.cool-row td');
                   wrap.scrollLeft = wrap.scrollWidth;
                   const wr = wrap.getBoundingClientRect();
@@ -136,8 +138,8 @@ class AccountTableStickyTests(unittest.TestCase):
         self.assertGreater(data["maxScroll"], 0)
         self.assertEqual(data["scrollLeft"], data["maxScroll"])
         self.assertEqual(data["accountPosition"], "sticky")
-        self.assertAlmostEqual(data["versionLeft"], data["wrapLeft"], delta=1)
-        self.assertAlmostEqual(data["accountLeft"], data["wrapLeft"] + 76, delta=1)
+        self.assertAlmostEqual(data["versionLeft"], data["wrapLeft"] + 32, delta=1)
+        self.assertAlmostEqual(data["accountLeft"], data["wrapLeft"] + 100, delta=1)
         self.assertGreater(data["nameWidth"], 0)
         self.assertGreaterEqual(data["nameLeft"], data["wrapLeft"] - 1)
         self.assertLessEqual(data["nameRight"], data["wrapRight"] + 1)
@@ -150,7 +152,7 @@ class AccountTableStickyTests(unittest.TestCase):
                 """() => {
                   document.querySelector('#wrap').style.width = '100%';
                   const td1 = document.querySelector('tbody tr:not(.cool-row) td:nth-child(1)');
-                  const td2 = document.querySelector('tbody tr:not(.cool-row) td:nth-child(2)');
+                  const td2 = document.querySelector('tbody tr:not(.cool-row) td:nth-child(3)');
                   return {
                     first: getComputedStyle(td1).position,
                     second: getComputedStyle(td2).position,

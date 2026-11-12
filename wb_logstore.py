@@ -25,6 +25,8 @@ import sqlite3
 import threading
 import time
 
+import wb_time
+
 # Entries are batched per transaction; a burst of request logs costs one fsync
 # instead of one per line. The drain loop also picks up whatever else is
 # already queued (reads and clears included), so a pending query is never
@@ -352,9 +354,7 @@ class LogStore:
         """Apply the row and age caps. Both are cheap DELETEs."""
         days = self._caps.get("days")
         if days:
-            cutoff = time.strftime(
-                "%Y-%m-%d %H:%M:%S",
-                time.localtime(time.time() - days * 86400))
+            cutoff = wb_time.iso_seconds(time.time() - days * 86400)
             conn.execute("DELETE FROM logs WHERE ts < ?", (cutoff,))
         rows_cap = self._caps.get("rows")
         if rows_cap:

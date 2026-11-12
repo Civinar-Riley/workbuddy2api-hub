@@ -20,7 +20,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v2.1.1-2496ED?style=flat-square" alt="Version 2.1.1"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v2.2.0-2496ED?style=flat-square" alt="Version 2.2.0"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -213,6 +213,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | `API_KEY` | 自动生成 | 初始 API Key（看板配置多 Key 后优先由看板管理） |
 | `WB_DEPLOY_MODE` | `lan` | 部署模式：`lan`（0.0.0.0）、`local`（127.0.0.1）、`public` |
 | `WB_MAX_PAYLOAD_BYTES` | `16777216` | 单请求体上限（字节，默认 16MB，支持 1–256 MB） |
+| `WB_CHAT_SLOT_WAIT` | `30` | 并发槽位的等待秒数：全局对话槽位与 Key 级 `concurrency_limit` 共用这个预算，等到才有名额，超时仍按 429 拒绝 |
 | `WB_ENABLE_ANTHROPIC_MESSAGES` | `0` | 是否开启实验性 Anthropic Messages 协议转换 |
 | `WB_BACKGROUND_MODEL_TARGET` | 留空 | 后台模型别名改写目标（如 DSH 客户端自动映射） |
 | `WB_CA_BUNDLE` | 留空 | 自签根证书路径（供抓包调试或中间代理使用） |
@@ -220,6 +221,9 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | `WB_IDENTITY_OS` | 宿主系统 | 仅 CLI 身份：覆盖 `x-stainless-os`（如 `Linux` / `Windows`） |
 | `WB_IDENTITY_ARCH` | 宿主架构 | 仅 CLI 身份：覆盖 `x-stainless-arch`（如 `x64` / `arm64`） |
 | `WB_IDENTITY_NODE_VERSION` | 官方默认 | 仅 CLI 身份：覆盖 `x-stainless-runtime-version` |
+| `WB_SANITIZE_LOOSE_BILLING` | `0` | 计费头的宽松兜底：严格解析认不出时，按「像计费头」（含 ≥2 个 `cc_*=` / `cch=` 键值、且不超过 400 字符）整段删除。默认关闭，保持 #853 之后的严格语义；客户端改字段名导致每轮前缀命中率归零时才需要打开 |
+| `WB_MSGSTAT_SHARDS` | `0` | 单发 `/v1/messages` 请求收敛到几个账号上（0 = 关闭）。打开后同一 *(key, 模型, system, tools)* 组合的一次性调用固定复用 ≤N 个账号，避免被首条 user 文本打散到整池；上游 prompt 缓存按账号存放，换号即整段重付 |
+| `WB_MSGSTAT_DAILY_SALT` | `1` | 上一条的亲和键带当天日期盐，每天各桶重新开一次；`0` 关闭（键跨天不变） |
 
 遇到上游 `400 / 11-128` 时，先按 [`docs/TROUBLESHOOTING-11-128.md`](docs/TROUBLESHOOTING-11-128.md) 收集同一请求的
 身份、最小请求和提示词对照结果；不要先轮换账号。
@@ -248,7 +252,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 290 个套件：218 个 Python + 72 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 303 个套件：227 个 Python + 76 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -257,6 +261,19 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 ## 七、版本更新记录 (Changelog)
 
 本版更新与完整历史版本请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+### Unreleased
+
+- **统计时区开关（北京时间）**：设置 →「日志与系统」新增「统计时区」卡片（`settings.json` 键 `stats_tz_beijing`，`/settings/save` 只收 JSON 布尔，默认关闭）。关闭时全部时间按服务器所在时区显示与分桶，与上游一致；勾选后统一按北京时间（固定 UTC+8）计算日志时间戳、请求记录、撞线 / 重置时刻、今日活动、用量日 / 小时分桶、签到日期、额度重置日与导出文件名。落盘仍存 epoch，切换只影响展示与日历日计算，保存后立即生效。实现用固定偏移而不是 `TZ=Asia/Shanghai` + `tzset()`：中国自 1991 年起无夏令时，固定偏移不需要 tzdata，Windows 没有 `tzset`、musl / OpenWrt 镜像常缺 zoneinfo 也能正确工作。 / A statistics-timezone switch (Settings → Logs & system) now offers Beijing time: `stats_tz_beijing` in `settings.json`, a strict JSON boolean on `/settings/save`, off by default. With it off every time is shown and bucketed in the host timezone exactly as before; switched on, log timestamps, request rows, limit-hit and reset moments, today's activity, usage day/hour buckets, check-in dates, quota reset days and export filenames all use a fixed UTC+8. Epochs are still what gets stored, so the switch only changes display and calendar-day maths, and it takes effect on save. The implementation uses a fixed offset rather than `TZ=Asia/Shanghai` + `tzset()`: China has had no DST since 1991, so no tz database is needed, which keeps it correct on Windows (no `tzset`) and on musl / OpenWrt images that ship without zoneinfo.
+
+### Unreleased
+
+- **账号页批量操作统一按「勾选否则当前筛选结果」定作用范围**：刷新积分 / 刷新凭证 / 测试 / 分配代理 / 切换所有出站身份 / 启用 / 停用原来各写一套口径（有的刷整池、有的只认分组），现在统一走 `acctScopeUids()`——有勾选只作用于勾选的账号，没有勾选则作用于当前筛选结果的全部账号（视图 + 号池 + 搜索 / 状态 / 分组 / 错误码，且不分页，避免「全部」只作用当前页）。批量挪号池仍要求先勾选：号池归属是一次明确的指派，没有勾选无从下手。`/accounts/refresh`、`/accounts/test`、`/accounts/product` 新增 `uids` 点名，空列表即什么都不做，不退化成全池；`/accounts/set-all` 原本就要求显式 UID 列表。按钮同时去掉「一键」前缀（刷新积分 / 刷新凭证 / 测试 / 分配代理 / 切换所有出站身份 / 启用 / 停用），「当前分组启用 / 停用」保留。 / The account page's bulk actions now share one scope rule: "Refresh credits", "Refresh tokens", "Test", "Assign proxy exits", "Switch all outbound identities", "Enable" and "Disable" each used to compute their own target set (some hit the whole pool, some only the group filter). They now all go through `acctScopeUids()`: the ticked accounts when there are any, otherwise the whole current filter result (view + pool + search / status / group / error code, and not just the current page, so "all" does not silently mean "this page"). Moving accounts between pools still requires a selection, because a pool assignment is an explicit choice. `/accounts/refresh`, `/accounts/test` and `/accounts/product` accept a `uids` list now; an empty list does nothing instead of falling back to the whole pool, and `/accounts/set-all` already required an explicit UID list. The "一键" prefix is dropped from those buttons while "Enable / Disable current group" keeps its name.
+- **号池筛选常显并改为下拉框**：账号表的号池筛选不再跟随「文本 / 媒体号池隔离」开关隐藏——`poolScope` 是账号的归属标记，隔离关着时它只影响服务端派发，不影响这个字段可查可改。三个互斥按钮（全部 / 文本 / 媒体）换成一个下拉框，默认「全部号池」，选中即生效；账号行的号池徽章同样恒显示，「移入媒体池 / 移入文本池」不再要求先开隔离。移动端号池组排成一行（下拉 + 计数 + 两个按钮），不再各占一行把账号列表推下去。 / The pool filter no longer hides behind the pool-separation switch: `poolScope` is an account's ownership tag, and the switch only affects server-side dispatch, not whether the field can be seen or changed. The three mutually exclusive buttons become one dropdown (All / Text / Media, default All, applied immediately); the pool badge on each row is always shown, and "Move to media pool" / "Move to text pool" no longer require the switch. On phones the pool group sits on a single row (dropdown + counter + two buttons) instead of pushing the account list down.
+- **模型别名开关**：`model_aliases` 之前只是一张无条件生效的映射表——填进去的别名立刻对所有客户端可见、所有请求都会被改写，运维想「先填好但暂不生效」没有手段。新增 `model_aliases_enabled`（缺省关闭，旧配置升级后行为不变），关闭时别名既不进 `/v1/models` 也不改写请求，原模型名照常可用；开启后别名与原名都可用，别名在模型清单里紧跟其目标模型列出。面板「设置 → 模型与定价」新增开关，「网关 → 模型清单」新增行内「对外名称」列（开关关闭时整列隐藏），支持直接编辑单个模型的对外名称。配套：别名请求的应答回显客户端发来的名字（`client_facing_model`），配了模型限制的 Key 用别名调用不再被网关自己的改写拦下，`/settings` 与 `/settings/save` 读写 `model_aliases` / `model_aliases_enabled`。 / **Model alias switch**: `model_aliases` used to be an unconditionally applied mapping table - any alias typed in was immediately visible to every client and rewritten on every request, with no way to stage a table without activating it. A new `model_aliases_enabled` key (off by default, so upgrades keep the old behaviour) gates it: while off, aliases are neither listed in `/v1/models` nor rewritten, and the original model names keep working; while on, aliases and original names both work and each alias is listed right next to its target. The panel gains a switch under Settings -> Models & pricing and an inline "External name" column in the gateway model catalog (the whole column hides while the switch is off), editable per model. Supporting changes: replies echo the name the client sent (`client_facing_model`), a key restricted to an alias is no longer rejected by the gateway's own rewrite, and `/settings` plus `/settings/save` read and write `model_aliases` / `model_aliases_enabled`.
+- **账号页桌面布局重排**：账号表改为跟随容器宽度（`width:100%` + `min-width:1096px` 只作横向滚动兜底），上一版写死 `min-width` 让容器窄时右侧列被固定操作列盖住，「Token / 缓存」看着像被裁掉；各列按实测内容定宽，多余宽度全给账号列。勾选列、版本列、账号列三列常驻左侧吸附（偏移 0 / 32 / 100px），横向滚动时不会只剩一排认不出归属的数据。桌面昵称允许折行、完整显示（此前 `nowrap + ellipsis` 把长昵称裁成「changzhan…」）。任务开关 / 备注 / 分组收到账号行内同一排（`.acct-chip-row`）。 / **Desktop account table re-layout**: the table now follows its container (`width:100%` with `min-width:1096px` only as a horizontal-scroll fallback); the previous fixed `min-width` let the sticky actions column cover the right-hand columns on narrower containers, so "Token / Cache" looked cut off. Columns are sized to their measured content and the leftover width goes to the account column. The checkbox, version and account columns stay pinned to the left (offsets 0 / 32 / 100px) so a horizontally scrolled row never becomes an unidentifiable strip. Desktop nicknames wrap and show in full (they used to be clipped to "changzhan..." by `nowrap + ellipsis`). The task switch, note and group chips sit on one row inside the account cell (`.acct-chip-row`).
+- **账号页移动端卡片分层**：第一行「勾选 + 昵称 + 版本 / 账户类型徽章」，第二行「号池 + 任务开关 + 备注 + 分组」chip 流；状态徽章与到期信息各归其行，长昵称按字符折行不超屏。启用 / 停用 / 删除三个按钮在手机上排成一行（各占 1/3），删除紧跟停用。批量操作组改成两列网格（6 个按钮 3 行 2 列），按钮文字不再被压成竖排。号池组（下拉 + 计数 + 两个「移入」）排成一行。 / **Mobile account card layering**: the first row is "checkbox + nickname + version / account-type badges" and the second row is a chip flow of "pool + task switch + note + group"; the state badge and expiry each get their own line, and long nicknames wrap by character instead of overflowing. Enable / Disable / Delete sit on one row on phones (one third each) with Delete right after Disable. The bulk-action group becomes a two-column grid (six buttons over three rows), so button labels are no longer squeezed into vertical text. The pool group (dropdown + counter + two "move" buttons) sits on a single row.
+- **启用 / 停用 / 删除 / 导出统一作用域**：四个「xx 已选」独立按钮移除，能力并进「启用 / 停用 / 删除 / 导出」——有勾选时以勾选为准，没有勾选时以当前筛选结果为准；勾选时按钮上标出数量（如「启用 (2)」），确认框写明本次范围。表头全选框改为作用于当前筛选结果（跨页），三态也按筛选结果回填。 / **One scope for enable / disable / delete / export**: the four "xx selected" buttons are gone and their behaviour folded into Enable / Disable / Delete / Export - checked accounts when anything is selected, otherwise the current filter result; the buttons show the count when a selection exists (e.g. "Enable (2)") and the confirmation dialog names the scope. The header select-all now applies to the whole filter result (across pages) and its tri-state is filled from that same set.
+- **表头文案缩短**：「今日活动」→「活动」、「总 token」→「Token」（全称保留在 `title` 里），省出的宽度给账号列。 / **Shorter header labels**: "Today's activity" -> "Activity" and "Total tokens" -> "Token" (the full wording stays in `title`), freeing width for the account column.
 
 ---
 

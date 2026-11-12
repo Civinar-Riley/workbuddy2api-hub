@@ -24,8 +24,8 @@ const html = dashboardHtml();
 
 /* ---- 1. 结构：按钮与弹窗都在页面上 ------------------------------------- */
 
-assert.ok(/onclick="testAccounts\(this\)"[^>]*>一键测试</.test(html),
-  '工具栏要有一个跑 testAccounts(this) 的「一键测试」按钮');
+assert.ok(/onclick="testAccounts\(this\)"[^>]*>测试</.test(html),
+  '工具栏要有一个跑 testAccounts(this) 的「测试」按钮');
 assert.ok(/id="testAllModal"/.test(html), '结果弹窗 #testAllModal 必须在页面上');
 assert.ok(/id="testAllBody"/.test(html), '结果容器 #testAllBody 必须在页面上');
 assert.ok(/onclick="testAccounts\(null\)"[^>]*>重新测试</.test(html),
@@ -56,6 +56,14 @@ assert.strictEqual(typeof page.testAccounts, 'function', 'dashboard 里要有 te
 assert.strictEqual(typeof page.testAccount, 'function', 'dashboard 里要有 testAccount');
 
 const bodyHtml = () => page.document.getElementById('testAllBody').innerHTML;
+// testAccounts 内部会 loadAccounts()，用返回体覆盖 window.ACCOUNTS；作用范围
+// 依赖 ACCOUNTS，所以每次调用前重新摆好这两个账号。
+const setAccounts = (extra) => {
+  page.ACCOUNTS = [
+    Object.assign({uid: 'cn000001-0000', nickname: '好账号', realm: 'cn', enabled: true}, extra && extra[0]),
+    Object.assign({uid: 'cn000002-0000', nickname: '坏账号', realm: 'cn', enabled: true}, extra && extra[1]),
+  ];
+};
 const modalShown = () => page.document.getElementById('testAllModal').classList.contains('show');
 
 function check(label, ok, detail) {
@@ -82,8 +90,11 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
        status: 429, reply: '', error: 'HTTP 429: 频率限制', network: false, fails: 2},
     ],
   };
-  const btn = {disabled: false, textContent: '一键测试'};
+  const btn = {disabled: false, textContent: '测试'};
   page.VIEW_REALM = 'cn';
+  // 作用范围由 acctScopeUids() 算：没有勾选时是「当前筛选结果」，所以先把两个
+  // 账号放进视图，否则范围为空、按钮只提示不发请求。
+  setAccounts();
   posts.length = 0;
   toasts.length = 0;
   await page.testAccounts(btn);
@@ -93,8 +104,9 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
   check('只发一次测试请求', testPosts.length === 1, JSON.stringify(posts.map(p => p.url)));
   const sent = JSON.parse(testPosts[0].body || '{}');
   check('带上当前视图的 realm', sent.realm === 'cn', JSON.stringify(sent));
-  check('不传 uid（传了就退化成单账号测试）', sent.uid === undefined, JSON.stringify(sent));
-  check('未选分组时不传 group', sent.group === undefined, JSON.stringify(sent));
+  check('不传单数 uid（那是单账号测试的入口）', sent.uid === undefined, JSON.stringify(sent));
+  check('按作用范围点名 uids', Array.isArray(sent.uids) && sent.uids.length === 2,
+    JSON.stringify(sent));
   check('弹窗被打开', modalShown() === true);
   const shown = bodyHtml();
   check('渲染本机连通性', shown.includes('本机网络正常') && shown.includes('www.workbuddy.cn'),
@@ -106,20 +118,33 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
     shown.slice(0, 400));
   check('失败的行给出连续失败次数（离熔断还有多远）', shown.includes('连续失败 2 次'),
     shown.slice(0, 400));
-  check('按钮复位', btn.disabled === false && btn.textContent === '一键测试', btn.textContent);
-  check('toast 报出通过数', toasts.some(t => /一键测试: 1\/2/.test(t.msg)),
+  check('按钮复位', btn.disabled === false && btn.textContent === '测试', btn.textContent);
+  check('toast 报出通过数', toasts.some(t => /测试: 1\/2/.test(t.msg)),
     JSON.stringify(toasts));
 
-  // 2a2. 选中分组时，一键测试只作用于该分组
-  // ACCOUNT_FILTERS is a top-level const, so it is intentionally not exposed
-  // as a window property; evaluate inside the page's own VM context.
+  // 2a2. 选中分组时，作用范围只含该分组的账号（客户端按 ACCOUNT_FILTERS 收敛，
+  // 后端不再吃 group 参数）。ACCOUNT_FILTERS 是顶层 const，不挂 window，所以
+  // 在页面自己的 VM 上下文里赋值。
+  setAccounts([null, {group: 'Team A'}]);
   vm.runInContext("ACCOUNT_FILTERS.group = 'Team A'", page);
   posts.length = 0;
   await page.testAccounts(null);
   const grouped = JSON.parse(
     posts.filter(p => p.url === '/accounts/test')[0].body || '{}');
-  check('选中分组时带上 group', grouped.group === 'Team A', JSON.stringify(grouped));
+  check('分组筛选后只点名该分组的账号',
+    Array.isArray(grouped.uids) && grouped.uids.length === 1
+      && grouped.uids[0] === 'cn000002-0000', JSON.stringify(grouped));
   vm.runInContext("ACCOUNT_FILTERS.group = ''", page);
+
+  // 2a3. 作用范围为空时只提示，不发请求
+  page.ACCOUNTS = [];
+  posts.length = 0;
+  toasts.length = 0;
+  await page.testAccounts(null);
+  check('空范围不发测试请求', posts.filter(p => p.url === '/accounts/test').length === 0,
+    JSON.stringify(posts.map(p => p.url)));
+  check('空范围给出提示', toasts.some(t => t.msg.includes('当前没有可测试的账号')),
+    JSON.stringify(toasts));
 
   // 2b. 本机断网：网络行变红、失败行标成「本机网络」而不是账号失败
   reply = {
@@ -135,6 +160,7 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
     ],
   };
   toasts.length = 0;
+  setAccounts();
   await page.testAccounts(null);
   const down = bodyHtml();
   check('网络行报不通', down.includes('本机网络不通'), down.slice(0, 200));
@@ -154,6 +180,7 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
     results: [{uid: 'cn000003', nickname: '<img src=x onerror=alert(1)>', realm: 'cn',
                ok: true, elapsed_ms: 1, reply: '<b>bold</b>', error: '', network: false}],
   };
+  setAccounts();
   await page.testAccounts(null);
   const escaped = bodyHtml();
   check('昵称里的 HTML 被转义', !escaped.includes('<img'), escaped.slice(0, 400));

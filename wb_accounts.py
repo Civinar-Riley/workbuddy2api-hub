@@ -475,16 +475,30 @@ def checkin_state(code, msg):
     只有 checked / already 能写 last_checkin：写早了（旧实现拿到 HTTP 200 就
     先写盘）会让当天 can_checkin() 恒为 False，这次失败被永久放弃，9 点与
     21 点两轮再也不会重试，面板还显示「今日已领」。
+
+    判定顺序有讲究，不能按 code 分支各判各的：上游重复签到回的是
+    `code=0, msg=今天已签到，请明天再来`（生产实测 1288 条签到记录里 250 条
+    都是它），旧实现只在 code=10001 时才认「已签到」，于是这 250 次都被当成
+    "又签成了一次"，面板还弹「签到成功 (+100积分)」。
+
+    顺序：pending → failed → already → checked。
+    - pending 最先：「请求处理中，请勿重复操作」是明确没签成，且不能落盘；
+    - failed 先于 already：「签到失败，已签到天数不足 7 天」同时含「失败」和
+      「已签到」，语义是失败，不能被 already 抢走；
+    - already 先于 checked：code=0 + 「今天已签到」是"今天早就签过了"，不是
+      本次签到成功，两者要分开展示。
     """
     text = str(msg or "")
     if any(k in text for k in CHECKIN_PENDING_HINTS):
         return "pending"
-    if code == 0:
+    if any(k in text for k in CHECKIN_FAILURE_HINTS):
         # 「失败」是唯一的硬词：CHECKIN_FAILURE_HINTS 之外的口径太宽，
         # 「签到成功，距离 7 天奖励还不足」里的「不足」会把成功判成失败。
-        return "failed" if any(k in text for k in CHECKIN_FAILURE_HINTS) else "checked"
-    if code == 10001:
-        return "already" if any(k in text for k in CHECKIN_ALREADY_HINTS) else "failed"
+        return "failed"
+    if any(k in text for k in CHECKIN_ALREADY_HINTS):
+        return "already"
+    if code == 0:
+        return "checked"
     return "failed"
 
 
@@ -3105,6 +3119,19 @@ class Account(object):
         wb_activity.record_attempt(self, wb_activity.TASK_CHECKIN, trigger, res)
         return res
 
+    def _mark_checkin_done(self, state):
+        """记下「今天签过了」，供 can_checkin() 的当日闸门用。
+
+        already 只在当天还没有记录时才补写：保留当天真实签到时间（可能是 9 点
+        那轮定时器签的），不要被用户晚上又点一次覆盖成点击时刻。
+        """
+        today = time.strftime("%Y-%m-%d")
+        if state == "already" and str(self.last_checkin or "").startswith(today):
+            return
+        self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
+        if self.path and os.path.exists(os.path.dirname(self.path)):
+            self.save(os.path.dirname(self.path))
+
     def _checkin_upstream(self):
         """签到的实际请求；返回形状见 checkin。"""
         cfg = get_realm_config("cn")
@@ -3117,9 +3144,7 @@ class Account(object):
             msg = payload.get("msg") or "ok"
             state = checkin_state(code, msg)
             if state in ("checked", "already"):
-                self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
-                if self.path and os.path.exists(os.path.dirname(self.path)):
-                    self.save(os.path.dirname(self.path))
+                self._mark_checkin_done(state)
                 return {"ok": True, "state": state, "code": code, "msg": msg,
                         "data": payload.get("data")}
             return {"ok": False, "state": state, "code": code, "msg": msg, "error": msg}
@@ -3132,10 +3157,8 @@ class Account(object):
                 # 上游如果在今日已签到时返回 HTTP 400 且文案写「今天已签到」，
                 # 说明今日事实上已处于签到完成状态，按成功处理并记录时间。
                 state = checkin_state(code, msg)
-                if state == "already":
-                    self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
-                    if self.path and os.path.exists(os.path.dirname(self.path)):
-                        self.save(os.path.dirname(self.path))
+                if state in ("checked", "already"):
+                    self._mark_checkin_done(state)
                     return {"ok": True, "state": state, "code": code, "msg": msg,
                             "data": body.get("data")}
                 return {"ok": False, "state": state, "code": code, "msg": msg, "error": msg}
@@ -3268,6 +3291,41 @@ class Account(object):
             "status": acc.get("Status", 0),
         }
 
+    #: 上游 free/paid packages 的 PageSize 上限就是 200（传 500 直接回 400）。
+    PACKAGE_PAGE_SIZE = 200
+    #: 分页兜底上限：10 页 × 200 = 2000 条实例，正常账号一辈子也用不到。
+    PACKAGE_MAX_PAGES = 10
+
+    def _paged_packages(self, url, body, headers):
+        """按页把套餐实例拉全。
+
+        签到与成长计划每天各发一个 100 积分包，一个活跃号两三个月就能攒到 200 条
+        以上；只拉第一页会让后面的实例静默丢失——面板上就是「签到 28 天却看不到
+        任何记录」。任何一页失败只返回已经拿到的部分，不让整次刷新失败。
+        """
+        accounts = []
+        total = None
+        for page in range(1, self.PACKAGE_MAX_PAGES + 1):
+            body_page = dict(body, PageNumber=page, PageSize=self.PACKAGE_PAGE_SIZE)
+            try:
+                res = http_json(url, data=json.dumps(body_page).encode(), method="POST",
+                                headers=headers, timeout=20, proxy=self.proxy)
+            except Exception:
+                break
+            data = res.get("data") or {}
+            chunk = data.get("Accounts") or []
+            if total is None:
+                try:
+                    total = int(data.get("TotalCount"))
+                except (TypeError, ValueError):
+                    total = None
+            accounts.extend(chunk)
+            if len(chunk) < self.PACKAGE_PAGE_SIZE:
+                break
+            if total is not None and len(accounts) >= total:
+                break
+        return accounts
+
     def _fetch_credits_cn_detailed(self):
         cfg = get_realm_config(self.realm)
         headers = self.headers(purpose="billing")
@@ -3314,29 +3372,22 @@ class Account(object):
         summary_pkgs = s_data.get("Packages") or []
         pkg_codes = [p.get("PackageCode") for p in summary_pkgs if p.get("PackageCode")]
 
-        # 2. 免费包
+        # 2. 免费包：Status 必须带 0/1/2/3。
+        #    只查 [0]（有效）会把用光的实例全部滤掉：签到发的 100 积分包一被用完就
+        #    变 status=3，于是「签到 N 天」在明细里一条都看不到，「已用完/过期」这个
+        #    筛选永远是空的。实测同一个号：[0] 只回 5 条，[0,1,2,3] 回 89 条。
         free_accs = []
         if pkg_codes:
             free_url = base_billing + RESOURCE_FREE_PACKAGES_PATH
-            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0]}
-            try:
-                f_res = http_json(free_url, data=json.dumps(body).encode(), method="POST",
-                                  headers=headers, timeout=15, proxy=self.proxy)
-                free_accs = (f_res.get("data") or {}).get("Accounts") or []
-            except Exception:
-                pass
+            free_accs = self._paged_packages(
+                free_url, {"PackageCodes": pkg_codes, "Status": [0, 1, 2, 3]}, headers)
 
         # 3. 付费包
         paid_accs = []
         if pkg_codes:
             paid_url = base_billing + RESOURCE_PAID_PACKAGES_PATH
-            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0, 3], "NeedRenewInfo": True}
-            try:
-                p_res = http_json(paid_url, data=json.dumps(body).encode(), method="POST",
-                                  headers=headers, timeout=15, proxy=self.proxy)
-                paid_accs = (p_res.get("data") or {}).get("Accounts") or []
-            except Exception:
-                pass
+            paid_accs = self._paged_packages(
+                paid_url, {"PackageCodes": pkg_codes, "Status": [0, 3], "NeedRenewInfo": True}, headers)
 
         # 4. 每日签到状态
         checkin_info = None
@@ -3370,12 +3421,15 @@ class Account(object):
         tot_used = sum(p["used"] for p in packages)
         tot_size = sum(p["size"] for p in packages)
 
-        # 若具体包为空且 summary 含有汇总容量，则使用 summaryPkgs
-        if not packages and summary_pkgs:
-            for sp in summary_pkgs:
-                tot_size += float(sp.get("CycleTotalCapacity") or 0)
-                tot_remain += float(sp.get("CycleRemainCapacity") or 0)
-                tot_used += float(sp.get("CycleUsedCapacity") or 0)
+        # 汇总口径：明细列表只是"上游还愿意返回的实例"，签到的 100 积分包用完就变成
+        # status=3 并逐渐被上游回收，对这些实例求和会得到远小于真实累计的数字
+        # （实测同一时刻：列表求和 900 / 500，官方 summary 累计 8863 / 8465）。
+        # resource-summary 的 Packages[] 才是累计值，拿得到就以它为准。
+        sum_size = sum(float(sp.get("CycleTotalCapacity") or 0) for sp in summary_pkgs)
+        sum_used = sum(float(sp.get("CycleUsedCapacity") or 0) for sp in summary_pkgs)
+        sum_remain = sum(float(sp.get("CycleRemainCapacity") or 0) for sp in summary_pkgs)
+        if sum_size > 0:
+            tot_size, tot_used, tot_remain = sum_size, sum_used, sum_remain
 
         tot_remain = round(tot_remain, 2)
         tot_used = round(tot_used, 2)

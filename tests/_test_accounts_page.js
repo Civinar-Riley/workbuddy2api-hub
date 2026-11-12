@@ -127,13 +127,15 @@ assert.ok(/if\(tab === 'accounts' && !_accountsSeparateTab\) tab = window\.__NEX
 // 按钮在账号工具栏里，紧跟「一键分配代理」
 assert.ok(/id="btnProductAll"[^>]*onclick="cycleAllProducts\(this\)"/.test(html),
   '账号工具栏缺少「一键切换所有出站身份」按钮');
-assert.ok(/一键分配代理<\/button>\s*<button class="sec" id="btnProductAll"/.test(html),
-  '按钮应排在「一键分配代理」之后');
+assert.ok(/分配代理<\/button>\s*<button class="sec" id="btnProductAll"/.test(html),
+  '按钮应排在「分配代理」之后');
 // 当前身分要有个能定位的节点，不能只留一段裸文本（否则 JS 改不动它）
 assert.ok(html.includes('<span id="productAllLabel">'), '按钮上的当前身分缺少可定位节点');
-// 批量靠「不带 uid」：带上 uid 就退化成单账号切换
-assert.ok(/postJSON\('\/accounts\/product', \{product: next\}\)/.test(script),
-  '批量切换只应提交 product，不能带 uid');
+// 作用范围由 acctScopeUids() 决定（有勾选取勾选，否则当前筛选结果），因此提交
+// 时必须带 uids 点名；不带 uids 会退化成全池切换。
+assert.ok(/postJSON\('\/accounts\/product', \{product: next, uids: list\.map\(a => a\.uid\)\}\)/
+    .test(script),
+  '批量切换应提交 product + uids 点名');
 // 身分取值与轮转顺序必须与服务端 wb_identity.VALID_PRODUCTS 一致
 assert.ok(/PRODUCT_ORDER = \['workbuddy', 'vscode', 'cli'\]/.test(script),
   '轮转顺序应与服务端身分取值一致');
@@ -193,10 +195,11 @@ try {
       setAccountErrorFilter: setAccountErrorFilter,
       selectFilteredAccounts: selectFilteredAccounts,
       selectedAccountsForBulk: selectedAccountsForBulk,
-      exportSelectedAccounts: exportSelectedAccounts,
-      setSelectedEnabled: setSelectedEnabled,
+      setAll: setAll,
+      exportAccounts: exportAccounts,
+      toggleAcctSelAll: toggleAcctSelAll,
       updateBatchPoolBar: updateBatchPoolBar,
-      deleteSelectedAccounts: deleteSelectedAccounts,
+      deleteAccounts: deleteAccounts,
       clearAccountSelection: clearAccountSelection,
       ACCOUNT_FILTERS: ACCOUNT_FILTERS,
       ACCOUNT_SELECTED: ACCOUNT_SELECTED,
@@ -256,8 +259,7 @@ function check(label, ok, detail){
       JSON.stringify(['a-11140', 'b-11140']),
     JSON.stringify([...api.ACCOUNT_SELECTED]));
 
-  POSTS = [];
-  window.ACCOUNTS = [
+  const SEED = () => ([
     {uid: 'a-11140', nickname: 'A', realm: 'intl', enabled: false,
      accountBanned: true,
      lastErrorDetail: '{"code":11140,"msg":"restricted"}'},
@@ -268,88 +270,115 @@ function check(label, ok, detail){
      lastError: 'HTTP 429 · code:6004'},
     {uid: 'd-cn', nickname: 'D', realm: 'cn', enabled: true,
      lastErrorDetail: '{"code":11140}'},
-  ];
-  await api.setSelectedEnabled(true, {disabled: false});
-  const enableCall = POSTS.find(p => p.url === '/accounts/set-all');
-  const enableBody = enableCall ? JSON.parse(enableCall.body) : {};
-  check('启用已选只提交勾选的 uids',
-    enableCall && enableBody.enabled === true &&
-      JSON.stringify(enableBody.uids.slice().sort()) ===
-        JSON.stringify(['a-11140', 'b-11140']),
-    JSON.stringify(POSTS));
+  ]);
+  const lastSetAll = () => {
+    const call = POSTS.filter(p => p.url === '/accounts/set-all').pop();
+    return call ? JSON.parse(call.body) : {};
+  };
+  const uidsOf = body => (body.uids || []).slice().sort();
 
+  /* 启用 / 停用 / 导出 / 删除 是同一套作用域：有勾选就是勾选的号，没有勾选
+     就是当前筛选结果。上一版把这些能力拆成四个「xx 已选」按钮，没有勾选时
+     全是灰的，什么也做不了。 */
+
+  // a) 有勾选：只作用于勾选的账号。
+  window.ACCOUNTS = SEED();
+  api.clearAccountSelection();
+  api.setAccountErrorFilter('11140');
   POSTS = [];
-  window.ACCOUNTS = [
-    {uid: 'a-11140', nickname: 'A', realm: 'intl', enabled: false,
-     accountBanned: true,
-     lastErrorDetail: '{"code":11140,"msg":"restricted"}'},
-    {uid: 'b-11140', nickname: 'B', realm: 'intl', enabled: false,
-     accountBanned: true,
-     lastError: 'HTTP 403 · code:11140'},
-    {uid: 'c-6004', nickname: 'C', realm: 'intl', enabled: true,
-     lastError: 'HTTP 429 · code:6004'},
-    {uid: 'd-cn', nickname: 'D', realm: 'cn', enabled: true,
-     lastErrorDetail: '{"code":11140}'},
-  ];
-  await api.setSelectedEnabled(false, {disabled: false});
-  const disableCall = POSTS.find(p => p.url === '/accounts/set-all');
-  const disableBody = disableCall ? JSON.parse(disableCall.body) : {};
-  check('停用已选只提交勾选的 uids',
-    disableCall && disableBody.enabled === false &&
-      JSON.stringify(disableBody.uids.slice().sort()) ===
-        JSON.stringify(['a-11140', 'b-11140']),
+  await api.setAll(true, {disabled: false});
+  check('启用：有勾选时只提交勾选的 uids',
+    lastSetAll().enabled === true &&
+      JSON.stringify(uidsOf(lastSetAll())) === JSON.stringify(['a-11140', 'b-11140']),
     JSON.stringify(POSTS));
 
+  window.ACCOUNTS = SEED();
+  POSTS = [];
+  await api.setAll(false, {disabled: false});
+  check('停用：有勾选时只提交勾选的 uids',
+    lastSetAll().enabled === false &&
+      JSON.stringify(uidsOf(lastSetAll())) === JSON.stringify(['a-11140', 'b-11140']),
+    JSON.stringify(POSTS));
+
+  // b) 没有勾选：作用于当前筛选结果（当前视图内，国内版不参与）。
+  window.ACCOUNTS = SEED();
+  api.setAccountErrorFilter('');
+  api.clearAccountSelection();
+  POSTS = [];
+  await api.setAll(true, {disabled: false});
+  check('启用：没有勾选时作用于当前筛选结果的全部账号',
+    JSON.stringify(uidsOf(lastSetAll())) ===
+      JSON.stringify(['a-11140', 'b-11140', 'c-6004']),
+    JSON.stringify(lastSetAll()));
+
+  window.ACCOUNTS = SEED();
+  api.setAccountErrorFilter('');
+  api.clearAccountSelection();
+  POSTS = [];
+  await api.setAll(false, {disabled: false});
+  check('停用：没有勾选时作用于当前筛选结果的全部账号',
+    lastSetAll().enabled === false &&
+      JSON.stringify(uidsOf(lastSetAll())) ===
+        JSON.stringify(['a-11140', 'b-11140', 'c-6004']),
+    JSON.stringify(lastSetAll()));
+
+  // c) 导出：同一套作用域。
+  window.ACCOUNTS = SEED();
+  api.clearAccountSelection();
+  api.setAccountErrorFilter('11140');
   REQUESTS = [];
-  window.ACCOUNTS = [
-    {uid: 'a-11140', nickname: 'A', realm: 'intl', enabled: false,
-     accountBanned: true,
-     lastErrorDetail: '{"code":11140,"msg":"restricted"}'},
-    {uid: 'b-11140', nickname: 'B', realm: 'intl', enabled: false,
-     accountBanned: true,
-     lastError: 'HTTP 403 · code:11140'},
-    {uid: 'c-6004', nickname: 'C', realm: 'intl', enabled: true,
-     lastError: 'HTTP 429 · code:6004'},
-    {uid: 'd-cn', nickname: 'D', realm: 'cn', enabled: true,
-     lastErrorDetail: '{"code":11140}'},
-  ];
   RESPONSE = {count: 2, accounts: window.ACCOUNTS, rows: [], total: 0};
-  await api.exportSelectedAccounts({disabled: false});
-  check('导出已选把每个勾选账号都写进 uid 查询串',
+  await api.exportAccounts({disabled: false});
+  check('导出：有勾选时只导出勾选的账号',
     REQUESTS.some(u => u.indexOf('/accounts/export?uid=a-11140&uid=b-11140') === 0),
     JSON.stringify(REQUESTS));
-  api.setAccountErrorFilter('11140');
-  window.ACCOUNTS = [
-    {uid: 'a-11140', nickname: 'A', realm: 'intl', enabled: false,
-     accountBanned: true,
-     lastErrorDetail: '{"code":11140,"msg":"restricted"}'},
-    {uid: 'b-11140', nickname: 'B', realm: 'intl', enabled: false,
-     accountBanned: true,
-     lastError: 'HTTP 403 · code:11140'},
-    {uid: 'c-6004', nickname: 'C', realm: 'intl', enabled: true,
-     lastError: 'HTTP 429 · code:6004'},
-    {uid: 'd-cn', nickname: 'D', realm: 'cn', enabled: true,
-     lastErrorDetail: '{"code":11140}'},
-  ];
 
+  window.ACCOUNTS = SEED();
+  api.clearAccountSelection();
+  api.setAccountErrorFilter('');
+  REQUESTS = [];
+  await api.exportAccounts({disabled: false});
+  check('导出：没有勾选时导出当前筛选结果的全部账号',
+    REQUESTS.some(u => u.indexOf('/accounts/export?uid=a-11140&uid=b-11140&uid=c-6004') === 0),
+    JSON.stringify(REQUESTS));
+
+  // d) 删除：同一套作用域，没有勾选时删的是整屏筛选结果。
+  window.ACCOUNTS = SEED();
   api.clearAccountSelection();
   api.setAccountErrorFilter('');
   POSTS = [];
-  await api.deleteSelectedAccounts({disabled: false});
-  check('没有勾选账号时不发删除请求', POSTS.length === 0, JSON.stringify(POSTS));
+  await api.deleteAccounts({disabled: false});
+  check('删除：没有勾选时删除当前筛选结果的全部账号',
+    POSTS.filter(p => p.url === '/accounts/delete')
+      .map(p => JSON.parse(p.body).uid).sort().join(',') ===
+        'a-11140,b-11140,c-6004',
+    JSON.stringify(POSTS));
 
+  window.ACCOUNTS = SEED();
+  api.clearAccountSelection();
   api.setAccountErrorFilter('11140');
-  api.selectFilteredAccounts({disabled: false});
   POSTS = [];
-  await api.deleteSelectedAccounts({disabled: false});
-  check('删除已选逐个走 /accounts/delete',
-    POSTS.filter(p => p.url === '/accounts/delete').length === 2 &&
+  await api.deleteAccounts({disabled: false});
+  check('删除：有勾选时只删除勾选的账号',
     POSTS.filter(p => p.url === '/accounts/delete')
       .map(p => JSON.parse(p.body).uid).sort().join(',') === 'a-11140,b-11140',
     JSON.stringify(POSTS));
   check('删除成功后清空已选状态', api.ACCOUNT_SELECTED.size === 0,
     JSON.stringify([...api.ACCOUNT_SELECTED]));
   api.ACCOUNT_FILTERS.errorCode = '';
+
+  // e) 表头全选 = 当前筛选结果全选（跨页），不是只选本页。
+  window.ACCOUNTS = SEED();
+  api.clearAccountSelection();
+  api.setAccountErrorFilter('');
+  api.toggleAcctSelAll({checked: true});
+  check('表头全选覆盖当前筛选结果的全部账号（含未显示的分页）',
+    JSON.stringify([...api.ACCOUNT_SELECTED].sort()) ===
+      JSON.stringify(['a-11140', 'b-11140', 'c-6004']),
+    JSON.stringify([...api.ACCOUNT_SELECTED]));
+  api.toggleAcctSelAll({checked: false});
+  check('表头取消全选清空筛选结果内的勾选', api.ACCOUNT_SELECTED.size === 0,
+    JSON.stringify([...api.ACCOUNT_SELECTED]));
 
   // 2a. 默认筛选：近 7 天、100 行；没有记录时给出空态而不是一张空表
   el('activityRange').value = '7d';

@@ -119,7 +119,7 @@ check('发放原因显示在名称列的悬停提示里',
 api.renderCreditGrants({ok: true, rows: [], summary: {}, fetched_iso: null});
 check('空载荷给空状态', tbody.innerHTML.includes('暂无积分获取记录'), tbody.innerHTML);
 check('空载荷时摘要说明怎么办',
-      summaryEl.textContent.includes('一键刷新积分'), summaryEl.textContent);
+      summaryEl.textContent.includes('刷新积分'), summaryEl.textContent);
 
 // ---- 3. loadCreditGrants() 打的就是这个接口 --------------------------------
 requested.length = 0;

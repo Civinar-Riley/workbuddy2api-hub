@@ -12,6 +12,7 @@ import io
 import os
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -40,9 +41,13 @@ class CheckinStateTests(unittest.TestCase):
     def test_state_table(self):
         cases = [
             (0, "success", "checked"),
+            (0, "OK", "checked"),
             (0, "签到成功，距离 7 天奖励还不足", "checked"),   # 「不足」不能判失败
             (0, "签到失败，已签到天数不足 7 天", "failed"),     # code=0 但文案说失败
             (10001, "今天已签到", "already"),
+            # 生产实测：重复签到时上游回的是 code=0 + 这句，旧实现判成 checked，
+            # 面板于是弹「签到成功 (+100积分)」，其实一个积分都没加。
+            (0, "今天已签到，请明天再来", "already"),
             (10001, "请求处理中，请勿重复操作", "pending"),
             (10001, "每人限领一次，您已领取过", "failed"),      # 补偿码，不是签到
             (11140, "restricted", "failed"),
@@ -84,6 +89,25 @@ class CheckinWriteGateTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["state"], "pending")
         self.assertEqual(last, "")       # 不写盘，当天 9 点 / 21 点还能重试
+
+    def test_already_keeps_todays_real_checkin_time(self):
+        """今天早上定时器签的 09:00:31 不能被晚上手点那次覆盖成点击时刻。"""
+        with tempfile.TemporaryDirectory(prefix="checkin-") as directory:
+            account = _account(directory)
+            account.last_checkin = time.strftime("%Y-%m-%d") + " 09:00:31"
+            with mock.patch.object(wb_accounts, "http_json",
+                                   return_value={"code": 0, "msg": "今天已签到，请明天再来"}):
+                result = account._checkin_upstream()
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["state"], "already")
+            self.assertTrue(account.last_checkin.endswith("09:00:31"))
+
+    def test_already_still_fills_a_missing_record(self):
+        """本机没有当天记录时仍要补写，否则定时器当天还会再问一次上游。"""
+        result, last = self._run(payload={"code": 0, "msg": "今天已签到，请明天再来"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "already")
+        self.assertNotEqual(last, "")
 
     def test_code_zero_with_failure_text_is_not_a_success(self):
         result, last = self._run(payload={"code": 0, "msg": "签到失败，已签到天数不足 7 天"})

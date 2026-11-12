@@ -182,4 +182,132 @@ ok('全宽判定只认显式 width:100%，不信 computed display', () => {
     'enhance must carry the native max-width onto the wrapper');
 });
 
+/* ── 5. 长列表搜索 ───────────────────────────────────────────
+ * 账号下拉一眼几十条，逐项翻找比打字慢。搜索框只做「隐藏不匹配的行」，
+ * data-idx 始终指向真实 options 下标——这样选中逻辑不必区分有没有过滤，
+ * 也不会因为过滤把 value 换成可见行的序号。
+ */
+
+ok('搜索的 CSS 与隐藏规则齐备', () => {
+  for (const cls of ['.cs-search{', '.cs-search-input{', '.cs-opt.cs-hidden{']) {
+    assert.ok(html.includes(cls), 'missing CSS rule ' + cls);
+  }
+  // 面板顶部吸顶，滚动选项时搜索框不跟着走
+  assert.ok(/\.cs-search\{[^}]*position:sticky/.test(html), 'search box must be sticky');
+});
+
+ok('账号下拉支持显式搜索开关', () => {
+  assert.ok(/data-cs-search/.test(script), 'the custom select must expose a search switch');
+  assert.ok(/flag === 'on'/.test(script), 'data-cs-search="on" must force search');
+});
+
+ok('搜索开关：阈值 + 显式 on/off', () => {
+  const fn = script.slice(script.indexOf('function wantsSearch'),
+                          script.indexOf('function visibleRows'));
+  assert.ok(fn.includes('data-cs-search'), 'wantsSearch must read the opt-in attribute');
+  assert.ok(/flag === 'off'/.test(fn), 'data-cs-search="off" must disable search');
+  assert.ok(/flag === 'on'/.test(fn), 'data-cs-search="on" must force search');
+  assert.ok(fn.includes('SEARCH_MIN'), 'plain selects fall back to an option-count threshold');
+});
+
+ok('面板重建时先放搜索框，行上带可搜索的标签', () => {
+  const fn = script.slice(script.indexOf('function buildPanel'),
+                          script.indexOf('function positionPanel'));
+  assert.ok(fn.includes('wantsSearch(sel)'), 'buildPanel must ask whether search is wanted');
+  assert.ok(fn.includes('buildSearch('), 'buildPanel must prepend the search box');
+  assert.ok(fn.includes("setAttribute('data-label'"), 'rows need data-label for filtering');
+});
+
+ok('过滤按标签做子串匹配，并给出空结果提示', () => {
+  const fn = script.slice(script.indexOf('function applyFilter'),
+                          script.indexOf('function buildSearch'));
+  assert.ok(fn.includes('cs-hidden'), 'applyFilter must toggle cs-hidden');
+  assert.ok(fn.includes('toLowerCase'), 'filter must be case-insensitive');
+  assert.ok(fn.includes('没有匹配项'), 'a filtered-to-nothing panel needs an empty hint');
+});
+
+ok('键盘只在可见行里移动，Enter 按 data-idx 选中', () => {
+  assert.ok(script.includes('function visibleRows'), 'missing visibleRows()');
+  const fn = script.slice(script.indexOf('function buildSearch'),
+                          script.indexOf('function buildPanel'));
+  assert.ok(fn.includes('visibleRows('), 'search keyboard nav must skip hidden rows');
+  assert.ok(fn.includes("getAttribute('data-idx')"), 'Enter must pick by data-idx');
+  const trigger = script.slice(script.indexOf("trg.addEventListener('keydown'"),
+                               script.indexOf("wrap.addEventListener('click'"));
+  assert.ok(trigger.includes('visibleRows('), 'trigger keyboard nav must skip hidden rows');
+  assert.ok(!/pick\(sel, wrap, j\)/.test(trigger),
+    'trigger Enter must not pass the visible-row index as the option index');
+});
+
+ok('每次打开重置查询并聚焦搜索框', () => {
+  const fn = script.slice(script.indexOf('function openWrap_'),
+                          script.indexOf('function pick('));
+  assert.ok(fn.includes('cs-search-input'), 'openWrap_ must find the search input');
+  assert.ok(fn.includes("input.value = ''"), 'openWrap_ must clear the previous query');
+  assert.ok(fn.includes('input.focus()'), 'openWrap_ should focus the search box');
+  assert.ok(fn.includes("querySelectorAll('.cs-opt')"),
+    'openWrap_ must scroll the selected ROW, not children[selectedIndex] (search box shifted it)');
+});
+
+/* 行为：直接跑过滤函数，确认隐藏 / 空态 / 大小写都按契约来。 */
+ok('过滤行为：命中、全不中、清空', () => {
+  const dom = require('./_dom_stub.js');
+  dom.installDom();
+  const sliceFrom = script.indexOf('var SEARCH_MIN');
+  const sliceTo = script.indexOf('function buildSearch');
+  assert.ok(sliceFrom > 0 && sliceTo > sliceFrom, 'cannot slice the search helpers');
+  const api = new Function('document',
+    script.slice(sliceFrom, sliceTo)
+    + '\nreturn {wantsSearch: wantsSearch, visibleRows: visibleRows, applyFilter: applyFilter};'
+  )(document);
+
+  const labels = ['全部国内账号 (批量)', '130****1913 (009960)', 'Codex CLI'];
+  const rows = labels.map((label, i) => {
+    const row = dom.makeElement('div');
+    row.className = 'cs-opt';
+    row.setAttribute('data-label', label);
+    row.setAttribute('data-idx', String(i));
+    return row;
+  });
+  // 桩的 querySelector 是查表：真实 DOM 会找到刚 append 的空态节点，这里在
+  // 节点建出来之后把表补上，行为与浏览器一致。
+  const found = {'.cs-filter-empty': null};
+  const panel = dom.makeElement('div', {
+    querySelector: found,
+    querySelectorAll: {'.cs-opt': rows},
+  });
+  const wrap = dom.makeElement('span', {querySelector: {'.cs-panel': panel}});
+
+  api.applyFilter(wrap, '1913');
+  assert.ok(!rows[1].classList.contains('cs-hidden'), 'hit row stays visible');
+  assert.ok(rows[0].classList.contains('cs-hidden'), 'miss row is hidden');
+  assert.deepStrictEqual(api.visibleRows(panel), [rows[1]], 'visibleRows follows the filter');
+
+  api.applyFilter(wrap, '  codex  ');
+  assert.strictEqual(api.visibleRows(panel).length, 1, 'query is trimmed and case-insensitive');
+  assert.ok(rows[2].classList.contains('cs-hidden') === false, 'Codex matches CODE/ codex');
+
+  api.applyFilter(wrap, 'zzzz');
+  assert.strictEqual(api.visibleRows(panel).length, 0, 'no match leaves no visible rows');
+  const empty = panel.children[panel.children.length - 1];
+  assert.ok(empty && empty.className.includes('cs-filter-empty'), 'empty hint is appended');
+  assert.ok(empty.textContent.includes('没有匹配项'), 'empty hint explains the state');
+  assert.ok(empty.style.display === '', 'empty hint is shown');
+  found['.cs-filter-empty'] = empty;
+
+  api.applyFilter(wrap, '');
+  assert.strictEqual(api.visibleRows(panel).length, 3, 'clearing the query restores every row');
+  assert.ok(empty.style.display === 'none', 'empty hint hides again');
+
+  // 阈值与显式开关
+  const mk = (flag, n) => ({
+    getAttribute: (k) => (k === 'data-cs-search' ? flag : null),
+    options: {length: n},
+  });
+  assert.strictEqual(api.wantsSearch(mk('on', 2)), true, 'explicit on wins over a short list');
+  assert.strictEqual(api.wantsSearch(mk('off', 40)), false, 'explicit off wins over a long list');
+  assert.strictEqual(api.wantsSearch(mk(null, 3)), false, 'short list gets no search box');
+  assert.strictEqual(api.wantsSearch(mk(null, 12)), true, 'long list gets a search box');
+});
+
 console.log('\n  ' + passed + ' assertions passed (custom select)');

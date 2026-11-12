@@ -31,6 +31,7 @@ logs/
 
 # 测试套件输出（tests/run_all.py --logs 落盘的每个套件的完整输出）
 suite-logs/
+suite-logs-*/
 
 # 便携版内置运行时（仓库只保存纯源码，绿色包通过 Release 发布）
 python/
@@ -60,6 +61,8 @@ bin/wb-tls-bridge*
 __pycache__/
 *.py[cod]
 *$py.class
+# PowerShell 里误写 `$null` 会生成这个零字节文件；它从来不是项目产物
+$null
 
 # 系统与编辑器文件
 .DS_Store
