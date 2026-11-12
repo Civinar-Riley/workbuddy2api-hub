@@ -2976,6 +2976,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '已暂停': 'Paused',
     '已暂停监听': 'Paused',
     '已有包过期': 'Some packages have expired',
+    '累计消耗': 'Total spent',
     '已消耗积分': 'Credits spent',
     '已用': 'Used',
     '已用完/过期': 'Exhausted / expired',
@@ -3057,6 +3058,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '总容量最大': 'Most total capacity',
     '总积分': 'Total credits',
     '总额度': 'Total quota',
+    '累计发放': 'Total granted',
     '总额度容量': 'Total quota capacity',
     '恢复': 'Restore',
     '成功率': 'Success rate',
@@ -8476,11 +8478,11 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
             <div id="cmMetricRemain" style="font-size:22px;font-weight:700;color:var(--accent2);margin-top:4px">-</div>
           </div>
           <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
-            <div style="font-size:11px;color:var(--dim)">已消耗积分</div>
+            <div style="font-size:11px;color:var(--dim)">累计消耗</div>
             <div id="cmMetricUsed" style="font-size:22px;font-weight:700;color:var(--fg);margin-top:4px">-</div>
           </div>
           <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
-            <div style="font-size:11px;color:var(--dim)">总额度容量</div>
+            <div style="font-size:11px;color:var(--dim)">累计发放</div>
             <div id="cmMetricTotal" style="font-size:22px;font-weight:700;color:var(--fg);margin-top:4px">-</div>
           </div>
           <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
@@ -14547,7 +14549,11 @@ function renderCreditsPackagesTable(){
       cycle_end_time: endTime,
       days_left: days,
       no_expiry: noExpiry,
-      is_expired: isExpired
+      is_expired: isExpired,
+      /* status 3 = 上游标记为失效/用完。这类实例不会出现在「有效」查询里，但用户
+         想知道「签到这么多天到底发了多少」，所以必须显示出来并归到「已用完/过期」。 */
+      status: p.status !== undefined && p.status !== null ? Number(p.status) : null,
+      is_exhausted: isExpired || pRemain <= 0 || Number(p.status) === 3
     };
   });
 
@@ -14563,7 +14569,7 @@ function renderCreditsPackagesTable(){
       if(isExpired || remain <= 0) return false;
       if(daysLeft === null || daysLeft > 7) return false;
     } else if(CURRENT_PKG_FILTER === 'exhausted'){
-      if(remain > 0 && !isExpired) return false;
+      if(!p.is_exhausted) return false;
     }
 
     if(CURRENT_PKG_SEARCH){
@@ -14655,6 +14661,9 @@ function renderCreditsPackagesTable(){
     }
     if(p.auto_renew){
       statusTags += '<span class="badge mini ok" style="margin-left:4px;font-size:10px">自动续费</span>';
+    }
+    if(p.is_exhausted && !p.is_expired){
+      statusTags += '<span class="badge mini off" style="margin-left:4px;font-size:10px">已用完</span>';
     }
 
     const barColor = pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--accent)";
