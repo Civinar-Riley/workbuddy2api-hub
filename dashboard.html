@@ -489,6 +489,22 @@ table.account-cards tr.cool-row .cool-pill{display:inline-block;width:auto;max-w
 }
 
 .acct-actions-col{display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center}
+/* 分組檢視：每組一列標題（可折疊）+ 一節帳號。標題列不是帳號行——colspan 佔滿整行，
+   窄屏卡片模式也不能給它套「欄名: 值」的伪元素。 */
+table.account-cards tr.acct-group-row td{background:var(--panel2);border-top:1px solid var(--line);
+  padding:5px 12px;text-align:left}
+table.account-cards tr.acct-group-row td::before{content:none}
+.acct-group-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.acct-group-toggle{display:inline-flex;align-items:center;gap:7px;background:transparent;
+  border:none;box-shadow:none;padding:2px;color:var(--fg);font-size:12.5px;font-weight:600;cursor:pointer}
+.acct-group-toggle:hover{background:transparent;color:var(--accent)}
+.acct-group-caret{width:7px;height:7px;border-right:1.6px solid currentColor;
+  border-bottom:1.6px solid currentColor;transform:translateY(-1px) rotate(45deg);
+  transition:transform .15s ease}
+.acct-group-toggle[aria-expanded="false"] .acct-group-caret{transform:translateY(-1px) rotate(-45deg)}
+.acct-group-count{color:var(--dim);font-size:11.5px;font-variant-numeric:tabular-nums}
+.acct-group-actions{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.acct-group-head .sec{padding:3px 9px;font-size:11px}
 .acct-actions-row{display:flex;gap:4px;justify-content:center}
 /* 账号列（accountRow）：账号名 + 备注 chip 一行、次要信息一行、报错一行。
    次要信息与报错的完整值都在 data-tip 悬浮气泡里。 */
@@ -1927,8 +1943,10 @@ html:not([data-console-layout="on"]) .console-sidebar,
 html:not([data-console-layout="on"]) .console-scrim,
 html:not([data-console-layout="on"]) .console-contextbar,
 html:not([data-console-layout="on"]) .console-insights {display:none!important}
-/* 新导航本身不使用 console-layout；筛选栏仍属于内容区，不能被旧布局规则隐藏。 */
-html:not([data-console-layout="on"]):not([data-ui="next"]) .console-filterbar {display:none!important}
+/* 新导航本身不使用 console-layout；筛选栏仍属于内容区，不能被旧布局规则隐藏。
+   账号页的筛选条单列豁免：搜索、状态、分组、错误码都在里面，整条藏掉之后默认
+   布局里「按分组找账号」就没有入口了（分組檢視截圖反饋）。 */
+html:not([data-console-layout="on"]):not([data-ui="next"]) .console-filterbar:not(.acct-filterbar) {display:none!important}
 html:not([data-console-layout="on"]) .header-left .console-nav-group {display:contents}
 html:not([data-console-layout="on"]) .header-left .console-nav-caption,
 html:not([data-console-layout="on"]) .header-left .console-nav-link {display:none!important}
@@ -1941,6 +1959,24 @@ html:not([data-console-layout="on"]) #btnNavAgents {order:6}
 html:not([data-console-layout="on"]) #btnNavSettings {order:7}
 html:not([data-console-layout="on"]) #btnNavLogs {order:8}
 html[data-console-layout="on"] #classicTitle {display:none}
+/* 账号筛选条：默认布局也要能用。console 那两套样式表默认 media="not all"，
+   关掉 console 布局后筛选条既没有外观、又会被上面的规则藏起来；而分组下拉
+   （「按分组找账号」的唯一入口）就在这条里，所以给 .acct-filterbar 一份不依赖
+   它们的基线样式。 */
+.acct-filterbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin:12px 0;padding:10px 12px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px}
+.acct-filterbar input,.acct-filterbar select{background:var(--panel);
+  border:1px solid var(--line-hover);border-radius:8px;padding:6px 9px;
+  color:var(--fg);font:inherit;font-size:12px}
+.acct-filterbar .console-search{flex:1 1 220px;min-width:170px}
+.acct-filterbar select{min-width:120px;max-width:200px}
+.acct-filterbar button{min-height:30px}
+.acct-filterbar .console-filter-count{font-size:12px;color:var(--dim);white-space:nowrap}
+@media (max-width:700px){
+  .acct-filterbar{flex-direction:column;align-items:stretch}
+  .acct-filterbar .console-search,.acct-filterbar select{width:100%;max-width:none}
+}
 </style>
 <script>
 var defaultConsoleLayout = true;
@@ -2360,6 +2396,24 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '个需要人工关注': 'need attention',
     '个）': ')',
     '个，启用': ', enabled',
+    // 分組檢視（账号列表按分组分节）
+    '按分组查看': 'Group view',
+    '平铺查看': 'Flat view',
+    '未分组': 'Ungrouped',
+    '本组启用': 'Enable group',
+    '本组停用': 'Disable group',
+    '只看此组': 'Only this group',
+    '未归组的账号没有服务端分组，先给它们设一个分组': 'Ungrouped accounts carry no server-side group - set one on them first',
+    '未分组的账号没有服务端分组，先给它们设置分组再批量启停': 'Ungrouped accounts carry no server-side group - set one before bulk enabling or disabling',
+    '按分组把账号列表切成可折叠的小节；想改分组，点每行账号上的「分组」': 'Split the account list into collapsible sections by group; edit a group from the group chip on each account row',
+    // 账号筛选条（默认布局可见，所以要能整句翻，不能靠词块拼）
+    '搜索昵称、备注或 UID': 'Search nickname, note or UID',
+    '账号状态': 'Account status',
+    '账号分组': 'Account group',
+    '全部分组': 'All groups',
+    ' 个，启用 ': ' · enabled ',
+    '显示 ': 'Showing ',
+    '选择错误码会自动勾选全部命中账号；选中分组后，刷新、测试、补积分和启停仍只作用于该分组': 'Picking an error code selects every matching account; with a group selected, refresh, test, credits and enable/disable still apply to that group only',
     '临期': 'Expiring',
     '为每个 Key 绑定专属出口。客户端使用该 Key 请求将固定走对应区域，实现双出口并发。': 'Bind a dedicated exit to each key. Requests made with that key always take the matching region, so both exits run concurrently.',
     '人工映射表 OVERRIDES': 'Manual mapping table OVERRIDES',
@@ -4471,6 +4525,20 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "开启后桌面 chat 使用 SDK 兼容请求头，并在当前用户消息中补充会话字段。默认关闭。环境变量 WB_DESKTOP_CHAT_COMPAT 设置后会覆盖这里的值。": "開啟後桌面 chat 使用 SDK 相容請求標頭，並在目前使用者訊息中補充會話欄位。預設關閉。環境變數 WB_DESKTOP_CHAT_COMPAT 設定後會覆蓋這裡的值。",
     "启用桌面 chat 兼容头": "啟用桌面 chat 相容標頭",
     "(默认关闭)": "(預設關閉)",
+    "按分组查看": "按分組查看",
+    "平铺查看": "平鋪查看",
+    "本组启用": "本組啟用",
+    "本组停用": "本組停用",
+    "只看此组": "只看此組",
+    "未分组": "未分組",
+    "未归组的账号没有服务端分组，先给它们设一个分组": "未歸組的帳號沒有服務端分組，先給它們設一個分組",
+    "未分组的账号没有服务端分组，先给它们设置分组再批量启停": "未分組的帳號沒有服務端分組，先給它們設定分組再批次啟停",
+    "按分组把账号列表切成可折叠的小节；想改分组，点每行账号上的「分组」": "按分組把帳號清單切成可摺疊的小節；想改分組，點每行帳號上的「分組」",
+    "搜索昵称、备注或 UID": "搜尋暱稱、備註或 UID",
+    "账号状态": "帳號狀態",
+    "账号分组": "帳號分組",
+    "全部分组": "全部分組",
+    "选择错误码会自动勾选全部命中账号；选中分组后，刷新、测试、补积分和启停仍只作用于该分组": "選擇錯誤碼會自動勾選全部命中帳號；選中分組後，刷新、測試、補積分和啟停仍只作用於該分組",
     "已启用：桌面 chat 兼容头": "已啟用：桌面 chat 相容標頭",
     "已关闭桌面 chat 兼容头": "已關閉桌面 chat 相容標頭"
   };
@@ -5999,7 +6067,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     </h2>
     <div id="accountsBody" class="collapse">
       <div class="collapse-inner">
-    <div class="console-filterbar" aria-label="账号列表筛选">
+    <div class="console-filterbar acct-filterbar" aria-label="账号列表筛选">
       <input id="accountSearchFilter" class="console-search" type="search" placeholder="搜索昵称、备注或 UID" aria-label="搜索账号" oninput="ACCOUNT_FILTERS.query=this.value;clearAccountSelection();renderAccounts()">
       <select id="accountStatusFilter" aria-label="账号状态" onchange="ACCOUNT_FILTERS.status=this.value;clearAccountSelection();renderAccounts()">
         <option value="">全部状态</option><option value="healthy">可用</option><option value="attention">需关注</option><option value="disabled">本地停用</option>
@@ -6078,6 +6146,9 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     </span>
     <button class="sec" onclick="setCurrentGroup(true, this)">当前分组启用</button>
     <button class="sec" onclick="setCurrentGroup(false, this)">当前分组停用</button>
+    <!-- 分组视图只换看法；分组本身仍在每行的「分组」chip 上设置。 -->
+    <button class="sec" id="btnAcctGroupView" onclick="toggleAccountGroupView(this)" aria-pressed="false"
+             title="按分组把账号列表切成可折叠的小节；想改分组，点每行账号上的「分组」">按分组查看</button>
     </div>
     </div>
   </div>
@@ -12301,7 +12372,9 @@ function accountsRenderFp(){
   // （今日活动列）、视图区域、页码、表头排序、筛选条件、本地日期（「今日」口径）。
   // 筛选也进指纹：不靠「改筛选一定无参调用 renderAccounts()」这条约定兜底。
   return [
-    window.VIEW_REALM || 'intl', ACCT_PAGE, POOL_FILTER,
+    window.VIEW_REALM || 'intl', ACCT_PAGE,
+    ACCT_GROUP_MODE ? 'group' : 'flat', [...ACCT_GROUP_COLLAPSED].sort().join('\u0003'),
+    POOL_FILTER,
     JSON.stringify([...ACCOUNT_SELECTED].sort()),
     JSON.stringify(SORT_STATE.accounts || null),
     JSON.stringify(ACCOUNT_FILTERS),
@@ -12336,6 +12409,122 @@ function acctPagerHtml(total){
     +   '<button class="sec mini" id="btnAcctNext" onclick="changeAcctPage(1)"' + (ACCT_PAGE >= ACCT_TOTAL_PAGES ? ' disabled' : '') + '>下一页</button>'
     + '</div></div>';
 }
+/* ── 分組檢視 ─────────────────────────────────────────────────────
+   账号本来就按用途分组（Team A / 免费池 / 备用…），但列表一直是一张平表：
+   分组只是每行一颗 chip，唯一的「按分组看」入口是筛选条里的下拉，而那条筛选
+   条在非 console 布局下整块被 CSS 藏掉——默认布局里根本没有按分组检视的口子。
+   这里补两件事：
+     1. 账号页的筛选条永远可见（CSS 里给 .acct-filterbar 豁免）；
+     2. 「按分组查看」开关：清单切成可折叠的分组小节，每节标题带计数与
+        「本组启用 / 本组停用 / 只看此组」，未分组账号收在最后一节。
+   分組檢視下不做表头排序：排序是跨全表重排，会把小节打散；把整表登进
+   SORT_DENY_TABLES 之后，每 5 秒那一轮 applyAllTableSorts 也不会动它。 */
+const ACCT_GROUP_VIEW_KEY = 'wb-acct-group-view';
+const ACCT_GROUP_COLLAPSED_KEY = 'wb-acct-group-collapsed';
+let ACCT_GROUP_MODE = (function(){
+  try { return localStorage.getItem(ACCT_GROUP_VIEW_KEY) === 'group'; } catch(e){ return false; }
+})();
+const ACCT_GROUP_COLLAPSED = (function(){
+  try {
+    const raw = localStorage.getItem(ACCT_GROUP_COLLAPSED_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(list) ? list.map(String) : []);
+  } catch(e){ return new Set(); }
+})();
+if(ACCT_GROUP_MODE) SORT_DENY_TABLES.add('accounts');
+
+function acctGroupKey(a){ return String((a && a.group) || '').trim(); }
+function saveAcctGroupPrefs(){
+  try {
+    localStorage.setItem(ACCT_GROUP_VIEW_KEY, ACCT_GROUP_MODE ? 'group' : 'flat');
+    localStorage.setItem(ACCT_GROUP_COLLAPSED_KEY, JSON.stringify([...ACCT_GROUP_COLLAPSED]));
+  } catch(e){}
+}
+function syncAccountGroupButton(){
+  const btn = document.getElementById('btnAcctGroupView');
+  if(!btn) return;
+  btn.classList.toggle('active', ACCT_GROUP_MODE);
+  btn.setAttribute('aria-pressed', ACCT_GROUP_MODE ? 'true' : 'false');
+  btn.textContent = ACCT_GROUP_MODE ? '平铺查看' : '按分组查看';
+}
+function toggleAccountGroupView(){
+  ACCT_GROUP_MODE = !ACCT_GROUP_MODE;
+  if(ACCT_GROUP_MODE) SORT_DENY_TABLES.add('accounts');
+  else SORT_DENY_TABLES.delete('accounts');
+  saveAcctGroupPrefs();
+  ACCT_PAGE = 1;
+  renderAccounts();
+}
+function toggleAccountGroupCollapse(name){
+  const key = String(name || '');
+  if(ACCT_GROUP_COLLAPSED.has(key)) ACCT_GROUP_COLLAPSED.delete(key);
+  else ACCT_GROUP_COLLAPSED.add(key);
+  saveAcctGroupPrefs();
+  renderAccounts();
+}
+// 「只看此组」= 把筛选条上的分组下拉切到该组；不另开一套过滤口径。
+function focusAccountGroup(name){
+  ACCOUNT_FILTERS.group = String(name || '');
+  const sel = document.getElementById('accountGroupFilter');
+  if(sel) sel.value = ACCOUNT_FILTERS.group;
+  ACCT_PAGE = 1;
+  renderAccounts();
+}
+// 本组启停走服务端的 group 作用域（与「当前分组启用/停用」同一个端点），
+// 不按前端看到的行发 uid 列表：分页、筛选、折叠都不影响这一击的作用范围。
+async function setGroupAccountsEnabled(name, enable, btn){
+  const group = String(name || '').trim();
+  if(!group){ toast('未分组的账号没有服务端分组，先给它们设置分组再批量启停', 'warn'); return; }
+  if(!confirm((enable ? '启用' : '停用') + '分组「' + group + '」中的全部账号？')) return;
+  if(btn) btn.disabled = true;
+  try{
+    await postJSON('/accounts/set-all', {enabled: enable, group: group});
+    await loadAccounts();
+    toast((enable ? '已启用' : '已停用') + '分组「' + group + '」', 'ok');
+  }catch(e){
+    toast('分组操作失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+function accountGroupHeaderRow(name, rows){
+  const key = esc(String(name || ''));
+  const label = esc(name || '未分组');
+  const enabled = rows.filter(a => a.enabled).length;
+  const collapsed = ACCT_GROUP_COLLAPSED.has(String(name || ''));
+  const actions = name
+    ? '<button class="sec mini" onclick="setGroupAccountsEnabled(&quot;' + key + '&quot;, true, this)">本组启用</button>'
+      + '<button class="sec mini" onclick="setGroupAccountsEnabled(&quot;' + key + '&quot;, false, this)">本组停用</button>'
+      + '<button class="sec mini" onclick="focusAccountGroup(&quot;' + key + '&quot;)">只看此组</button>'
+    : '<span class="acct-group-count">未归组的账号没有服务端分组，先给它们设一个分组</span>';
+  return '<tr class="acct-group-row" data-group="' + key + '"><td colspan="11">'
+    + '<div class="acct-group-head">'
+    +   '<button type="button" class="acct-group-toggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
+    +     ' onclick="toggleAccountGroupCollapse(&quot;' + key + '&quot;)">'
+    +     '<span class="acct-group-caret" aria-hidden="true"></span>'
+    +     '<span>' + label + '</span>'
+    +   '</button>'
+    +   '<span class="acct-group-count">' + rows.length + ' 个，启用 ' + enabled + ' 个</span>'
+    +   '<span class="acct-group-actions">' + actions + '</span>'
+    + '</div></td></tr>';
+}
+function accountRowsGrouped(list){
+  const buckets = new Map();
+  list.forEach(a => {
+    const key = acctGroupKey(a);
+    if(!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(a);
+  });
+  // 有名字的分组按名字排，未分组永远收在最后一节（不参与排序）。
+  const names = [...buckets.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  if(buckets.has('')) names.push('');
+  return names.map(name => {
+    const rows = buckets.get(name) || [];
+    const collapsed = ACCT_GROUP_COLLAPSED.has(name);
+    return accountGroupHeaderRow(name, rows) + (collapsed ? '' : rows.map(accountRow).join(''));
+  }).join('');
+}
+
 // 第一个参数严格等于 true（只有轮询这么传）——数据与视图都没变就不重画表格。
 // 用户操作（启停、排序、翻页、切区域）一律无参调用，照常重画；只认 === true，
 // 免得被当回调时传进来的事件/数据对象误触发跳过。
@@ -12384,7 +12573,8 @@ function renderAccounts(){
     .map(pair => pair[0]);
   const usable = list.filter(a => a.enabled).length;
   const viewName = currentView === 'cn' ? '国内版' : '国际版';
-  ACCT_TOTAL_PAGES = Math.max(1, Math.ceil(list.length / ACCT_PAGE_SIZE));
+  // 分組檢視不分頁：一節一節折疊著看，比「第 3 頁的第 2 組」直覺得多。
+  ACCT_TOTAL_PAGES = ACCT_GROUP_MODE ? 1 : Math.max(1, Math.ceil(list.length / ACCT_PAGE_SIZE));
   if(ACCT_PAGE > ACCT_TOTAL_PAGES) ACCT_PAGE = ACCT_TOTAL_PAGES;
   if(ACCT_PAGE < 1) ACCT_PAGE = 1;
   const fp = accountsRenderFp();
@@ -12425,10 +12615,12 @@ function renderAccounts(){
     + '<th style="text-align:right;width:48px">缓存</th>'
     + '<th style="text-align:center;width:252px">操作</th>'
     + '</tr></thead><tbody>' + body + '</tbody></table></div>';
-  const pager = ACCT_TOTAL_PAGES > 1 ? acctPagerHtml(list.length) : '';
+  const pager = (!ACCT_GROUP_MODE && ACCT_TOTAL_PAGES > 1) ? acctPagerHtml(list.length) : '';
   const lo = (ACCT_PAGE - 1) * ACCT_PAGE_SIZE;
   ACCT_FIXED_KINDS = null;
-  if(ACCT_TOTAL_PAGES > 1 && SORT_STATE.accounts){
+  if(ACCT_GROUP_MODE){
+    box.innerHTML = tableHtml(accountRowsGrouped(list)) + pager;
+  } else if(ACCT_TOTAL_PAGES > 1 && SORT_STATE.accounts){
     // 有表头排序时按单元格排（applyTableSort 的口径），而它只认 DOM：先在游离
     // 节点里画出全部账号排好序（不进文档、不触发布局），再把这一页的行搬进来。
     const tmp = document.createElement('div');
@@ -12447,8 +12639,11 @@ function renderAccounts(){
   }
   // 表下不再堆两行说明图例（出站身份解释留在每行身份按钮组的悬停提示里，
   // 轮询/粘性说明挂到「账号列表」标题上），表格底部保持干净。
-  applyTableSort('accounts');
+  // 分組檢視下不排序：排序是跨全表重排，会把分组小节打散（SORT_DENY_TABLES
+  // 已经挡住每 5 秒那一轮，这里挡住本次重画）。
+  if(!ACCT_GROUP_MODE) applyTableSort('accounts');
   updateBatchPoolBar();
+  syncAccountGroupButton();
 }
 
 // 自动补积分快照：每个账号每次页面加载最多补一次，只补缺积分的那几个号。原来
