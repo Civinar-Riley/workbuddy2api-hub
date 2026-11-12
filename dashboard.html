@@ -261,6 +261,9 @@ table.activity-table td[data-label="结果"]{white-space:nowrap}
 #recent table th, #recent table td{text-align:center}
 #recent table th:first-child, #recent table td:first-child{text-align:center}
 #recent table td.mono{font-variant-numeric:tabular-nums}
+/* 时间 / 模型挤在一起会被折成两行（deepseek-v4.1-flash 拆成三行谁也读不出来）：
+   单行不折，宽度不够就由 .table-wrap 横向滚动。 */
+#recent td.c-time,#recent td.c-model,#recent td.c-elapsed,#recent td.c-ttft,#recent td.c-key{white-space:nowrap}
 /* 限额表：一列一个作用域，输入框右对齐，同列数字才对得齐 */
 .limit-input{width:100%;max-width:200px;background:var(--panel2);border:1px solid var(--line);
   border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit;text-align:right}
@@ -303,6 +306,12 @@ table.activity-table td[data-label="结果"]{white-space:nowrap}
 .badge.warn{color:#a0691c;background:rgba(183,121,31,.14);border-color:rgba(183,121,31,.35)}
 .badge.bad{color:#a03c32;background:rgba(181,71,59,.14);border-color:rgba(181,71,59,.35)}
 .badge.mini{padding:1px 6px;font-size:10px}
+/* 结果列的徽章可点（点开失败详情）：button 的默认外观全部让位给 .badge 的胶囊。
+   .badge.ok/.warn/.bad 的背景色比这两条优先级高，颜色照旧按结果分。 */
+button.badge{background:none;border:1px solid transparent;font:inherit;line-height:1.35;cursor:default}
+button.badge.badge-btn{cursor:pointer}
+button.badge.badge-btn:hover{filter:brightness(.97);box-shadow:0 0 0 2px rgba(181,71,59,.16)}
+button.badge.badge-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* 自动化页的账号选择器：原生 <select> 的弹层宽度跟着输入框走，昵称 + uid +
    积分一长就被截断；这里换成四列自绘面板（账号 / 剩余积分 / 任务 / 今日签到）。
    flex:0 1 auto + min-width：宽度不够时这里是**收缩**，而不是整块换行掉到下面
@@ -1848,7 +1857,7 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,text
 th{background:var(--panel2)!important;font-size:12px;font-weight:500;border-radius:0!important}
 th,td{padding:9px 11px}td{border-color:var(--line)}
 /* 最近请求的耗时列：值很短（4.04 s），挤一点就折成两行，读起来像两个数字。 */
-#recent td[data-label="耗时"],#recent td[data-label="首字"]{white-space:nowrap}
+#recent td.c-elapsed,#recent td.c-ttft{white-space:nowrap}
 /* Filter bars are pure presentation: they never change bulk-action scope. */
 .console-filterbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px}
 .console-filterbar input,.console-filterbar select{width:auto;min-width:150px;background:var(--panel)!important;border:1px solid var(--line-hover);padding:5px 10px;color:var(--fg);font:inherit}
@@ -2001,7 +2010,7 @@ html:not([data-console-layout="on"]) .console-insights {display:none!important}
 /* 新导航本身不使用 console-layout；筛选栏仍属于内容区，不能被旧布局规则隐藏。
    账号页的筛选条单列豁免：搜索、状态、分组、错误码都在里面，整条藏掉之后默认
    布局里「按分组找账号」就没有入口了（分組檢視截圖反饋）。 */
-html:not([data-console-layout="on"]):not([data-ui="next"]) .console-filterbar:not(.acct-filterbar) {display:none!important}
+html:not([data-console-layout="on"]):not([data-ui="next"]) .console-filterbar:not(.acct-filterbar):not(.recent-filterbar) {display:none!important}
 html:not([data-console-layout="on"]) .header-left .console-nav-group {display:contents}
 html:not([data-console-layout="on"]) .header-left .console-nav-caption,
 html:not([data-console-layout="on"]) .header-left .console-nav-link {display:none!important}
@@ -2014,23 +2023,25 @@ html:not([data-console-layout="on"]) #btnNavAgents {order:6}
 html:not([data-console-layout="on"]) #btnNavSettings {order:7}
 html:not([data-console-layout="on"]) #btnNavLogs {order:8}
 html[data-console-layout="on"] #classicTitle {display:none}
-/* 账号筛选条：默认布局也要能用。console 那两套样式表默认 media="not all"，
-   关掉 console 布局后筛选条既没有外观、又会被上面的规则藏起来；而分组下拉
-   （「按分组找账号」的唯一入口）就在这条里，所以给 .acct-filterbar 一份不依赖
-   它们的基线样式。 */
-.acct-filterbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+/* 内容区筛选条（账号列表 / 请求列表）：默认布局也要能用。console 那两套样式表
+   默认 media="not all"，关掉 console 布局后筛选条既没有外观、又会被上面的规则
+   藏起来；而「按分组找账号」「按账号 / 模型 / Key 筛请求」的入口就在这两条里，
+   所以给它们一份不依赖 console 样式表的基线。 */
+:is(.acct-filterbar,.recent-filterbar){display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   margin:12px 0;padding:10px 12px;background:var(--panel2);
   border:1px solid var(--line);border-radius:10px}
-.acct-filterbar input,.acct-filterbar select{background:var(--panel);
+:is(.acct-filterbar,.recent-filterbar) input,
+:is(.acct-filterbar,.recent-filterbar) select{background:var(--panel);
   border:1px solid var(--line-hover);border-radius:8px;padding:6px 9px;
   color:var(--fg);font:inherit;font-size:12px}
-.acct-filterbar .console-search{flex:1 1 220px;min-width:170px}
-.acct-filterbar select{min-width:120px;max-width:200px}
-.acct-filterbar button{min-height:30px}
-.acct-filterbar .console-filter-count{font-size:12px;color:var(--dim);white-space:nowrap}
+:is(.acct-filterbar,.recent-filterbar) .console-search{flex:1 1 220px;min-width:170px}
+:is(.acct-filterbar,.recent-filterbar) select{min-width:118px;max-width:200px}
+:is(.acct-filterbar,.recent-filterbar) button{min-height:30px}
+:is(.acct-filterbar,.recent-filterbar) .console-filter-count{font-size:12px;color:var(--dim);white-space:nowrap}
 @media (max-width:700px){
-  .acct-filterbar{flex-direction:column;align-items:stretch}
-  .acct-filterbar .console-search,.acct-filterbar select{width:100%;max-width:none}
+  :is(.acct-filterbar,.recent-filterbar){flex-direction:column;align-items:stretch}
+  :is(.acct-filterbar,.recent-filterbar) .console-search,
+  :is(.acct-filterbar,.recent-filterbar) select{width:100%;max-width:none}
 }
 </style>
 <script>
@@ -3214,6 +3225,30 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '点击添加备注，比如「批量」/「自用」': 'Click to add a note, e.g. "batch" / "personal"',
     '最近将过期': 'Expiring soonest',
     '最近请求': 'Recent requests',
+    // 请求列表（原「最近请求」）：标题、四个过滤下拉与失败详情弹窗
+    '请求列表': 'Request list',
+    '请求列表筛选': 'Request list filters',
+    '搜索请求': 'Search requests',
+    '全部 Key': 'All keys',
+    '按账号过滤': 'Filter by account',
+    '按模型过滤': 'Filter by model',
+    '按 Key 过滤': 'Filter by key',
+    '请求失败详情': 'Request failure detail',
+    '请求类型': 'Request type',
+    'HTTP 状态': 'HTTP status',
+    '点开查看失败详情': 'Open the failure detail',
+    '成功 = 正常完成；失败 = 失败 / 上游中断 / 客户端取消': 'Succeeded = completed; Failed = failure / upstream interrupted / cancelled by the client',
+    '上游返回 / 网关记录（最多 200 字）': 'Upstream response / gateway record (200 characters max)',
+    '这一行没有记录上游原话（旧版本写的行或本地就失败了）': 'This row carries no upstream message (written by an older build, or the request failed locally)',
+    '（未扫完，更早的记录里可能还有）': ' (scan stopped early; older rows may match too)',
+    // 筛选条那句计数是拼出来的：拆成可翻片段，EN 下不中英混排。
+    '已筛 ': 'Filters ',
+    ' 项': '',
+    '当前页 ': 'This page ',
+    ' 条': ' rows',
+    '扫描 ': 'Scanned ',
+    ' 行': ' rows',
+    '推理强度': 'Reasoning effort',
     // 数据看板（B 版）的区块标题与指标名：此前整条回落中文，实测 en 界面残留。
     'Token 时序': 'Token timeline',
     '工作回溯': 'Activity lookback',
@@ -4638,6 +4673,8 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "本组停用": "本組停用",
     "只看此组": "只看此組",
     "未分组": "未分組",
+    "请求失败详情": "請求失敗詳情",
+    "请求类型": "請求類型",
     "未归组的账号没有服务端分组，先给它们设一个分组": "未歸組的帳號沒有服務端分組，先給它們設一個分組",
     "未分组的账号没有服务端分组，先给它们设置分组再批量启停": "未分組的帳號沒有服務端分組，先給它們設定分組再批次啟停",
     "按分组把账号列表切成可折叠的小节；想改分组，点每行账号上的「分组」": "按分組把帳號清單切成可摺疊的小節；想改分組，點每行帳號上的「分組」",
@@ -6033,7 +6070,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
 
   <section id="recentRequestsSection">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-      <h2 style="margin:0">最近请求<em id="recentRealmTag" style="color:var(--dim);font-weight:500"></em><em id="recentCount"></em></h2>
+      <h2 style="margin:0">请求列表<em id="recentRealmTag" style="color:var(--dim);font-weight:500"></em><em id="recentCount"></em></h2>
       <div style="display:inline-flex;align-items:center;gap:8px">
         <span style="font-size:12px;color:var(--dim)">显示条数:</span>
         <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
@@ -6044,15 +6081,27 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         </div>
       </div>
     </div>
-    <div id="recent" class="table-wrap"></div>
-    <div class="console-filterbar" aria-label="最近请求筛选">
-      <input id="recentModelFilter" class="console-search" type="search" placeholder="搜索模型、账号或 API Key" aria-label="搜索最近请求" oninput="RECENT_FILTERS.query=this.value;renderRecentView()">
-      <select id="recentOutcomeFilter" aria-label="请求结果" onchange="RECENT_FILTERS.outcome=this.value;renderRecentView()">
-        <option value="">全部结果</option><option value="completed">完成</option><option value="failed">失败</option><option value="client_aborted">客户端取消</option><option value="upstream_aborted">上游中断</option>
+    <div class="console-filterbar recent-filterbar" aria-label="请求列表筛选">
+      <input id="recentSearchFilter" class="console-search" type="search" placeholder="搜索模型、账号或 API Key" aria-label="搜索请求" oninput="RECENT_FILTERS.query=this.value;renderRecentView()">
+      <!-- 结果 / 账号 / 模型 / Key 四个下拉都是服务端过滤（GET /usage/recent 的
+           query 参数）：1M 行的日志不可能只筛当前页，「失败」还包含上游中断与
+           客户端取消——包进桶里才算「没成功」。 -->
+      <select id="recentOutcomeFilter" aria-label="请求结果" title="成功 = 正常完成；失败 = 失败 / 上游中断 / 客户端取消" onchange="setRecentFilter('outcome', this.value)">
+        <option value="">全部结果</option><option value="completed">成功</option><option value="failed">失败</option>
+      </select>
+      <select id="recentAccountFilter" data-cs-search="on" aria-label="按账号过滤" onchange="setRecentFilter('account', this.value)">
+        <option value="">全部账号</option>
+      </select>
+      <select id="recentModelSelect" data-cs-search="on" aria-label="按模型过滤" onchange="setRecentFilter('model', this.value)">
+        <option value="">全部模型</option>
+      </select>
+      <select id="recentKeySelect" data-cs-search="on" aria-label="按 Key 过滤" onchange="setRecentFilter('key', this.value)">
+        <option value="">全部 Key</option>
       </select>
       <span class="console-filter-count" id="recentFilterCount">当前页全部记录</span>
       <button type="button" class="sec mini" onclick="clearRecentFilters()">清除筛选</button>
     </div>
+    <div id="recent" class="table-wrap"></div>
     <div id="recentPagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);flex-wrap:wrap;gap:8px">
       <div id="recentPageInfo">第 1 / 1 页 · 共 0 条记录</div>
       <div style="display:inline-flex;gap:5px;align-items:center">
@@ -6062,6 +6111,35 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
       </div>
     </div>
   </section>
+
+  <!-- 请求失败详情：点结果列的「失败 / 上游中断 / 客户端取消」徽章展开。
+       usage 行里能看到的都摆出来；上游原话整段可选中、可复制（落盘时已截断
+       200 字，弹窗里也写明，免得以为网关把错误吃掉了）。 -->
+  <div class="modal-mask" id="recentFailModal" onclick="if(event.target===this) closeRecentFailDetail()">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recentFailTitle"
+         style="width:min(680px,94vw);max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-hd">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <h2 id="recentFailTitle">请求失败详情</h2>
+          <em id="recentFailBadge" style="font-style:normal"></em>
+        </div>
+        <button class="modal-x" onclick="closeRecentFailDetail()" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-bd" style="overflow-y:auto;flex:1">
+        <div id="recentFailMeta"></div>
+        <div style="margin-top:14px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:6px">上游返回 / 网关记录（最多 200 字）</div>
+          <pre id="recentFailMsg" style="white-space:pre-wrap;word-break:break-word;background:var(--panel2);
+            border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0;
+            font-size:12px;line-height:1.6;max-height:320px;overflow:auto"></pre>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="sec" id="recentFailCopy" onclick="copyRecentFailDetail(this)">复制</button>
+        <button onclick="closeRecentFailDetail()">关闭</button>
+      </div>
+    </div>
+  </div>
 
   </div><!-- /pageOverview -->
 
@@ -6625,7 +6703,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
 
     <section class="panel">
       <div class="phead">
-        <h2>最近请求</h2>
+        <h2>请求列表</h2>
         <span class="hint">实时活动流</span>
         <div class="spacer"></div>
         <span class="hm-meta" id="recentMeta">—</span>
@@ -15077,7 +15155,7 @@ async function refreshInner(gen){
       getJSON('/usage?realm=' + encodeURIComponent(window.VIEW_REALM), POLL_READ),
       // /usage/recent 不在这里改成可校验：它没有服务端缓存，每次新请求都进榜，
       // 响应体每轮都在变，服务端也就没有稳定的校验符可发——照旧整份重取。
-      getJSON('/usage/recent?limit=' + RECENT_LIMIT + '&page=' + RECENT_PAGE + '&realm=' + encodeURIComponent(window.VIEW_REALM)),
+      getJSON(recentUrl()),
       getJSON('/usage/perf?realm=' + encodeURIComponent(window.VIEW_REALM), POLL_READ),
     ]);
     // 取数期间又发起了更新的一轮（例如刚切了区域），这批结果已经过期，
@@ -15142,7 +15220,12 @@ async function refreshInner(gen){
 
   const pageInfo = document.getElementById('recentPageInfo');
   if(pageInfo){
-    pageInfo.textContent = '第 ' + RECENT_PAGE + ' / ' + RECENT_TOTAL_PAGES + ' 页 · 共 ' + fmt(total) + ' 条记录';
+    // 带过滤时 total 只是「已扫描范围内的命中数」：写成「共 N 条」会把下界当全量，
+    // 排查时最容易得出错误结论。total_exact 由服务端给（见 recent_usage）。
+    const lowerBound = recent.total_exact === false;
+    pageInfo.textContent = '第 ' + RECENT_PAGE + ' / ' + RECENT_TOTAL_PAGES + ' 页 · '
+      + (lowerBound ? '已扫描 ' + fmt(recent.scanned || 0) + ' 行，命中 ' + fmt(total) + ' 条（可能还有更早的）'
+                    : '共 ' + fmt(total) + ' 条记录');
   }
   const btnPrev = document.getElementById('btnRecentPrev');
   if(btnPrev) btnPrev.disabled = (RECENT_PAGE <= 1);
@@ -15161,19 +15244,26 @@ async function refreshInner(gen){
   }
 
   const rows = recent.rows || [];
+  // 过滤下拉的选项池与「扫描了多少行」都从这一份响应里更新。
+  syncRecentFilterOptions(rows, t.accounts_map, recent);
   renderConsoleInsights(rows, accts);
   // Terminal state of a request. Rows written before the outcome field only
   // carry error/status, so fall back to that; a client cancellation is shown
   // apart from a real failure because the gateway did nothing wrong.
-  const outcomeBadge = r => {
+  // 非完成的徽章是可点的：点开就是这一行的失败详情（状态码 + 上游原话）。
+  const outcomeBadge = (r, idx) => {
     const o = r.outcome || (r.error ? 'failed' : 'completed');
     if(o === 'completed') return '<span class="badge ok">完成</span>';
-    if(o === 'client_aborted') return '<span class="badge off">客户端取消</span>';
-    if(o === 'upstream_aborted') return '<span class="badge warn">上游中断</span>';
-    return '<span class="badge bad">失败</span>';
+    const cls = o === 'client_aborted' ? 'off' : (o === 'upstream_aborted' ? 'warn' : 'bad');
+    const label = o === 'client_aborted' ? '客户端取消' : (o === 'upstream_aborted' ? '上游中断' : '失败');
+    const open = (typeof idx === 'number')
+      ? ' onclick="openRecentFailDetail(' + idx + ')" title="点开查看失败详情"' : '';
+    return '<button type="button" class="badge ' + cls + ' badge-btn"' + open + '>' + label + '</button>';
   };
   const countEl = document.getElementById('recentCount');
-  if(countEl) countEl.textContent = '(第 ' + RECENT_PAGE + ' 页 / 共 ' + fmt(total) + ' 条)';
+  if(countEl) countEl.textContent = '(第 ' + RECENT_PAGE + ' 页 / '
+    + (recent.total_exact === false ? ('扫描范围内命中 ' + fmt(total)) : ('共 ' + fmt(total)))
+    + ' 条)';
   // 推理强度：这次请求实际跑在哪个档位（网关写入 usage 行时的 reasoning_effort）。
   // v1.6.16 拆分为独立「推理强度」列展示。
   // 账号列显示昵称：uid -> 昵称取自 /usage 的 accounts_map（当前账号池）。
@@ -15200,7 +15290,7 @@ async function refreshInner(gen){
   if(recentFp === lastRecentFp) return;
   lastRecentFp = recentFp;
   COST_TIP_ROWS.clear();
-  const buildRecentTable = tableRows => tableRows.length ?
+  const buildRecentTable = tableRows => (RECENT_RENDER.tableRows = tableRows).length ?
     '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>推理强度</th><th>账号</th><th>API Key</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th class="pricing-col" style="color:var(--warn)">估算价格</th></tr></thead><tbody>'
     + tableRows.map((r, i) => {
         // 关闭时不登记悬停明细，也不挂 data-cost-key：列还在（观感不变），
@@ -15208,15 +15298,15 @@ async function refreshInner(gen){
         const costKey = PRICING_ON ? costRowKey(r, i) : '';
         if(costKey) COST_TIP_ROWS.set(costKey, r);
         return '<tr>'
-        + '<td class="mono" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
-        + '<td class="mono" data-label="模型">' + esc(r.model) + '</td>'
+        + '<td class="mono c-time" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
+        + '<td class="mono c-model" data-label="模型">' + esc(r.model) + '</td>'
         + '<td data-label="推理强度">' + (r.reasoning_effort ? ('<span class="badge-effort">' + esc(r.reasoning_effort) + '</span>') : '<span style="color:var(--dim)">—</span>') + '</td>'
         + '<td class="mono" style="font-size:11px;color:var(--dim)" data-label="账号" title="' + esc(r.account||'') + '">' + esc(acctName(r.account)) + '</td>'
-        + '<td class="mono" style="font-size:11px;color:var(--dim)" data-label="API Key" title="' + esc(r.key||'') + '">' + esc(r.key_name || '—') + '</td>'
+        + '<td class="mono c-key" style="font-size:11px;color:var(--dim)" data-label="API Key" title="' + esc(r.key||'') + '">' + esc(r.key_name || '—') + '</td>'
         + '<td data-label="模式"><span class="badge ' + (r.stream?'s':'') + '">' + (r.stream?'流式':'非流式') + '</span></td>'
-        + '<td data-label="结果">' + outcomeBadge(r) + '</td>'
-        + '<td data-label="耗时">' + ms(r.elapsed_ms) + '</td>'
-        + '<td data-label="首字">' + ms(r.ttft_ms) + '</td>'
+        + '<td data-label="结果">' + outcomeBadge(r, i) + '</td>'
+        + '<td class="c-elapsed" data-label="耗时">' + ms(r.elapsed_ms) + '</td>'
+        + '<td class="c-ttft" data-label="首字">' + ms(r.ttft_ms) + '</td>'
         + '<td data-label="速度">' + (r.tokens_per_sec ? r.tokens_per_sec.toFixed(1) : '—') + '</td>'
         + '<td data-label="输入">' + fmt(r.prompt_tokens) + '</td>'
         + '<td data-label="输出">' + fmt(r.completion_tokens) + '</td>'
@@ -15260,27 +15350,110 @@ let RECENT_TOTAL_PAGES = 1;
 // 5 秒一轮的重画代价几乎全在布局（100 行实测 50~65ms），数据没变就不该重画。
 let lastRecentFp = null;
 let RECENT_RENDER = null;
-const RECENT_FILTERS = {query: '', outcome: ''};
-function clearRecentFilters(){
-  RECENT_FILTERS.query = '';
-  RECENT_FILTERS.outcome = '';
-  const q = document.getElementById('recentModelFilter');
-  const s = document.getElementById('recentOutcomeFilter');
-  if(q) q.value = '';
-  if(s) s.value = '';
+const RECENT_FILTERS = {query: '', outcome: '', account: '', model: '', key: ''};
+// 服务端回显的元信息：带过滤扫描了多少行、total 是不是下界。筛选条的提示文案
+// 靠它说实话（「已扫描 20000 行，命中 3 条」而不是假装知道全量）。
+let RECENT_META = {scanned: null, totalExact: true, total: 0};
+// 三个过滤下拉的选项池：跨轮次累积。切到某个账号之后当前页只剩这一个账号，
+// 若每轮都按当前页重建选项，其它账号就会从下拉里消失、想切回去还得先清筛选。
+const RECENT_OPTIONS = {account: new Map(), model: new Set(), key: new Map()};
+const RECENT_FILTER_IDS = {
+  query: 'recentSearchFilter', outcome: 'recentOutcomeFilter',
+  account: 'recentAccountFilter', model: 'recentModelSelect', key: 'recentKeySelect',
+};
+function recentServerFilters(){
+  return ['outcome', 'account', 'model', 'key'].filter(k => RECENT_FILTERS[k]);
+}
+function recentUrl(){
+  let url = '/usage/recent?limit=' + RECENT_LIMIT + '&page=' + RECENT_PAGE
+    + '&realm=' + encodeURIComponent(window.VIEW_REALM);
+  recentServerFilters().forEach(k => {
+    url += '&' + k + '=' + encodeURIComponent(RECENT_FILTERS[k]);
+  });
+  return url;
+}
+// 下拉改的是服务端过滤条件：只有翻页/重取才能在全量日志里筛，所以这里回第一页
+// 并立刻刷一轮。文本搜索仍是本页即时过滤（renderRecentView），两者互不抢功。
+function setRecentFilter(key, value){
+  if(!(key in RECENT_FILTERS)) return;
+  const v = value || '';
+  if(RECENT_FILTERS[key] === v) return;
+  RECENT_FILTERS[key] = v;
+  RECENT_PAGE = 1;
   renderRecentView();
+  refresh();
+}
+function clearRecentFilters(){
+  Object.keys(RECENT_FILTERS).forEach(k => { RECENT_FILTERS[k] = ''; });
+  Object.keys(RECENT_FILTER_IDS).forEach(k => {
+    const el = document.getElementById(RECENT_FILTER_IDS[k]);
+    if(el) el.value = '';
+  });
+  RECENT_PAGE = 1;
+  renderRecentView();
+  refresh();
+}
+function fillRecentSelect(id, allLabel, items, current){
+  const sel = document.getElementById(id);
+  if(!sel) return;
+  const opts = ['<option value="">' + esc(allLabel) + '</option>'];
+  items.forEach(pair => {
+    const value = pair[0], label = pair[1];
+    opts.push('<option value="' + esc(value) + '"'
+      + (value === current ? ' selected' : '') + '>' + esc(label) + '</option>');
+  });
+  sel.innerHTML = opts.join('');
+  sel.value = current || '';
+}
+// 选项池只增不减：见过的账号 / 模型 / Key 一直留在下拉里。
+function syncRecentFilterOptions(rows, accountsMap, meta){
+  (rows || []).forEach(r => {
+    const uid = String(r.account || '');
+    if(uid && !RECENT_OPTIONS.account.has(uid)){
+      const m = (accountsMap || {})[uid];
+      RECENT_OPTIONS.account.set(uid, (m && m.nickname) ? m.nickname : uid.slice(0, 8));
+    }
+    if(r.model) RECENT_OPTIONS.model.add(String(r.model));
+    const k = String(r.key || '');
+    if(k && !RECENT_OPTIONS.key.has(k)) RECENT_OPTIONS.key.set(k, r.key_name || k);
+  });
+  const acctItems = [...RECENT_OPTIONS.account.entries()]
+    .sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+  fillRecentSelect('recentAccountFilter', '全部账号', acctItems, RECENT_FILTERS.account);
+  fillRecentSelect('recentModelSelect', '全部模型',
+    [...RECENT_OPTIONS.model].sort().map(m => [m, m]), RECENT_FILTERS.model);
+  fillRecentSelect('recentKeySelect', '全部 Key',
+    [...RECENT_OPTIONS.key.entries()], RECENT_FILTERS.key);
+  const outcomeSel = document.getElementById('recentOutcomeFilter');
+  if(outcomeSel) outcomeSel.value = RECENT_FILTERS.outcome || '';
+  if(meta){
+    RECENT_META = {
+      scanned: (meta.scanned == null) ? null : Number(meta.scanned),
+      totalExact: meta.total_exact !== false,
+      total: Number(meta.total) || 0,
+    };
+  }
 }
 function renderRecentView(){
   if(!RECENT_RENDER) return;
+  const q = RECENT_FILTERS.query.trim().toLowerCase();
+  const serverCount = recentServerFilters().length;
   const rows = RECENT_RENDER.rows.filter(r => {
-    const q = RECENT_FILTERS.query.trim().toLowerCase();
-    const outcome = r.outcome || (r.error ? 'failed' : 'completed');
-    if(RECENT_FILTERS.outcome && outcome !== RECENT_FILTERS.outcome) return false;
-    return !q || [r.model, RECENT_RENDER.acctName(r.account), r.account, r.key_name].some(v => String(v || '').toLowerCase().includes(q));
+    if(!q) return true;
+    return [r.model, RECENT_RENDER.acctName(r.account), r.account, r.key_name, r.key]
+      .some(v => String(v || '').toLowerCase().includes(q));
   });
   const count = document.getElementById('recentFilterCount');
-  if(count) count.textContent = (RECENT_FILTERS.query || RECENT_FILTERS.outcome)
-    ? ('当前页显示 ' + rows.length + ' / ' + RECENT_RENDER.rows.length + ' 条') : ('当前页 ' + RECENT_RENDER.rows.length + ' 条');
+  if(count){
+    const parts = [];
+    if(serverCount) parts.push('已筛 ' + serverCount + ' 项');
+    parts.push('当前页 ' + rows.length + (q ? ' / ' + RECENT_RENDER.rows.length : '') + ' 条');
+    if(serverCount && RECENT_META.scanned != null){
+      parts.push('扫描 ' + fmt(RECENT_META.scanned) + ' 行'
+        + (RECENT_META.totalExact ? '' : '（未扫完，更早的记录里可能还有）'));
+    }
+    count.textContent = parts.join(' · ');
+  }
   const box = document.getElementById('recent');
   if(!rows.length){
     box.innerHTML = '<div class="console-filter-empty"><span>当前页没有符合筛选条件的请求</span><button type="button" class="sec mini" onclick="clearRecentFilters()">清除筛选</button></div>';
@@ -15288,6 +15461,83 @@ function renderRecentView(){
     box.innerHTML = RECENT_RENDER.buildTable(rows);
   }
   renderConsoleInsights(RECENT_RENDER.rows, window.ACCOUNTS || []);
+}
+
+/* 请求失败详情：点结果列的「失败 / 上游中断 / 客户端取消」徽章展开。
+   usage 行里能看到的都摆出来，上游原话整段可选中、可复制（落盘时已截断 200 字，
+   这一点在弹窗里也写明，免得有人以为网关把错误吃掉了）。 */
+function openRecentFailDetail(idx){
+  const rows = (RECENT_RENDER && RECENT_RENDER.tableRows) || [];
+  const r = rows[idx];
+  const mask = document.getElementById('recentFailModal');
+  if(!r || !mask) return;
+  const outcome = r.outcome || (r.error ? 'failed' : 'completed');
+  const label = outcome === 'client_aborted' ? '客户端取消'
+    : outcome === 'upstream_aborted' ? '上游中断' : '失败';
+  const badge = document.getElementById('recentFailBadge');
+  if(badge) badge.innerHTML = '<span class="badge ' + (outcome === 'failed' ? 'bad' : 'warn') + '">' + esc(label) + '</span>';
+  const code = Number(r.status) > 0 ? String(Number(r.status)) : '';
+  const pairs = [
+    ['时间', String(r.iso || '').replace('T', ' ') || '—'],
+    ['模型', r.model || '—'],
+    ['账号', (RECENT_RENDER.acctName(r.account) || '—') + (r.account ? '（' + String(r.account).slice(0, 8) + '…）' : '')],
+    ['API Key', r.key_name || r.key || '—'],
+    ['HTTP 状态', code || '—'],
+    ['耗时', (r.elapsed_ms != null ? ms(r.elapsed_ms) : '—')],
+    ['模式', r.stream ? '流式' : '非流式'],
+    ['token', '输入 ' + fmt(r.prompt_tokens) + ' · 输出 ' + fmt(r.completion_tokens)
+      + ' · 总 ' + fmt(r.total_tokens)],
+    ['请求类型', r.kind || 'chat'],
+  ];
+  const meta = document.getElementById('recentFailMeta');
+  if(meta){
+    meta.innerHTML = pairs.map(p => '<div style="display:flex;gap:12px;padding:5px 0;border-bottom:1px solid var(--line)">'
+      + '<div style="flex:0 0 84px;color:var(--dim);font-size:12px">' + esc(p[0]) + '</div>'
+      + '<div style="flex:1;font-size:12.5px;word-break:break-word">' + esc(p[1]) + '</div></div>').join('');
+  }
+  const msg = String(r.message == null ? '' : r.message).trim();
+  const body = [];
+  if(code) body.push('HTTP ' + code);
+  if(r.outcome) body.push('outcome: ' + r.outcome);
+  if(msg) body.push('', msg);
+  if(!code && !msg) body.push('这一行没有记录上游原话（旧版本写的行或本地就失败了）');
+  const pre = document.getElementById('recentFailMsg');
+  if(pre) pre.textContent = body.join('\n');
+  mask.classList.add('show');
+  const copyBtn = document.getElementById('recentFailCopy');
+  if(copyBtn) copyBtn.textContent = '复制';
+}
+function closeRecentFailDetail(){
+  const mask = document.getElementById('recentFailModal');
+  if(mask) mask.classList.remove('show');
+}
+function copyRecentFailDetail(btn){
+  const meta = document.getElementById('recentFailMeta');
+  const pre = document.getElementById('recentFailMsg');
+  const text = [meta ? meta.innerText : '', '', pre ? pre.textContent : ''].join('\n').trim();
+  const done = () => {
+    if(!btn) return;
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = '复制'; }, 1500);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(() => copyViaTextarea(text, done));
+    return;
+  }
+  copyViaTextarea(text, done);
+}
+function copyViaTextarea(text, done){
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    if(done) done();
+  }catch(e){ toast('复制失败: ' + e.message, 'bad'); }
 }
 
 function updateRecentLimitButtons(){
@@ -22462,9 +22712,17 @@ async function loadRecent(){
     $('recentList').innerHTML = rows.map(x => {
       const ok = x.outcome === 'completed';
       const nm = nicknameOf(x.account);
+      // 失败行原来只有一个 [failed] 标签；把 HTTP 码带上、上游原话挂进悬停气泡，
+      // 概览页看到「失败了」的时候当场就能知道为什么，不用切回最近请求表。
+      const why = String(x.message == null ? '' : x.message).replace(/\s+/g, ' ').trim();
+      const code = (Number(x.status) > 0) ? ('HTTP ' + Number(x.status)) : '';
+      const whyText = [code, why].filter(Boolean).join(' · ');
+      const tag = ok ? ''
+        : ' <span class="err"' + (whyText ? ' data-tip="' + esc(whyText) + '"' : '')
+          + '>[' + esc(x.outcome || '失败') + (code ? ' ' + esc(code) : '') + ']</span>';
       return `<div class="recent-item">
         <span class="t">${recentStamp(x.iso)}</span>
-        <span class="m"><b>${x.model || ''}</b> → ${nm.length > 16 ? nm.slice(0, 16) + '…' : nm}${ok ? '' : ' <span class="err">[' + (x.outcome || '失败') + ']</span>'}</span>
+        <span class="m"><b>${x.model || ''}</b> → ${nm.length > 16 ? nm.slice(0, 16) + '…' : nm}${tag}</span>
         <span class="r"><b>${fmtCompact(x.total_tokens || 0)}</b> tok · ${((x.elapsed_ms || 0) / 1000).toFixed(1)}s</span>
       </div>`;
     }).join('') || '<div class="empty">暂无请求记录</div>';

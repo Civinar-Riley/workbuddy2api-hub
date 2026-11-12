@@ -6862,7 +6862,112 @@ def _recent_backward_page(realm, page, limit):
     return matching[start_idx:end_idx]
 
 
-def recent_usage(limit=100, realm=None, page=1):
+# 「请求列表」带过滤条件时，从尾部往回最多检查多少行（可用 WB_RECENT_FILTER_SCAN
+# 覆盖）。给个上限是为了让下拉框点下去永远有回应：命中率极低的组合（例如某个早已
+# 删掉的账号）也不会把整个 1GB 的日志读一遍。
+RECENT_FILTER_SCAN_ROWS = int(os.environ.get("WB_RECENT_FILTER_SCAN", "20000") or 20000)
+
+
+def _recent_scan_filtered(realm, need, filters, scan_cap=None):
+    """从尾部往回读，收集至多 need 条命中行（按需过滤）。
+
+    返回 (rows, scanned, truncated)：
+      * rows 与不带过滤时的顺序一致（新的在前）；
+      * scanned 是真正检查过的行数；
+      * truncated 表示「还没读到文件头就停了」——要么凑够了 need 条，要么撞到
+        scan_cap。此时 rows 与页数都是下界，调用方要如实告诉用户。
+
+    为什么不做全量扫描：usage.jsonl 能有上百万行，任何一次「按账号筛一下」都要
+    把整个文件读一遍的话，这个下拉就没人敢点。按页取数的语义本来就是「看一眼最
+    近发生了什么」，所以从新往旧读到够用为止，正确性与可直接读到的部分一致。
+    """
+    if need < 1:
+        need = 1
+    if scan_cap is None:
+        scan_cap = RECENT_FILTER_SCAN_ROWS
+    matching = []
+    scanned = 0
+    truncated = False
+    chunk = 256 * 1024
+    try:
+        with open(USAGE_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            pos = fh.tell()
+            buf = b""
+            stop = False
+            while pos > 0 and not stop:
+                step = min(chunk, pos)
+                pos -= step
+                fh.seek(pos)
+                buf = fh.read(step) + buf
+                parts = buf.split(b"\n")
+                buf = parts[0]
+                for raw in reversed(parts[1:]):
+                    st = raw.strip()
+                    if not st:
+                        continue
+                    try:
+                        item = json.loads(st.decode("utf-8", "replace"))
+                    except Exception:
+                        continue
+                    if scanned >= scan_cap:
+                        truncated = True
+                        stop = True
+                        break
+                    scanned += 1
+                    if realm and not row_matches_realm(item, realm):
+                        continue
+                    if recent_filter_match(item, **filters):
+                        matching.append(item)
+                        if len(matching) >= need:
+                            truncated = True
+                            stop = True
+                            break
+            if not stop and buf.strip():
+                try:
+                    item = json.loads(buf.strip().decode("utf-8", "replace"))
+                except Exception:
+                    item = None
+                if item is not None and scanned < scan_cap:
+                    scanned += 1
+                    if ((not realm or row_matches_realm(item, realm))
+                            and recent_filter_match(item, **filters)):
+                        matching.append(item)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log("recent filtered read failed: %s" % exc)
+    return matching, scanned, truncated
+
+
+def recent_filter_match(item, account=None, model=None, key=None, outcome=None):
+    """一条 usage 行是否命中「最近请求」的过滤条件。
+
+    outcome 里的 failed 是一个桶：failed / upstream_aborted / client_aborted 都算
+    「这次没成功」。面板上的「失败」下拉就是这个口径——按字面值筛的话，上游中断和
+    客户端取消会被漏掉，而它们恰恰是排查时最想看的两种。
+    """
+    if account and item.get("account") != account:
+        return False
+    if model and item.get("model") != model:
+        return False
+    if key and (item.get("key") or "") != key:
+        return False
+    if outcome:
+        o = row_outcome(item)
+        if outcome == "failed":
+            if o == "completed":
+                return False
+        elif outcome == "completed":
+            if o != "completed":
+                return False
+        elif o != outcome:
+            return False
+    return True
+
+
+def recent_usage(limit=100, realm=None, page=1, account=None, model=None, key=None,
+                 outcome=None):
     """Paginated rows from the tail of the log (page 1 is latest).
 
     Reading backward in chunks keeps this in the millisecond range while
@@ -6871,6 +6976,11 @@ def recent_usage(limit=100, realm=None, page=1):
     索引可用时页从索引直接定位（见上面那一节）：页数标签与页内容都来自同一次
     扫描，读取量是页大小量级；索引答不了就整段退回 _recent_backward_page()，
     两条路的输出逐字相同。
+
+    account / model / key / outcome 是面板「请求列表」的四个过滤下拉。带任一条件
+    时走 _recent_scan_filtered()：从尾部边读边匹配，读够 page*limit 条命中就停。
+    响应里额外给出 scanned（检查过多少行）与 total_exact（total 是不是下界），
+    面板据此把「共 N 条」写成「已扫描 M 行 · 命中 N 条」，不假装自己知道全量。
     """
     try:
         limit = max(1, int(limit))
@@ -6881,20 +6991,44 @@ def recent_usage(limit=100, realm=None, page=1):
     except Exception:
         page = 1
     realm = realm_scope(realm)
-    index = _recent_index_ready(realm_filtered=bool(realm))
-    page_rows = None
-    if index is not None:
-        total = _recent_index_total(index, realm)
-        total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+    filters = {}
+    if account:
+        filters["account"] = str(account)
+    if model:
+        filters["model"] = str(model)
+    if key:
+        filters["key"] = str(key)
+    if outcome:
+        filters["outcome"] = str(outcome)
+    scanned = None
+    total_exact = True
+    if filters:
+        matches, scanned, truncated = _recent_scan_filtered(realm, page * limit, filters)
+        total = len(matches)
+        total_exact = not truncated
+        total_pages = max(1, (total + limit - 1) // limit)
+        # 截断时最后一条命中的行后面可能还藏着更多：多给一页，让「下一页」把
+        # 剩下的读出来；读不满一页时前端就知道到头了。
+        if truncated and total and total % limit == 0:
+            total_pages += 1
         page = min(page, total_pages)
-        page_rows = _recent_index_page(index, realm, page, limit)
-        if page_rows is None:
-            index = None
-    if index is None:
-        total = count_usage_rows(realm)
-        total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
-        page = min(page, total_pages)
-        page_rows = _recent_backward_page(realm, page, limit)
+        start_idx = (page - 1) * limit
+        page_rows = matches[start_idx:start_idx + limit]
+    else:
+        index = _recent_index_ready(realm_filtered=bool(realm))
+        page_rows = None
+        if index is not None:
+            total = _recent_index_total(index, realm)
+            total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+            page = min(page, total_pages)
+            page_rows = _recent_index_page(index, realm, page, limit)
+            if page_rows is None:
+                index = None
+        if index is None:
+            total = count_usage_rows(realm)
+            total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+            page = min(page, total_pages)
+            page_rows = _recent_backward_page(realm, page, limit)
     # Equivalent-token cost per row at OpenRouter list prices, computed here
     # so every consumer of /usage/recent gets the same number. Each row is
     # priced against the version that was in force when it happened, and says
@@ -6938,7 +7072,12 @@ def recent_usage(limit=100, realm=None, page=1):
         "limit": limit,
         "total_pages": total_pages,
         "usd_cny": wb_pricing.usd_cny(),
-        "rows": page_rows
+        "rows": page_rows,
+        # 过滤口径回显：面板据此写「已扫描 M 行 · 命中 N 条」，total_exact=False
+        # 时 total 只是下界（还没读到文件头就停下来了）。
+        "filters": filters or None,
+        "scanned": scanned,
+        "total_exact": total_exact,
     }
 POOL = None
 # Dispatch views over the one shared AccountPool. The pool owns credentials,
@@ -22795,7 +22934,14 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             page = 1
         req_realm = query.get('realm', [None])[0] or self.headers.get('X-Realm') or CURRENT_REALM
-        return self._json_panel(200, recent_usage(limit, realm=req_realm, page=page))
+        # 四个过滤维度由面板「请求列表」上的下拉发来。空值当没填：下拉的「全部」
+        # 就是空字符串，省得前端还要区分「没这个参数」和「参数为空」。
+        def _pick(name):
+            return ((query.get(name) or [""])[0] or "").strip() or None
+        return self._json_panel(200, recent_usage(
+            limit, realm=req_realm, page=page,
+            account=_pick("account"), model=_pick("model"),
+            key=_pick("key"), outcome=_pick("outcome")))
 
     def _get_activity_history(self, query):
         """账号每日活动的结构化历史（issue #34）。只读，供面板的签到记录用。
