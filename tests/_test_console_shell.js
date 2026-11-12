@@ -167,15 +167,17 @@ const allPick = script.slice(script.indexOf('function allModelPickIds()'),
 check(/MODELS_DATA/.test(allPick) && !/querySelectorAll\('#modelsTable input\.model-pick'\)/.test(allPick),
   '全选/反选必须按整份目录取 id，不能按当前可见行取（筛选会把行藏掉）');
 
-// 最近请求筛选：结果与关键词。
-check(/const RECENT_FILTERS = \{query: '', outcome: ''\}/.test(script), '缺少最近请求筛选状态');
-check(/function renderRecentView\(\)/.test(script), '缺少最近请求筛选渲染');
-check(/function clearRecentFilters\(\)/.test(script), '缺少最近请求筛选清除');
+// 请求列表筛选：关键词 + 结果 / 账号 / 模型 / Key 四个服务端过滤。
+check(/const RECENT_FILTERS = \{query: '', outcome: '', account: '', model: '', key: ''\}/.test(script),
+  '缺少请求列表筛选状态');
+check(/function renderRecentView\(\)/.test(script), '缺少请求列表筛选渲染');
+check(/function clearRecentFilters\(\)/.test(script), '缺少请求列表筛选清除');
 
 // 筛选条在三个区块里各有一个。
-['accountSearchFilter', 'accountStatusFilter', 'accountErrorFilter',
+ ['accountSearchFilter', 'accountStatusFilter', 'accountErrorFilter',
  'acctSelAll',
- 'recentModelFilter', 'recentOutcomeFilter',
+ 'recentSearchFilter', 'recentOutcomeFilter', 'recentAccountFilter',
+ 'recentModelSelect', 'recentKeySelect',
  'modelCatalogFilter'].forEach(id => {
   check(html.includes('id="' + id + '"'), '缺少筛选控件 #' + id);
 });

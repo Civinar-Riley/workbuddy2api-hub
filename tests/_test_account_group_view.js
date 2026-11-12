@@ -35,8 +35,8 @@ ok('筛选条在默认布局下可见，且不依赖 console 样式表', () => {
   assert.ok(rule, 'missing the console-layout hiding rule');
   assert.ok(/:not\(\.acct-filterbar\)/.test(rule[0]),
     '账号筛选条必须被排除在隐藏规则之外');
-  const baseline = html.match(/\.acct-filterbar\{([^}]*)\}/);
-  assert.ok(baseline, 'missing .acct-filterbar baseline styles');
+  const baseline = html.match(/:is\(\.acct-filterbar,\s*\.recent-filterbar\)\{([^}]*)\}/);
+  assert.ok(baseline, 'missing the shared filterbar baseline styles');
   assert.ok(/display:flex/.test(baseline[1]), 'baseline must lay the bar out as flex');
   assert.ok(/var\(--panel2\)/.test(baseline[1]), 'baseline must use theme variables');
 });
