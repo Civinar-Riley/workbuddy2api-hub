@@ -111,19 +111,28 @@ check(/function accountErrorCode\(a\)/.test(script), '缺少账号错误码提�
 check(/function filteredAccountsForBulk\(\)/.test(script), '缺少筛选结果批量操作范围');
 check(/function setAccountErrorFilter\(code\)/.test(script),
   '选择错误码后应自动勾选命中账号');
-check(/function selectFilteredAccounts\(btn\)/.test(script), '缺少全选筛选结果入口');
-check(/function deleteSelectedAccounts\(btn\)/.test(script), '缺少删除已选入口');
+check(/function deleteAccounts\(btn\)/.test(script), '缺少批量删除入口');
+// 启用 / 停用 / 删除 / 导出 共用一套作用域（有勾选按勾选，没勾选按筛选结果），
+// 不再有「xx 已选」这种独立按钮。
 for(const [id, fn, label] of [
-  ['btnExportSelected', 'exportSelectedAccounts', '导出已选'],
-  ['btnEnableSelected', 'setSelectedEnabled', '启用已选'],
-  ['btnDisableSelected', 'setSelectedEnabled', '停用已选'],
-  ['btnDeleteSelected', 'deleteSelectedAccounts', '删除已选'],
+  ['btnBulkEnable', 'setAll', '启用'],
+  ['btnBulkDisable', 'setAll', '停用'],
+  ['btnBulkDelete', 'deleteAccounts', '删除'],
+  ['btnExport', 'exportAccounts', '导出'],
 ]){
   check(new RegExp('id="' + id + '"[^>]*onclick="' + fn + '\\(').test(html),
     '账号工具栏缺少「' + label + '」按钮或接线错误');
 }
-check(/postJSON\('\/accounts\/set-all', \{\s*uids: targets\.map\(a => a\.uid\),\s*enabled: enable === true,/.test(script),
-  '启用/停用已选必须提交显式 uids，不能退化成全量启停');
+for(const gone of ['btnExportSelected', 'btnEnableSelected',
+                   'btnDisableSelected', 'btnDeleteSelected',
+                   'btnSelectFiltered']){
+  check(!html.includes('id="' + gone + '"'),
+    '旧的「已选」独立按钮应已移除：' + gone);
+}
+check(/function acctScopeUids\(\)[\s\S]{0,400}filteredAccountsForBulk/.test(script),
+  '批量作用域必须回落到当前筛选结果');
+check(/postJSON\('\/accounts\/set-all', \{enabled: enable, uids: scope\.uids\}\)/.test(script),
+  '启用/停用必须提交显式 uids，不能退化成全量启停');
 check(html.includes('11140 · 账号封禁') && !html.includes('11140 · 风控限制'),
   '11140 必须显示为账号封禁，而不是风控限流');
 
@@ -145,10 +154,11 @@ check(script.includes('const bodyCode = text.match(/"code"\\s*:\\s*"?(\\d+)"?/i)
   '错误码筛选必须优先读上游正文里的 "code" 字段');
 check(/ACCOUNT_FILTERS\.errorCode && accountErrorCode\(a\)/.test(script),
   '错误码筛选必须参与账号匹配');
+// 批量删除与启停 / 导出共用作用域：有勾选按勾选，没有勾选按当前筛选结果。
 check(/ACCOUNT_SELECTED\.clear\(\)/.test(script) &&
-      /selectedAccountsForBulk/.test(script) &&
-      /请先勾选要删除的账号/.test(script),
-  '批量删除必须只作用于显式勾选的账号');
+      /function deleteAccounts\(btn\)/.test(script) &&
+      /const scope = acctScopeUids\(\);/.test(script),
+  '批量删除必须走 acctScopeUids() 的作用域（勾选优先，回落筛选结果）');
 
 // 模型筛选：只改渲染，批量勾选按整份目录。
 check(/let MODEL_CATALOG_FILTER = ''/.test(script), '缺少模型筛选状态');
@@ -164,7 +174,7 @@ check(/function clearRecentFilters\(\)/.test(script), '缺少最近请求筛选�
 
 // 筛选条在三个区块里各有一个。
 ['accountSearchFilter', 'accountStatusFilter', 'accountErrorFilter',
- 'btnSelectFiltered', 'btnDeleteSelected',
+ 'acctSelAll',
  'recentModelFilter', 'recentOutcomeFilter',
  'modelCatalogFilter'].forEach(id => {
   check(html.includes('id="' + id + '"'), '缺少筛选控件 #' + id);
@@ -204,6 +214,21 @@ check(/>移入媒体池</.test(html) && />移入文本池</.test(html),
   '批量按钮应叫「移入媒体池」「移入文本池」');
 check(!/勾选移入媒体池/.test(html) && !/勾选移回文本池/.test(html),
   '旧按钮文案应已移除');
+check(!/id="batchPoolCount"/.test(html), '「未勾选」计数标签应已移除');
+
+// 勾选列：上游 v2.1.0 用 ACCOUNT_SELECTED 作真源，行内复选框 + 「全选筛选结果」。
+check(/class="acct-sel" data-uid="' \+ uidAttr/.test(script),
+  '账号行缺少勾选列复选框');
+check(/const ACCOUNT_SELECTED = new Set\(\)/.test(script),
+  '勾选状态应有独立集合，整表重画后不丢');
+check(/function toggleAccountSelection\(box\)/.test(script)
+      && /function clearAccountSelection\(\)/.test(script),
+  '缺少勾选 / 清空勾选的状态回写函数');
+// 全选只在表头有一个复选框，不再有独立的「全选筛选结果」按钮。
+check(/id="acctSelAll"[^>]*onchange="toggleAcctSelAll\(this\)"/.test(html),
+  '表头缺少全选勾选框');
+check(!/id="btnSelectFiltered"/.test(html),
+  '「全选筛选结果」独立按钮应已移除（全选只在表头复选框）');
 
 // ---- 3. 概览：用已有数据，不发新请求，也不冒充时间序列 ---------------
 

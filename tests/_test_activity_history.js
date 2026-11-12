@@ -109,7 +109,11 @@ const chipOf = (html, name) => {
 // state says "没有记录不等于失败" on purpose, so a substring test against the
 // whole chip would read that explanation as a failure.
 const chipText = (chip) => {
-  const m = String(chip || '').match(/>([^<]*)<\/span>\s*$/);
+  // 「今日活动」格里现在还有一个窄屏专用的任务开关（.acct-task-mobile），
+  // 它排在这一格末尾。取可见文本前先把它摘掉，否则匹配到的是「任务开/关」。
+  const activityOnly = String(chip || '').replace(
+    /<span class="acct-task-mobile">[\s\S]*?<\/span><\/span>/, '');
+  const m = activityOnly.match(/>([^<]*)<\/span>\s*$/);
   return m ? m[1] : '';
 };
 const accountsOut = () => document.getElementById('accounts').innerHTML;
